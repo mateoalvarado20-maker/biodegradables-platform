@@ -1,0 +1,35 @@
+# Dependencias completas para teams_bot.py en Azure App Service
+# (combina lo que necesita teams_bot, ask_agent, monthly_recap, news_brief, etc.)
+
+# Web framework
+fastapi>=0.115
+uvicorn[standard]>=0.30
+gunicorn>=22.0
+
+# Bot Framework
+botbuilder-core>=4.16
+botbuilder-schema>=4.16
+aiohttp>=3.10
+
+# HTTP
+httpx>=0.27
+requests>=2.31
+
+# Anthropic Claude
+anthropic>=0.39
+
+# Auth / Microsoft Graph (msal usado por daily_report; graph_mail usa client_credentials nativo)
+msal>=1.30
+
+# MCP (model context protocol)
+mcp>=1.0
+
+# Scheduler
+apscheduler>=3.10
+pytz>=2024.1
+
+# Pillow para generate_bot_icons.py (no se usa en runtime pero está en el deploy)
+Pillow>=10.0
+
+# matplotlib para chart del daily_report (Phase U+ — migrado al bot)
+matplotlib>=3.8

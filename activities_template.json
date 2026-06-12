@@ -1,0 +1,88 @@
+{
+  "_comment": "Plantilla de actividades recurrentes. activity_state.py la lee SOLO cuando inicia una semana nueva y copia los items al state. Editable a mano: agregar/quitar entries, cambiar metas. Para sumar actividades AD-HOC a la semana en curso usar 'python activity_tracker.py add ...' (no editar el state directamente). Tipos: 'diaria' (se marca con valor numérico cada día), 'semanal' (se marca con % de avance), 'unica' (semanal pero sin recurrencia automática la próxima semana — reservado para uso futuro). Fuente: 'auto' es informativa por ahora (todo se marca manual en V1).",
+
+  "activities": [
+    {
+      "id": "apollo-correos",
+      "nombre": "Apollo: correos enviados",
+      "tipo": "diaria",
+      "meta": 70,
+      "unidad": "correos",
+      "fuente": "auto",
+      "descripcion": "70 correos diarios via Apollo. Tracker auto pendiente — por ahora marcar manual con `done apollo-correos --valor N`"
+    },
+    {
+      "id": "apollo-respuestas",
+      "nombre": "Apollo: respuestas recibidas",
+      "tipo": "diaria",
+      "meta": null,
+      "unidad": "respuestas",
+      "fuente": "auto",
+      "descripcion": "Conteo de respuestas a outreach. Sin meta fija — solo se reporta."
+    },
+    {
+      "id": "video-tiktok",
+      "nombre": "Video TikTok",
+      "tipo": "diaria",
+      "meta": 1,
+      "meta_semanal": 5,
+      "unidad": "video",
+      "fuente": "manual",
+      "descripcion": "Subida manual de video diario en TikTok. Objetivo: 1/día con meta total de 5 a la semana."
+    },
+    {
+      "id": "codigos-contifico",
+      "nombre": "Códigos Contifico: modificar para showroom",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Modificar códigos existentes para que aparezcan activos en showroom. Claude asiste cuando se piden los cambios."
+    },
+    {
+      "id": "chatbot-actividades",
+      "nombre": "Chatbot control de actividades semanales",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Este mismo proyecto. % avance autoreportado."
+    },
+    {
+      "id": "chatbot-logistica",
+      "nombre": "Chatbot logística de envíos",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Fase 2 del sistema de despachos (Teams + Adaptive Cards). Depende de Azure Bot."
+    },
+    {
+      "id": "wordpress-audit",
+      "nombre": "WordPress: audit/calificación",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Pendiente conexión por Daniel. Por ahora checkbox manual con prioridad baja."
+    },
+    {
+      "id": "sharepoint-orden-docs",
+      "nombre": "SharePoint: ordenar documentación",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Ordenamiento, subida y organización de archivos en SharePoint (sitios de Mateo, Gladys, Gabriela). Carpetas, listas de precios, documentos comunes."
+    },
+    {
+      "id": "apollo-secuencias-contactos",
+      "nombre": "Apollo: añadir secuencias y contactos",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Crear nuevas secuencias de outreach y cargarlas con contactos prospectados (sostenibilidad, compras, etc). Diferente del envío diario."
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+azure-functions
+httpx
+azure-data-tables
+azure-identity
+anthropic
+botbuilder-core>=4.17,<5
+botbuilder-schema>=4.17,<5
+aiohttp
+msal
+matplotlib

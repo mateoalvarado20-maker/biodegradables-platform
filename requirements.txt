@@ -1,0 +1,27 @@
+# Requirements para el deploy del Teams bot a Azure App Service.
+# Este archivo va incluido en el zip de deploy; Azure lo lee automaticamente
+# y corre `pip install -r requirements.txt` en el build.
+#
+# Para desarrollo local del bot ver `requirements_bot.txt` (mismo contenido,
+# nombre distinto para que no se confunda con scripts personales de Mateo).
+
+# === FastAPI + ASGI server stack ===
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+gunicorn>=22.0
+aiohttp>=3.10
+
+# === Microsoft Bot Framework SDK ===
+botbuilder-core>=4.16
+botbuilder-schema>=4.16
+
+# === Anthropic Claude SDK ===
+anthropic>=0.40
+
+# === HTTP client + Microsoft auth ===
+httpx>=0.27
+msal>=1.30
+
+# === Scheduler (APScheduler para proactive messages del bot) ===
+APScheduler>=3.10
+pytz>=2024.1

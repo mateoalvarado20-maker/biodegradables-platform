@@ -1,0 +1,50 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "8ef9d83a-914e-47de-9850-f630b172fc8f",
+  "developer": {
+    "name": "Biodegradables Ecuador",
+    "websiteUrl": "https://biodegradablesecuador.com",
+    "privacyUrl": "https://biodegradablesecuador.com/privacy",
+    "termsOfUseUrl": "https://biodegradablesecuador.com/terms"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Data Bot",
+    "full": "Biodegradables Data Bot"
+  },
+  "description": {
+    "short": "Asistente de datos comerciales — pregunta sobre ventas, cartera y marketing.",
+    "full": "Asistente conversacional para gerencia de Biodegradables Ecuador. Consulta Power BI cloud (ventas, cartera, cobranzas) y HubSpot (leads, deals, pipeline) en lenguaje natural. Solo accesible para usuarios autorizados del tenant."
+  },
+  "accentColor": "#0e7c39",
+  "bots": [
+    {
+      "botId": "8ef9d83a-914e-47de-9850-f630b172fc8f",
+      "scopes": ["personal"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal"],
+          "commands": [
+            {
+              "title": "help",
+              "description": "Ver comandos disponibles"
+            },
+            {
+              "title": "refresh",
+              "description": "Estado del último refresh de Power BI"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "4b83c0f0-1f96-4a8a-a632-a81b0a1efff1",
+  "developer": {
+    "name": "Biodegradables Ecuador",
+    "websiteUrl": "https://biodegradablesecuador.com",
+    "privacyUrl": "https://biodegradablesecuador.com",
+    "termsOfUseUrl": "https://biodegradablesecuador.com"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Biodegradables Bot",
+    "full": "Biodegradables Ecuador Bot"
+  },
+  "description": {
+    "short": "Bot de confirmación de despachos y asistente de datos.",
+    "full": "Bot para Biodegradables Ecuador. Confirma despachos diarios desde los almacenes de Quito y Guayaquil, y a futuro responderá preguntas sobre ventas y cartera. Solo accesible para usuarios autorizados del tenant."
+  },
+  "accentColor": "#0e7c39",
+  "bots": [
+    {
+      "botId": "4b83c0f0-1f96-4a8a-a632-a81b0a1efff1",
+      "scopes": ["personal"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal"],
+          "commands": [
+            {
+              "title": "help",
+              "description": "Ver comandos disponibles"
+            },
+            {
+              "title": "mark",
+              "description": "Confirmar despacho: /mark <factura> <ok|no|parcial> [razón]"
+            },
+            {
+              "title": "status",
+              "description": "Ver pedidos pendientes (próximamente)"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}

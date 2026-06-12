@@ -1,0 +1,54 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "bc908e6c-a2a0-4252-9760-2d3c5f17a3f6",
+  "developer": {
+    "name": "Biodegradables Ecuador",
+    "websiteUrl": "https://biodegradablesecuador.com",
+    "privacyUrl": "https://biodegradablesecuador.com/privacy",
+    "termsOfUseUrl": "https://biodegradablesecuador.com/terms"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Activities Bot",
+    "full": "Biodegradables Activities Bot"
+  },
+  "description": {
+    "short": "Tu tracker personal de actividades — marcá tu día desde Teams.",
+    "full": "Asistente personal de seguimiento de actividades para colaboradores de Biodegradables Ecuador. Envía un formulario diario (Lun-Vie 4:30 PM y Sáb 12:30 PM) con tus actividades del día — marcás Hecho / Parcial / No hecho con justificación. Al completar, genera el resumen y lo envía automáticamente a tu supervisor. Cada colaborador tiene su propio set de actividades configurado individualmente."
+  },
+  "accentColor": "#0e7c39",
+  "bots": [
+    {
+      "botId": "bc908e6c-a2a0-4252-9760-2d3c5f17a3f6",
+      "scopes": ["personal"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal"],
+          "commands": [
+            {
+              "title": "checkin",
+              "description": "Abrir el formulario de actividades del día"
+            },
+            {
+              "title": "status",
+              "description": "Ver tu progreso de la semana"
+            },
+            {
+              "title": "help",
+              "description": "Ver comandos disponibles"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}

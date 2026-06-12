@@ -1,0 +1,68 @@
+{
+  "_comment": "Template de Gabriela Sanchez. Las actividades se inyectan cada lunes en la semana nueva. Para agregar/quitar, editar este JSON o pedirle al Data Bot 'agregale a gabriela X' (ad-hoc). Las prioridades alta/media/baja se marcan desde el Data Bot via set_activity_priority_for_collaborator.",
+  "activities": [
+    {
+      "id": "scrum-diaria",
+      "nombre": "Reunión scrum diaria",
+      "tipo": "diaria",
+      "meta": 1,
+      "unidad": "reunión",
+      "fuente": "manual",
+      "descripcion": "Daily standup del equipo (UIO + GYE)."
+    },
+    {
+      "id": "pagos-proveedores-quincena",
+      "nombre": "Subir pagos de proveedores de quincena",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Procesar y subir los pagos a proveedores que se hacen quincenalmente (1ra y 3ra semana del mes)."
+    },
+    {
+      "id": "pedidos-inicio-mes-bodegas",
+      "nombre": "Gestionar pedidos de inicio de mes – bodegas UIO + GYE",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Coordinar el restock inicial de las bodegas Quito y Guayaquil al arranque de cada mes."
+    },
+    {
+      "id": "seguimiento-pedidos-personalizados",
+      "nombre": "Seguimiento pedidos personalizados",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Vasos Cosecha Roja, tapas pequeñas, tapas medianas. Verificar estado con proveedores y fechas estimadas."
+    },
+    {
+      "id": "seguimiento-exportacion",
+      "nombre": "Seguimiento exportación",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Coordinación con proveedor de sorbetes + proveedor logística + conseguir palets para el embarque."
+    },
+    {
+      "id": "revision-reportes-fin-mes",
+      "nombre": "Revisión reportes de fin de mes",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Revisar reportes mensuales (ventas, cartera, márgenes, KPIs) al cierre del mes y validarlos contra Contifico."
+    },
+    {
+      "id": "deposito-efectivo",
+      "nombre": "Depósito efectivo",
+      "tipo": "semanal",
+      "meta": 100,
+      "unidad": "%",
+      "fuente": "manual",
+      "descripcion": "Depósito bancario del efectivo acumulado de las cajas de UIO + GYE."
+    }
+  ]
+}

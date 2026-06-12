@@ -1,0 +1,4 @@
+{
+  "_comment": "Template para quito@biodegradablesecuador.com (Gladys López, UIO). Phase S (2026-06-08): se quita cierre-caja-uio porque el sub-card del cierre con denominaciones ya cubre la marca de 'cierre hecho'. Las cobranzas se asignan ad-hoc cada lunes 7:30 AM via auto_assign_cobranzas.",
+  "activities": []
+}

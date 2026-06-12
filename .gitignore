@@ -1,0 +1,49 @@
+# Este repo vive en el home dir del usuario: se ignora TODO por defecto
+# y se whitelistea solo lo que pertenece al proyecto.
+/*
+
+# --- Proyecto: código y docs ---
+!/.gitignore
+!/CLAUDE.md
+!/AUDITORIA_TECNICA_2026-06-12.md
+!/azure_setup_checklist.md
+!/company_context.md
+!/*.py
+!/run_*.bat
+!/requirements.txt
+!/requirements_bot.txt
+!/pyproject.toml
+
+# --- Config y templates (datos chicos, fuente de verdad) ---
+!/pbi_schema.json
+!/condiciones_credito.json
+!/activities_template.json
+!/activities_template_*.json
+!/activities_manifest.json
+!/manifest.json
+
+# --- Directorios del proyecto ---
+!/azfunc/
+!/tests/
+!/tools/
+!/docs/
+!/archive/
+!/.github/
+
+# --- Exclusiones dentro de directorios incluidos ---
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+azfunc/local.settings.json
+azfunc/.python_packages/
+
+# --- Nunca versionar (aunque matcheen un patrón de arriba) ---
+# Caches de datos regenerables (grandes)
+contifico_productos.json
+contifico_norm.json
+daily_news_brief.json
+# Estado y credenciales
+.claude-agent/
+msal_cache.bin
+*.log

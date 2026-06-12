@@ -1,0 +1,24 @@
+{
+  "_comment": "Config del orquestador de secuencias Apollo. Editable a mano. El orden de 'queue' determina la prioridad: la primera con contactos pendientes (unique_scheduled > 0) es la que se mantendrá activa. Cuando termine su tanda (scheduled == 0), se pausa y se activa la siguiente. Para reordenar mové las entradas. Para excluir una secuencia, eliminala de la lista.",
+
+  "schedule": {
+    "start_hour_local": 9,
+    "end_hour_local": 18,
+    "weekdays_only": true,
+    "respect_ecuador_holidays": true
+  },
+
+  "queue": [
+    { "id": "69c6a98925d221000ddbe627", "name": "Sector Hotelero" },
+    { "id": "69d81fdd2031cb00113f98f4", "name": "Sector Educación Marketing" },
+    { "id": "69cd6c001cd5a00011c2e083", "name": "Sector Producción de Comida" },
+    { "id": "69ef76de2d92b8001d1c1e6d", "name": "KUMBRE EKOS" },
+    { "id": "69d3c3295d8445001578f868", "name": "Sector Marketing" },
+    { "id": "69c6e6f9e983530011af0676", "name": "Sector de Salud" },
+    { "id": "69c6e4462aa5e80021182258", "name": "Sector Restaurantes" },
+    { "id": "69dcf6d343936600214a136c", "name": "Sector Universidad" },
+    { "id": "6a060ac13d26b600154ef212", "name": "Restaurantes Ecuador - Empaques Biodegradables" },
+    { "id": "699df8cca06625000d0c221c", "name": "Sector petrolero" },
+    { "id": "69c41ebca0e0d00011f206e0", "name": "Outreach Restaurantes & Food Service Ecuador" }
+  ]
+}
