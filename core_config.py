@@ -40,6 +40,32 @@ GABRIELA = os.environ.get(
 ).strip()
 
 
+# ===== Check-in del Activities Bot (hora Ecuador, America/Guayaquil) =====
+# Única fuente de verdad de horarios y destinatarios del check-in card.
+# Domingo NO hay envíos (ningún horario lo cubre).
+CHECKIN_OFICINA = _env_list(
+    "CHECKIN_OFICINA_USERS",
+    "malvarado@biodegradablesecuador.com,gsanchez@biodegradablesecuador.com",
+)
+CHECKIN_SUCURSALES = _env_list(
+    "CHECKIN_SUCURSALES_USERS",
+    "info@biodegradablesecuador.com,quito@biodegradablesecuador.com",
+)
+CHECKIN_WEEKDAY_OFICINA = (16, 30)      # Lun-Vie → oficina
+CHECKIN_WEEKDAY_SUCURSALES = (17, 10)   # Lun-Vie → sucursales
+CHECKIN_SATURDAY_SUCURSALES = (12, 30)  # Sáb → SOLO sucursales
+
+# Overrides puntuales por fecha ISO: ese día, el job regular del grupo omite
+# a los usuarios listados aquí y en su lugar corre el horario del override.
+# Las fechas pasadas se ignoran al registrar jobs (limpiar de vez en cuando).
+CHECKIN_DATE_OVERRIDES: dict[str, list[tuple[tuple[int, int], list[str]]]] = {
+    "2026-06-12": [
+        ((16, 45), ["info@biodegradablesecuador.com"]),
+        ((16, 50), ["quito@biodegradablesecuador.com"]),
+    ],
+}
+
+
 # ===== Meta comercial =====
 # Meta del mes = ventas del mismo mes año anterior × META_FACTOR
 META_FACTOR = float(os.environ.get("META_FACTOR", "1.20"))

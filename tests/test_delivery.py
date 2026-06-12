@@ -106,7 +106,7 @@ def test_horarios_de_jobs_configurados(bot):
 
     esperados = {
         "checkin_weekday": ("day_of_week='mon-fri'", "hour='16'", "minute='30'"),
-        "checkin_info_weekday": ("day_of_week='mon-fri'", "hour='17'", "minute='0'"),
+        "checkin_sucursales_weekday": ("day_of_week='mon-fri'", "hour='17'", "minute='10'"),
         "checkin_saturday": ("day_of_week='sat'", "hour='12'", "minute='30'"),
         "deliver_reminders": ("minute='*/5'",),
         "auto_assign_cobranzas": ("day_of_week='mon-fri'", "hour='7'", "minute='30'"),
@@ -126,6 +126,115 @@ def test_horarios_de_jobs_configurados(bot):
             )
     # El scheduler completo usa America/Guayaquil (no UTC, no offset naive)
     assert str(bot.scheduler.timezone) == "America/Guayaquil"
+    # El job legacy 17:00 NO debe existir — quedó unificado en
+    # checkin_sucursales_weekday (un solo scheduler por grupo, sin conflictos)
+    assert "checkin_info_weekday" not in jobs
+
+
+def test_ningun_checkin_corre_domingo(bot):
+    """Requisito de negocio 2026-06-12: domingos NO se envía ningún card."""
+    import core_config
+    from datetime import date as _d
+    bot._schedule_jobs()
+    for j in bot.scheduler.get_jobs():
+        if not j.id.startswith("checkin"):
+            continue
+        trig = str(j.trigger)
+        if "day_of_week" in trig:
+            assert "sun" not in trig, f"{j.id} cubre domingo: {trig}"
+            assert "mon-fri" in trig or "sat" in trig
+    # Los overrides puntuales tampoco pueden caer en domingo
+    for fecha_iso in core_config.CHECKIN_DATE_OVERRIDES:
+        assert _d.fromisoformat(fecha_iso).weekday() != 6, (
+            f"override {fecha_iso} cae domingo"
+        )
+
+
+def test_checkin_destinatarios_por_grupo(bot):
+    """Lun-Vie 16:30 → Mateo+Gabriela S.; 17:10 y Sáb 12:30 → info@+quito@."""
+    import core_config
+    assert set(core_config.CHECKIN_OFICINA) == {
+        "malvarado@biodegradablesecuador.com",
+        "gsanchez@biodegradablesecuador.com",
+    }
+    assert set(core_config.CHECKIN_SUCURSALES) == {
+        "info@biodegradablesecuador.com",
+        "quito@biodegradablesecuador.com",
+    }
+    assert core_config.CHECKIN_WEEKDAY_OFICINA == (16, 30)
+    assert core_config.CHECKIN_WEEKDAY_SUCURSALES == (17, 10)
+    assert core_config.CHECKIN_SATURDAY_SUCURSALES == (12, 30)
+
+
+def test_checkin_override_solo_fechas_vigentes(bot, monkeypatch):
+    """Las fechas pasadas de CHECKIN_DATE_OVERRIDES no registran jobs; las
+    de hoy en adelante sí (uno por horario)."""
+    import core_config
+    import send_ledger
+    hoy = send_ledger.today_iso()
+    monkeypatch.setattr(core_config, "CHECKIN_DATE_OVERRIDES", {
+        "2000-01-03": [((9, 0), ["x@biodegradablesecuador.com"])],   # pasado
+        hoy: [
+            ((16, 45), ["info@biodegradablesecuador.com"]),
+            ((16, 50), ["quito@biodegradablesecuador.com"]),
+        ],
+    })
+    bot._schedule_jobs()
+    ids = {j.id for j in bot.scheduler.get_jobs()}
+    assert f"checkin_override_{hoy}_1645" in ids
+    assert f"checkin_override_{hoy}_1650" in ids
+    assert not any("2000-01-03" in i for i in ids)
+
+
+def test_job_regular_omite_usuarios_con_override_hoy(bot, monkeypatch):
+    """El día de un override, el job regular de sucursales NO les envía
+    (evita card doble); el job de oficina sigue normal."""
+    import asyncio
+    import core_config
+    import send_ledger
+    hoy = send_ledger.today_iso()
+    monkeypatch.setattr(core_config, "CHECKIN_DATE_OVERRIDES", {
+        hoy: [
+            ((16, 45), ["info@biodegradablesecuador.com"]),
+            ((16, 50), ["quito@biodegradablesecuador.com"]),
+        ],
+    })
+    llamadas = []
+
+    async def fake_checkin(only=None, exclude=None):
+        llamadas.append(set(only or ()))
+
+    monkeypatch.setattr(bot, "send_daily_checkin", fake_checkin)
+    asyncio.run(bot._job_checkin_sucursales())
+    assert llamadas == []  # ambos con override → el regular no envía nada
+    asyncio.run(bot._job_checkin_oficina())
+    assert llamadas == [{
+        "malvarado@biodegradablesecuador.com",
+        "gsanchez@biodegradablesecuador.com",
+    }]
+
+
+def test_checkin_ledger_anti_duplicado(bot, monkeypatch):
+    """Disparar el mismo job de check-in dos veces el mismo día solo envía
+    una vez (ledger Fase 3)."""
+    import asyncio
+    llamadas = []
+
+    async def fake_checkin(only=None, exclude=None):
+        llamadas.append(set(only or ()))
+
+    monkeypatch.setattr(bot, "send_daily_checkin", fake_checkin)
+    asyncio.run(bot._job_checkin_oficina())
+    asyncio.run(bot._job_checkin_oficina())  # mismo día → skip por ledger
+    assert len(llamadas) == 1
+    # El override usa su propia key — no choca con el job regular
+    asyncio.run(bot._job_checkin_override(
+        "1645", ["info@biodegradablesecuador.com"]
+    ))
+    asyncio.run(bot._job_checkin_override(
+        "1645", ["info@biodegradablesecuador.com"]
+    ))
+    assert len(llamadas) == 2
 
 
 def test_misfire_grace_y_coalesce_configurados(bot):

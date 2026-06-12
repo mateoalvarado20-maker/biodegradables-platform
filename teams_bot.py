@@ -53,6 +53,7 @@ import pytz
 import ask_agent
 import activity_state
 import contifico_client
+import core_config
 import conversation_history
 import monthly_recap
 import news_brief
@@ -2155,7 +2156,7 @@ async def deliver_due_reminders() -> None:
 INFO_EMAIL = "info@biodegradablesecuador.com"
 QUITO_EMAIL = "quito@biodegradablesecuador.com"
 JOSE_EMAIL = "jsolorzano@biodegradablesecuador.com"  # Phase U — chofer GYE
-CUSTOM_SCHEDULE_USERS = {INFO_EMAIL, QUITO_EMAIL}  # ambas sucursales 17:00, no 16:30
+# Horarios/destinatarios del check-in viven en core_config (CHECKIN_*).
 
 # Phase N (2026-06-02): cierre de caja diario en sub-card del check-in
 CIERRE_CAJA_USERS = {INFO_EMAIL, QUITO_EMAIL}
@@ -2238,12 +2239,6 @@ async def send_daily_checkin(
             logger.info("Check-in enviado a %s", email)
         except Exception as e:
             logger.exception("Falló check-in a %s: %s", email, e)
-
-
-async def send_daily_checkin_general() -> None:
-    """Envía check-in a usuarios SIN horario custom (excluye info@/quito@ si tienen
-    schedule propio). Usado para el cron Mon-Fri 16:30 y Sat 12:30."""
-    await send_daily_checkin(exclude=CUSTOM_SCHEDULE_USERS)
 
 
 def _build_confirmacion_cierre_card(
@@ -3969,14 +3964,6 @@ async def send_consolidated_daily_summary_job() -> None:
         logger.exception("Falló consolidated daily summary: %s", e)
 
 
-async def send_daily_checkin_info() -> None:
-    """Phase S+ (2026-06-08): envía check-in a SUCURSALES (info@ + quito@) a las
-    17:00 EC. Antes solo info@; ahora ambos para que Gabriela Bravo y Gladys
-    López reciban su card a la misma hora.
-    """
-    await send_daily_checkin(only=CIERRE_CAJA_USERS)
-
-
 # ===== Scheduler =====
 EC_TZ = pytz.timezone("America/Guayaquil")
 # Fase 3 (auditoría S2): misfire_grace_time era el default de 1 segundo — un
@@ -3990,6 +3977,48 @@ scheduler = AsyncIOScheduler(
 
 
 # --- Jobs envueltos en _reliable_job (ledger + retry + alerta) ---
+# Check-in cards: destinatarios/horarios en core_config.CHECKIN_*. Un fallo
+# por destinatario NO afecta a los demás (try/except por user dentro de
+# send_daily_checkin). El ledger evita duplicados por día y job.
+def _checkin_override_users_hoy() -> set[str]:
+    """Usuarios con horario override HOY (core_config.CHECKIN_DATE_OVERRIDES).
+    El job regular de su grupo los omite ese día — el override los cubre."""
+    entries = core_config.CHECKIN_DATE_OVERRIDES.get(send_ledger.today_iso(), [])
+    return {u.lower() for _hm, users in entries for u in users}
+
+
+async def _job_checkin_oficina() -> None:
+    targets = {u.lower() for u in core_config.CHECKIN_OFICINA} - _checkin_override_users_hoy()
+    if not targets:
+        logger.info("checkin_oficina: todos con override hoy — skip")
+        return
+    await _reliable_job(
+        "checkin_oficina",
+        lambda: send_daily_checkin(only=targets),
+        ledger_key="checkin_oficina",
+    )
+
+
+async def _job_checkin_sucursales() -> None:
+    targets = {u.lower() for u in core_config.CHECKIN_SUCURSALES} - _checkin_override_users_hoy()
+    if not targets:
+        logger.info("checkin_sucursales: todos con override hoy — skip")
+        return
+    await _reliable_job(
+        "checkin_sucursales",
+        lambda: send_daily_checkin(only=targets),
+        ledger_key="checkin_sucursales",
+    )
+
+
+async def _job_checkin_override(hhmm: str, users: list[str]) -> None:
+    await _reliable_job(
+        f"checkin_override_{hhmm}",
+        lambda: send_daily_checkin(only={u.lower() for u in users}),
+        ledger_key=f"checkin_override_{hhmm}",
+    )
+
+
 async def _job_weekly_summaries() -> None:
     await _reliable_job(
         "weekly_summaries", send_weekly_summaries, ledger_key="weekly_summaries"
@@ -4047,30 +4076,47 @@ async def _job_logistics_morning() -> None:
 
 
 def _schedule_jobs() -> None:
-    # Check-in general (excluye info@ que tiene horario propio 17:15)
+    # ===== Check-in cards — config única en core_config.CHECKIN_* =====
+    # Lun-Vie: oficina 16:30, sucursales 17:10. Sáb: SOLO sucursales 12:30.
+    # Domingo: NINGÚN envío (ningún trigger lo cubre).
+    oh, om = core_config.CHECKIN_WEEKDAY_OFICINA
     scheduler.add_job(
-        send_daily_checkin_general,
-        CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone=EC_TZ),
+        _job_checkin_oficina,
+        CronTrigger(day_of_week="mon-fri", hour=oh, minute=om, timezone=EC_TZ),
         id="checkin_weekday",
         replace_existing=True,
     )
-    # Check-in para info@ + quito@ (sucursales). Phase S+ (2026-06-08):
-    # cambiado a 17:00 EC para dar más margen a Gabriela Bravo y Gladys López
-    # de llenar con tiempo y consultar dudas. La función send_daily_checkin_info
-    # se mantiene por compat pero ahora también dispara a quito@ (ambos en
-    # CIERRE_CAJA_USERS).
+    sh, sm = core_config.CHECKIN_WEEKDAY_SUCURSALES
     scheduler.add_job(
-        send_daily_checkin_info,
-        CronTrigger(day_of_week="mon-fri", hour=17, minute=0, timezone=EC_TZ),
-        id="checkin_info_weekday",
+        _job_checkin_sucursales,
+        CronTrigger(day_of_week="mon-fri", hour=sh, minute=sm, timezone=EC_TZ),
+        id="checkin_sucursales_weekday",
         replace_existing=True,
     )
+    bh, bm = core_config.CHECKIN_SATURDAY_SUCURSALES
     scheduler.add_job(
-        send_daily_checkin_general,
-        CronTrigger(day_of_week="sat", hour=12, minute=30, timezone=EC_TZ),
+        _job_checkin_sucursales,
+        CronTrigger(day_of_week="sat", hour=bh, minute=bm, timezone=EC_TZ),
         id="checkin_saturday",
         replace_existing=True,
     )
+    # Overrides puntuales por fecha (solo hoy en adelante). Ese día el job
+    # regular omite a los usuarios del override (_checkin_override_users_hoy).
+    _hoy_iso = send_ledger.today_iso()
+    for _fecha_iso, _entries in core_config.CHECKIN_DATE_OVERRIDES.items():
+        if _fecha_iso < _hoy_iso:
+            continue
+        _y, _mo, _d = (int(p) for p in _fecha_iso.split("-"))
+        for (_h, _m), _users in _entries:
+            scheduler.add_job(
+                _job_checkin_override,
+                CronTrigger(
+                    year=_y, month=_mo, day=_d, hour=_h, minute=_m, timezone=EC_TZ
+                ),
+                id=f"checkin_override_{_fecha_iso}_{_h:02d}{_m:02d}",
+                replace_existing=True,
+                args=[f"{_h:02d}{_m:02d}", list(_users)],
+            )
     # Reminders: cada 5 min, chequea si hay reminders vencidos para entregar
     scheduler.add_job(
         deliver_due_reminders,
@@ -4175,7 +4221,8 @@ def _schedule_jobs() -> None:
         logger.info("logistics_morning programado EN EL BOT (LOGISTICS_IN_BOT=1)")
 
     logger.info(
-        "Jobs: checkin weekday 16:30, sat 12:30, reminders */5min, "
+        "Jobs: checkin oficina mon-fri 16:30, sucursales mon-fri 17:10 + "
+        "sat 12:30 (domingo NADA), reminders */5min, "
         "cobranzas mon-fri 7:30, weekly_summaries fri 17:00, "
         "news_brief daily 6:00, monthly_recaps day 1 9:00+10:00, "
         "consolidated_daily mon-fri 18:30, "
@@ -4199,7 +4246,28 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
          lambda now: now.day == 1 and (now.hour, now.minute) >= (9, 0)),
         ("monthly_activities_recap", _job_monthly_activities_recap,
          lambda now: now.day == 1 and (now.hour, now.minute) >= (10, 0)),
+        # Check-ins: lun-vie oficina y sucursales; sáb solo sucursales.
+        # Domingo (weekday 6) ninguna condición aplica — no hay catch-up.
+        ("checkin_oficina", _job_checkin_oficina,
+         lambda now: now.weekday() <= 4
+         and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_OFICINA),
+        ("checkin_sucursales", _job_checkin_sucursales,
+         lambda now: (now.weekday() <= 4
+                      and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES)
+         or (now.weekday() == 5
+             and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES)),
     ]
+    # Overrides de check-in de HOY: si el bot estuvo caído a esa hora, el
+    # catch-up los dispara al arrancar (el ledger evita duplicados).
+    for (_h, _m), _users in core_config.CHECKIN_DATE_OVERRIDES.get(
+        send_ledger.today_iso(), []
+    ):
+        _hhmm = f"{_h:02d}{_m:02d}"
+        specs.append((
+            f"checkin_override_{_hhmm}",
+            lambda _hh=_hhmm, _us=_users: _job_checkin_override(_hh, list(_us)),
+            lambda now, _h=_h, _m=_m: (now.hour, now.minute) >= (_h, _m),
+        ))
     if os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
         specs.append(
             ("logistics_morning", _job_logistics_morning,
