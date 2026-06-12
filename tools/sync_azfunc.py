@@ -34,6 +34,7 @@ SHARED = [
     "company_context.md",
     "condiciones_credito.json",
     "contifico_client.py",
+    "core_config.py",
     "daily_logistics_report.py",
     "daily_report.py",
     "dispatch_state.py",

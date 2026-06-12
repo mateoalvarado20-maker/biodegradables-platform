@@ -46,8 +46,10 @@ DIAS_DESDE = 2  # fecha más antigua a incluir
 DIAS_HASTA = 1  # fecha más reciente a incluir
 
 # ===== Configuración =====
-GABRIELA = "gsanchez@biodegradablesecuador.com"
-MIO = "malvarado@biodegradablesecuador.com"
+# Fase 5: destinatarios centralizados y env-overridable (core_config).
+import core_config
+GABRIELA = core_config.GABRIELA
+MIO = core_config.MIO
 
 LOCAL_TZ = timezone(timedelta(hours=-5))  # Ecuador (UTC-5)
 

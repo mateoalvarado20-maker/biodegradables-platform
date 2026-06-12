@@ -706,8 +706,8 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
     ]
     # Phase L: ordenar carry-overs primero, después por priority alta→media→baja
     from datetime import date as _date_cls2, timedelta as _td2
-    _today_iso = _date_cls2.today().isoformat()
-    _yest_iso = (_date_cls2.today() - _td2(days=1)).isoformat()
+    _today_iso = activity_state._today().isoformat()  # TZ Ecuador (A9)
+    _yest_iso = (activity_state._today() - _td2(days=1)).isoformat()
     diarias = activity_state.sort_activities_by_priority_then_carryover(
         diarias, _today_iso, _yest_iso
     )
@@ -2045,7 +2045,7 @@ async def auto_assign_cobranzas() -> None:
     Idempotente: si una cobranza para el mismo cliente ya se asignó hoy,
     no la duplica.
     """
-    today_str = _date_cls.today().isoformat()
+    today_str = activity_state._today().isoformat()  # TZ Ecuador (A9)
     asignadas = 0
     errores = 0
 
@@ -2481,7 +2481,7 @@ def _refresh_envios_jose(fecha: date | None = None) -> dict[str, Any]:
     ni sobrescribe (preserva entregas marcadas)."""
     from contifico_client import envios_dia_gye
 
-    fecha = fecha or date.today()
+    fecha = fecha or activity_state._today()
     fecha_str = fecha.isoformat()
 
     # 1) Arrastrar pendientes de AYER al snapshot de HOY
@@ -2521,7 +2521,7 @@ def _build_jose_ruta_card(
       4. Caja chica con alerta roja ≤ $30
     """
     email = (user_email or JOSE_EMAIL).lower()
-    hoy = date.today()
+    hoy = activity_state._today()
     hoy_str = hoy.isoformat()
     fecha_label = hoy.strftime("%A %d/%m/%Y")
 
@@ -3187,7 +3187,7 @@ async def _handle_jose_intent(
     email: str,
 ) -> None:
     """Maneja todos los intents jose_* del card de ruta."""
-    hoy_str = date.today().isoformat()
+    hoy_str = activity_state._today().isoformat()
 
     if intent == "jose_start_ruta":
         res = activity_state.start_ruta(email, hoy_str)
@@ -3241,7 +3241,7 @@ async def _handle_jose_intent(
     if intent == "jose_actualizar":
         # Re-pull de Contifico
         try:
-            res = _refresh_envios_jose(date.today())
+            res = _refresh_envios_jose(activity_state._today())
             n = res.get("total", 0)
             nuevos = res.get("nuevos", 0)
             await context.send_activity(
@@ -3450,7 +3450,7 @@ async def send_jose_route_card_job() -> None:
 def _jose_summary_html(fecha: str | None = None) -> str:
     """Construye el HTML del email resumen del día de José (6:30 PM)."""
     from html import escape
-    fecha = fecha or date.today().isoformat()
+    fecha = fecha or activity_state._today().isoformat()
     ruta = activity_state.get_ruta_dia(JOSE_EMAIL, fecha)
     salidas = ruta.get("salidas", []) or []
     entregas = activity_state.get_entregas_consolidadas_dia(JOSE_EMAIL, fecha)
@@ -3622,10 +3622,10 @@ def _jose_summary_html(fecha: str | None = None) -> str:
 async def send_jose_summary_email_job() -> None:
     """Job de scheduler: envía el resumen del día de José a Daniel + Mateo.
     Se dispara a las 6:30 PM EC, Lun-Sáb."""
-    fecha = date.today().isoformat()
+    fecha = activity_state._today().isoformat()
     try:
         html_body = _jose_summary_html(fecha)
-        subject = f"🚚 Resumen del día — José Solórzano (GYE) — {date.today().strftime('%d/%m/%Y')}"
+        subject = f"🚚 Resumen del día — José Solórzano (GYE) — {activity_state._today().strftime('%d/%m/%Y')}"
         from graph_mail import send as graph_send
         graph_send(
             from_user=JOSE_EMAIL,  # remitente
@@ -4744,12 +4744,12 @@ async def preview_jose_summary_email(request: Request) -> dict[str, Any]:
         "to_override", "malvarado@biodegradablesecuador.com"
     ).strip().lower()
     try:
-        html_body = _jose_summary_html(date.today().isoformat())
+        html_body = _jose_summary_html(activity_state._today().isoformat())
         from graph_mail import send as graph_send
         graph_send(
             from_user=JOSE_EMAIL,
             to=[to],
-            subject=f"[PREVIEW] 🚚 Resumen del día — José — {date.today().strftime('%d/%m/%Y')}",
+            subject=f"[PREVIEW] 🚚 Resumen del día — José — {activity_state._today().strftime('%d/%m/%Y')}",
             html_body=html_body,
         )
         return {"status": "sent", "to": to}
@@ -4992,7 +4992,7 @@ async def preview_confirmacion_cierre(request: Request) -> dict[str, Any]:
     except Exception:
         body = {}
     emisor = (body or {}).get("emisor_email", "info@biodegradablesecuador.com").strip().lower()
-    fecha = (body or {}).get("fecha", _date_cls.today().isoformat()).strip()
+    fecha = (body or {}).get("fecha", activity_state._today().isoformat()).strip()
     send_to = (body or {}).get("send_to_email", "malvarado@biodegradablesecuador.com").strip().lower()
 
     cierre = activity_state.get_cierre_caja(emisor, fecha)
@@ -5080,7 +5080,7 @@ async def reset_day_for_user(request: Request) -> dict[str, Any]:
     except Exception:
         body = {}
     user_email = (body or {}).get("user_email", "").strip().lower()
-    fecha = (body or {}).get("fecha") or _date_cls.today().isoformat()
+    fecha = (body or {}).get("fecha") or activity_state._today().isoformat()
     if not user_email or "@" not in user_email:
         raise HTTPException(status_code=400, detail="user_email requerido")
 

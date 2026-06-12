@@ -60,37 +60,14 @@ LOCAL_TZ = timezone(timedelta(hours=-5))  # Ecuador (UTC-5)
 # actualiza este dict por año.
 from datetime import date
 
-EC_HOLIDAYS: dict[int, list[date]] = {
-    2025: [
-        date(2025, 1, 1),    # Año Nuevo
-        date(2025, 3, 3),    # Carnaval (lunes)
-        date(2025, 3, 4),    # Carnaval (martes)
-        date(2025, 4, 18),   # Viernes Santo
-        date(2025, 5, 1),    # Día del Trabajo
-        date(2025, 5, 23),   # Batalla de Pichincha (trasladado del 24)
-        date(2025, 8, 10),   # Primer Grito de Independencia
-        date(2025, 10, 10),  # Independencia de Guayaquil (trasladado del 9)
-        date(2025, 11, 3),   # Día de los Difuntos / Independencia Cuenca
-        date(2025, 12, 25),  # Navidad
-    ],
-    2026: [
-        date(2026, 1, 1),    # Año Nuevo
-        date(2026, 2, 16),   # Carnaval (lunes)
-        date(2026, 2, 17),   # Carnaval (martes)
-        date(2026, 4, 3),    # Viernes Santo
-        date(2026, 5, 1),    # Día del Trabajo
-        date(2026, 5, 25),   # Batalla de Pichincha (trasladado, lunes)
-        date(2026, 8, 10),   # Primer Grito de Independencia
-        date(2026, 10, 9),   # Independencia de Guayaquil
-        date(2026, 11, 2),   # Día de los Difuntos
-        date(2026, 11, 3),   # Independencia de Cuenca
-        date(2026, 12, 25),  # Navidad
-    ],
-}
+# Fase 5: feriados centralizados en core_config (antes duplicados en >=4
+# sitios y FALTABA 2027). holidays_for() avisa fuerte si falta un año.
+import core_config
+EC_HOLIDAYS = core_config.EC_HOLIDAYS  # alias legacy
 
 
 def _holidays(year: int) -> set[date]:
-    return set(EC_HOLIDAYS.get(year, []))
+    return core_config.holidays_for(year)
 
 
 def _is_workday(d: date) -> bool:
@@ -154,19 +131,18 @@ def previous_workday(today: date) -> date:
 # {mes_numero: valor_total_del_mes_anterior_año}. Si el mes no está en este
 # dict, se usa el cálculo directo de Contifico (sum de facturas no anuladas
 # del mismo mes año anterior).
-PY_OVERRIDE = {
-    5: 38000.0,   # mayo: usuario reporta $38K en Contifico (PBI muestra $33,956)
-    # 6: 42000.0,  # ejemplo: para cuando llegue junio, editar aquí
-}
+# Fase 5: centralizado en core_config, keyed (año, mes) — el override de
+# mayo 2026 ya no se re-aplica en mayo 2027 (fix R8). Editar SOLO ahí.
+PY_OVERRIDE = core_config.PY_OVERRIDE  # alias legacy (nuevo formato de key)
 
 
-# ===== Umbrales semáforo =====
-CUMPL_VERDE = 1.00     # >= 100% del cumplimiento esperado a hoy
-CUMPL_AMARILLO = 0.85  # 85-99% amarillo, < 85% rojo
-AYER_VERDE = 1.00      # ayer >= meta diaria base
-AYER_AMARILLO = 0.80   # 80-99% amarillo, < 80% rojo
-MORA_VERDE = 0.05      # mora < 5% verde
-MORA_AMARILLO = 0.10   # 5-10% amarillo, > 10% rojo
+# ===== Umbrales semáforo (centralizados en core_config) =====
+CUMPL_VERDE = core_config.CUMPL_VERDE
+CUMPL_AMARILLO = core_config.CUMPL_AMARILLO
+AYER_VERDE = core_config.AYER_VERDE
+AYER_AMARILLO = core_config.AYER_AMARILLO
+MORA_VERDE = core_config.MORA_VERDE
+MORA_AMARILLO = core_config.MORA_AMARILLO
 
 
 def color_cumpl(ratio: float | None) -> str:
@@ -213,11 +189,11 @@ REPORT_URL = (
     "https://app.powerbi.com/groups/me/reports/"
     "de5387d4-8203-4a93-8eaf-04212041fece"
 )
-JEFE = [
-    "dsanchez@biodegradablesecuador.com",
-    "gsanchez@biodegradablesecuador.com",
-]
-MIO = "malvarado@biodegradablesecuador.com"
+# Fase 5: destinatarios centralizados y env-overridable (core_config).
+# Cambiar un destinatario = env var REPORT_COMERCIAL_TO / REPORT_CC, o
+# editar core_config.py (UN solo lugar — antes eran 4 archivos).
+JEFE = core_config.JEFE
+MIO = core_config.MIO
 
 MESES = {
     1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
@@ -618,9 +594,11 @@ def _recalcular_python(ventas: dict, ayer: dict) -> None:
     también lo aplica."""
     hoy = datetime.now().date()
     try:
-        # PY: override si existe, si no el valor calculado por Contifico
+        # PY: override si existe (keyed por año+mes desde Fase 5), si no el
+        # valor calculado por Contifico
         py_raw = float(ventas.get("[VentasMesLY]") or 0)
-        py = float(PY_OVERRIDE.get(hoy.month, py_raw))
+        _ovr = core_config.py_override_for(hoy.year, hoy.month)
+        py = float(_ovr if _ovr is not None else py_raw)
 
         # Días hábiles del mes y restantes
         wd_total = workdays_in_month(hoy.year, hoy.month)

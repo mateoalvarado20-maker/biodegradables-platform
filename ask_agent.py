@@ -46,14 +46,22 @@ MAX_ITERATIONS = 10
 LOCAL_TZ = timezone(timedelta(hours=-5))
 
 
+def _hoy_ec() -> date:
+    """Fecha de HOY en zona Ecuador. Fase 5 (auditoría A9): date.today()
+    usa la TZ del server — en Azure (UTC) entre 19:00 y 23:59 EC ya es
+    MAÑANA, y las marcas caían en la fecha equivocada."""
+    return datetime.now(LOCAL_TZ).date()
+
+
+
 def _parse_date(s: str | None, default: date | None = None) -> date:
     """Parsea fecha ISO YYYY-MM-DD. Si está vacía, usa default o hoy."""
     if not s:
-        return default or date.today()
+        return default or _hoy_ec()
     try:
         return date.fromisoformat(s.strip())
     except ValueError:
-        return default or date.today()
+        return default or _hoy_ec()
 
 
 # ============ Tracker helpers (Phase C) ============
@@ -105,7 +113,7 @@ def _resolve_collaborator(name_or_email: str) -> str | None:
 
 def _list_today_activities(user_email: str | None = None) -> dict:
     """Devuelve el state de la semana actual del usuario con info útil para Claude."""
-    today_iso = date.today().isoformat()
+    today_iso = _hoy_ec().isoformat()
     week = activity_state.get_week(user_email)
     out_diarias = []
     out_semanales = []
@@ -191,7 +199,7 @@ def _summary_html(user_email: str | None = None) -> str:
     en rojo, separa en Hechas/Parciales/No hechas/Sin marcar, agrega comparativo
     semanal y proyectos pendientes.
     """
-    hoy = date.today()
+    hoy = _hoy_ec()
     yesterday = hoy - timedelta(days=1)
     today_iso = hoy.isoformat()
     yesterday_iso = yesterday.isoformat()
@@ -549,7 +557,7 @@ def _weekly_summary_html(user_email: str | None = None) -> str:
     - Cobranzas: contactadas vs pendientes
     - Comparativo vs semana anterior (si hay data)
     """
-    today = date.today()
+    today = _hoy_ec()
     monday = today - timedelta(days=today.weekday())
     friday = monday + timedelta(days=4)
     wk_key = activity_state.week_key()
@@ -709,7 +717,7 @@ def _send_weekly_summary_email(user_email: str | None = None) -> dict:
     sender = candidate if "@" in candidate else TRACKER_EMAIL_FROM
     html = _weekly_summary_html(sender)
     to_list = _resolve_supervisors(sender)
-    today_str = date.today().strftime("%d/%m/%Y")
+    today_str = _hoy_ec().strftime("%d/%m/%Y")
     alias = sender.split("@")[0]
     subject = f"Resumen semanal — {alias} ({today_str})"
     graph_mail.send(
@@ -735,7 +743,7 @@ def _send_daily_summary_email(user_email: str | None = None) -> dict:
     sender = candidate if "@" in candidate else TRACKER_EMAIL_FROM
     html = _summary_html(user_email)
     to_list = _resolve_supervisors(sender)
-    today_str = date.today().strftime("%d/%m/%Y")
+    today_str = _hoy_ec().strftime("%d/%m/%Y")
     subject = f"Resumen de actividades — {today_str}"
     graph_mail.send(
         from_user=sender,
@@ -881,7 +889,7 @@ def _collaborator_block_html_v2(user_email: str) -> str:
     actividades por tipo, y para sucursales: cierre de caja COMPLETO con
     denominaciones (reemplaza el correo separado de cierre de caja).
     """
-    hoy = date.today()
+    hoy = _hoy_ec()
     yesterday = hoy - timedelta(days=1)
     today_iso = hoy.isoformat()
     yesterday_iso = yesterday.isoformat()
@@ -1212,194 +1220,8 @@ def _collaborator_block_html_v2(user_email: str) -> str:
     )
 
 
-def _collaborator_block_html(user_email: str) -> str:
-    """Bloque HTML compacto de UN colaborador para el correo consolidado.
-
-    Phase O (2026-06-02): se usa dentro de _consolidated_daily_summary_html.
-    Versión más concisa que _summary_html (sin wrapper, sin comparativo semanal).
-    """
-    hoy = date.today()
-    yesterday = hoy - timedelta(days=1)
-    today_iso = hoy.isoformat()
-    yesterday_iso = yesterday.isoformat()
-    week = activity_state.get_week(user_email)
-    horario = activity_state.get_day_schedule(user_email, today_iso)
-
-    alias = user_email.split("@")[0] if "@" in user_email else user_email
-
-    # Horario inline
-    if horario is None:
-        horario_html = '<span style="color:#999;">sin reportar</span>'
-    elif horario.get("estandar"):
-        horario_html = '⏰ <b>8:30 AM – 5:30 PM</b> (estándar)'
-    else:
-        desde = horario.get("desde") or "?"
-        hasta = horario.get("hasta") or "?"
-        razon = horario.get("razon") or "sin razón"
-        horario_html = (
-            f'⏰ <b>{desde} – {hasta}</b> '
-            f'<span style="color:#777;">({razon})</span>'
-        )
-
-    # Daily activities (ordenadas por priority/carry-over)
-    diarias = [
-        (aid, a) for aid, a in week["activities"].items() if a["tipo"] == "diaria"
-    ]
-    diarias = activity_state.sort_activities_by_priority_then_carryover(
-        diarias, today_iso, yesterday_iso
-    )
-
-    def _prio_badge(p: str) -> str:
-        return {"alta": "🔴", "media": "🟡", "baja": "⚪"}.get(p, "")
-
-    def _state_icon(rec, meta):
-        if rec is None:
-            return "⏳", "Sin marcar", "#999"
-        valor = rec.get("valor", 0) or 0
-        if valor == 0:
-            return "❌", "No hecha", "#c62828"
-        if meta and valor < meta:
-            return "⚠️", "Parcial", "#ef6c00"
-        return "✅", "Hecha", "#2e7d32"
-
-    daily_rows = ""
-    counts = {"hecha": 0, "parcial": 0, "no": 0, "sin": 0}
-    for aid, a in diarias:
-        log = a.get("log", {})
-        rec = log.get(today_iso)
-        meta = a.get("meta")
-        icon, label, color = _state_icon(rec, meta)
-        if label == "Hecha":
-            counts["hecha"] += 1
-        elif label == "Parcial":
-            counts["parcial"] += 1
-        elif label == "No hecha":
-            counts["no"] += 1
-        else:
-            counts["sin"] += 1
-        valor = (rec or {}).get("valor")
-        notas = ((rec or {}).get("notas") or "").strip()
-        is_co = activity_state.is_carryover_alta(a, today_iso, yesterday_iso)
-        nombre_full = f"{_prio_badge(a.get('priority','media'))} {a['nombre']}"
-        if is_co:
-            nombre_full = (
-                f'<span style="color:#c62828;font-weight:600;">'
-                f'⚠️ PENDIENTE DE AYER · {nombre_full}</span>'
-            )
-        detalle = ""
-        if valor is not None:
-            detalle = f"{valor:g}"
-            if meta:
-                detalle += f" / {meta}"
-        if notas:
-            detalle += (
-                (' · ' if detalle else '')
-                + f'<i style="color:#555;">"{notas}"</i>'
-            )
-        if not detalle:
-            detalle = '<span style="color:#bbb;">—</span>'
-        daily_rows += (
-            f'<tr>'
-            f'<td style="padding:5px 8px;border-bottom:1px solid #eee;">{nombre_full}</td>'
-            f'<td style="padding:5px 8px;border-bottom:1px solid #eee;'
-            f'color:{color};font-weight:600;white-space:nowrap;">{icon} {label}</td>'
-            f'<td style="padding:5px 8px;border-bottom:1px solid #eee;">{detalle}</td>'
-            f'</tr>'
-        )
-
-    daily_section = ""
-    if daily_rows:
-        daily_section = (
-            f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
-            f'<tr style="background:#f4faf6;">'
-            f'<th style="text-align:left;padding:6px 8px;color:#0e7c39;">Actividad</th>'
-            f'<th style="text-align:left;padding:6px 8px;color:#0e7c39;">Estado</th>'
-            f'<th style="text-align:left;padding:6px 8px;color:#0e7c39;">Detalle</th>'
-            f'</tr>{daily_rows}</table>'
-        )
-
-    # Weekly: actualizados hoy + pendientes
-    semanales_act: list = []
-    semanales_pend: list = []
-    for aid, a in week["activities"].items():
-        if a.get("tipo") == "diaria":
-            continue
-        ult = a.get("ultima_actualizacion") or ""
-        if ult.startswith(today_iso):
-            semanales_act.append(a)
-        elif (a.get("avance") or 0) < 100:
-            semanales_pend.append(a)
-
-    weekly_section = ""
-    if semanales_act:
-        rows = "".join(
-            f'<li>{_prio_badge(a.get("priority","media"))} <b>{a["nombre"]}</b> — '
-            f'{a.get("avance", 0):.0f}%'
-            + (f' <i style="color:#555;">"{a.get("notas")}"</i>' if a.get("notas") else "")
-            + '</li>'
-            for a in semanales_act
-        )
-        weekly_section = (
-            '<div style="margin-top:8px;font-size:13px;">'
-            '<b style="color:#0e7c39;">📌 Proyectos avanzados hoy:</b>'
-            f'<ul style="margin:4px 0 0 18px;padding:0;">{rows}</ul></div>'
-        )
-
-    pending_section = ""
-    if semanales_pend:
-        rows = "".join(
-            f'<li>{_prio_badge(a.get("priority","media"))} {a["nombre"]} — '
-            f'{(a.get("avance") or 0):.0f}%</li>'
-            for a in semanales_pend
-        )
-        pending_section = (
-            '<div style="margin-top:6px;font-size:12px;color:#777;">'
-            '📋 <i>Proyectos en curso sin avance hoy:</i>'
-            f'<ul style="margin:2px 0 0 18px;padding:0;">{rows}</ul></div>'
-        )
-
-    # Cierre de caja inline (para info@/quito@) si lo marcaron hoy
-    cierre_html = ""
-    cierre = activity_state.get_cierre_caja(user_email, today_iso)
-    if cierre:
-        cierre_html = (
-            '<div style="margin-top:10px;padding:8px 12px;background:#f4faf6;'
-            'border-left:3px solid #0e7c39;border-radius:4px;font-size:13px;">'
-            f'💵 <b>Cierre de caja {cierre.get("sucursal","")}:</b> '
-            f'Total ${cierre["total"]:,.2f} · '
-            f'Entregado <b>${cierre["entregado"]:,.2f}</b> '
-            f'(fondo ${cierre["fondo"]:,.2f}) — '
-            f'<i style="color:#666;">ver correo aparte para detalle</i>'
-            '</div>'
-        )
-
-    summary_line = (
-        f'<span style="color:#2e7d32;">✅ {counts["hecha"]}</span> · '
-        f'<span style="color:#ef6c00;">⚠️ {counts["parcial"]}</span> · '
-        f'<span style="color:#c62828;">❌ {counts["no"]}</span> · '
-        f'<span style="color:#999;">⏳ {counts["sin"]}</span>'
-    )
-
-    if not daily_section and not weekly_section and not pending_section and not cierre_html:
-        body_block = (
-            '<p style="color:#999;font-style:italic;">'
-            '(Sin actividad registrada hoy)</p>'
-        )
-    else:
-        body_block = (
-            daily_section + weekly_section + pending_section + cierre_html
-        )
-
-    return (
-        '<div style="margin:24px 0;padding:14px 18px;'
-        'border:1px solid #d9e0d9;border-radius:8px;background:#fff;">'
-        f'<h3 style="color:#0e7c39;margin:0 0 4px 0;">{alias}</h3>'
-        f'<p style="margin:0 0 10px 0;font-size:13px;color:#555;">'
-        f'{horario_html} &nbsp;·&nbsp; Diarias: {summary_line}</p>'
-        f'{body_block}'
-        '</div>'
-    )
-
+# Fase 5: _collaborator_block_html (v1) ELIMINADA — dead code (~189 líneas),
+# solo se usa _collaborator_block_html_v2 (auditoría C8).
 
 # ============ Consolidated daily summary (Phase O, 2026-06-02) ============
 CONSOLIDATED_DAILY_TO_DEFAULT = (
@@ -1434,7 +1256,7 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
       - Caja chica: inicial, gastos del día, reposiciones, saldo (rojo ≤ $30)
     """
     from html import escape
-    today_iso = today_iso or date.today().isoformat()
+    today_iso = today_iso or _hoy_ec().isoformat()
     fecha_d = date.fromisoformat(today_iso)
     fecha_fmt = fecha_d.strftime("%d/%m/%Y")
 
@@ -1960,7 +1782,7 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
     Estructura: resumen ejecutivo arriba + sección problemáticas + asistentes en
     2 columnas + proyectos pendientes. Mucho más compacto y accionable.
     """
-    hoy = date.today()
+    hoy = _hoy_ec()
     today_iso = hoy.isoformat()
     dias_es = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
     meses_es = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -2136,7 +1958,7 @@ def _send_consolidated_daily_summary(
     if cc_override is not None:  # lista vacía = sin CC (testing)
         cc_list = [e.strip() for e in cc_override if e.strip()]
 
-    fecha_str = date.today().strftime("%d/%m/%Y")
+    fecha_str = _hoy_ec().strftime("%d/%m/%Y")
     subject = f"Resumen diario del equipo — {fecha_str}"
     graph_mail.send(
         from_user=sender,
@@ -3209,7 +3031,7 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
 
         if name == "get_ventas_rango":
             fi = _parse_date(args.get("fecha_inicial"))
-            ff = _parse_date(args.get("fecha_final"), default=date.today())
+            ff = _parse_date(args.get("fecha_final"), default=_hoy_ec())
             return json.dumps(
                 contifico_client.ventas_rango(fi, ff),
                 ensure_ascii=False,

@@ -29,6 +29,8 @@ desde `ask_agent.py` como herramientas de Claude.
 from __future__ import annotations
 
 import os
+import sys
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -43,38 +45,25 @@ PAGE_SIZE = 200
 # El daily_report invoca varias funciones que comparten el mismo rango (ej.
 # cartera_kpis, antiguedad, top_deudores_ciudad UIO+GYE — los 4 con ventana
 # 12 meses). Sin cache eso son 4× la misma llamada paginada. Con cache, una.
-# Key = (fecha_inicial, fecha_final, tipo, tipo_registro). Limpia al final
-# de cada proceso (Azure Function corta cada invocación).
-_DOCS_CACHE: dict[tuple, list[dict[str, Any]]] = {}
+# Key = (fecha_inicial, fecha_final, tipo, tipo_registro).
+# Fase 5 (auditoría R7): entradas con TIMESTAMP + TTL — este módulo también
+# vive en el bot (proceso permanente) donde el comentario original ("Azure
+# Function corta cada invocación") era falso: el Data Bot respondía a las
+# 17:00 con datos cacheados de las 9:00 mientras prometía "en vivo".
+_DOCS_CACHE: dict[tuple, tuple[float, list[dict[str, Any]]]] = {}
+CACHE_TTL_SECONDS = int(os.environ.get("CONTIFICO_CACHE_TTL", "600"))  # 10 min
 
 # Prefijos de documento por sucursal de emisión.
 # Fuente: CLAUDE.md Issue #11.
 PREFIJO_GYE = "001-001"
 PREFIJO_UIO = "001-002"
 
-# ===== Feriados Ecuador para cálculo de días hábiles =====
-# Duplicado del dict en daily_report.py — mantener sincronizado.
-EC_HOLIDAYS: dict[int, list[date]] = {
-    2025: [
-        date(2025, 1, 1), date(2025, 3, 3), date(2025, 3, 4),
-        date(2025, 4, 18), date(2025, 5, 1), date(2025, 5, 23),
-        date(2025, 8, 10), date(2025, 10, 10), date(2025, 11, 3),
-        date(2025, 12, 25),
-    ],
-    2026: [
-        date(2026, 1, 1), date(2026, 2, 16), date(2026, 2, 17),
-        date(2026, 4, 3), date(2026, 5, 1), date(2026, 5, 25),
-        date(2026, 8, 10), date(2026, 10, 9), date(2026, 11, 2),
-        date(2026, 11, 3), date(2026, 12, 25),
-    ],
-}
-
-# Override de "ventas mismo mes año anterior" cuando PBI/Contifico difieren.
-# Misma lógica que daily_report.PY_OVERRIDE — para que el cumplimiento del bot
-# coincida con el del correo diario.
-PY_OVERRIDE: dict[int, float] = {
-    5: 38000.0,  # mayo 2025: usuario reporta $38K
-}
+# ===== Feriados + override PY: centralizados en core_config (Fase 5) =====
+# Antes este dict estaba duplicado a mano con daily_report.py ("mantener
+# sincronizado") — y el PY_OVERRIDE estaba keyed por mes sin año.
+import core_config
+EC_HOLIDAYS = core_config.EC_HOLIDAYS  # alias legacy
+PY_OVERRIDE = core_config.PY_OVERRIDE  # alias legacy (key = (año, mes))
 
 
 # ============ Bajo nivel: HTTP + paginación ============
@@ -110,8 +99,12 @@ def get_documentos(
     Devuelve la lista completa con `detalles[]` y `persona` embebidos.
     """
     cache_key = (fecha_inicial, fecha_final, tipo, tipo_registro)
-    if cache_key in _DOCS_CACHE:
-        return _DOCS_CACHE[cache_key]
+    cached = _DOCS_CACHE.get(cache_key)
+    if cached is not None:
+        cached_at, payload = cached
+        if time.time() - cached_at < CACHE_TTL_SECONDS:
+            return payload
+        del _DOCS_CACHE[cache_key]  # expirado
 
     token = _token()
     out: list[dict[str, Any]] = []
@@ -144,8 +137,15 @@ def get_documentos(
                 break
             page += 1
             if page > 100:  # bump 50→100 (Phase H) — 24 meses de hist puede pasar 50 pages
+                # Fase 5 (auditoría R4): el truncamiento ya no es silencioso.
+                print(
+                    f"[contifico_client] ⚠️ TRUNCADO en {page - 1} páginas "
+                    f"({len(out)} docs) para rango {fecha_inicial}–{fecha_final} "
+                    "— los totales pueden estar subestimados.",
+                    file=sys.stderr,
+                )
                 break
-    _DOCS_CACHE[cache_key] = out
+    _DOCS_CACHE[cache_key] = (time.time(), out)
     return out
 
 
@@ -213,7 +213,7 @@ def _filter_validas(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _is_workday(d: date) -> bool:
     if d.weekday() == 6:  # domingo
         return False
-    if d in EC_HOLIDAYS.get(d.year, []):
+    if d in core_config.holidays_for(d.year):
         return False
     return True
 
@@ -380,7 +380,7 @@ def cumplimiento_mes(fecha_referencia: date | None = None) -> dict[str, Any]:
     from calendar import monthrange
     _, last_day_py = monthrange(year - 1, month)
     ultimo_dia_py = date(year - 1, month, last_day_py)
-    py_dax = PY_OVERRIDE.get(month)
+    py_dax = core_config.py_override_for(year, month)
     if py_dax is None:
         docs_py = _filter_validas(get_documentos(primer_dia_py, ultimo_dia_py))
         py = sum(_doc_total(d) for d in docs_py)

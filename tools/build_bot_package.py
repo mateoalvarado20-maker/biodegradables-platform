@@ -28,9 +28,10 @@ BOT_FILES = [
     # entrypoint + agentes
     "teams_bot.py",
     "ask_agent.py",
-    # infraestructura (Fases 1-3)
+    # infraestructura (Fases 1-5)
     "safe_json.py",
     "send_ledger.py",
+    "core_config.py",
     # state y dominio
     "activity_state.py",
     "conversation_history.py",

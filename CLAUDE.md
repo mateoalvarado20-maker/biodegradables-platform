@@ -8,15 +8,27 @@ Toda la lógica clave está aquí.
 
 ---
 
-## ⚠️ REFACTOR EN CURSO (2026-06-12) — leer primero
+## ✅ REFACTOR COMPLETADO (2026-06-12) — leer primero
 
-El proyecto está bajo refactorización en 6 fases tras la auditoría técnica
-(`AUDITORIA_TECNICA_2026-06-12.md` — diagnóstico completo con evidencia archivo:línea).
+Las 6 fases del refactor post-auditoría están implementadas y commiteadas
+(`git log`). Diagnóstico original: `AUDITORIA_TECNICA_2026-06-12.md`.
+Documentación viva: `CONTRIBUTING.md` (reglas + PR checklist),
+`docs/arquitectura.md` (capas, dueños de estado, garantías y dónde se
+testean), `docs/onboarding.md`, `docs/runbook-operativo.md` (incidentes).
 
-**Reglas vigentes desde Fase 0:**
-- El proyecto es un **repo git** (`C:\Users\Mateo`, `.gitignore` whitelist). Todo cambio se commitea. No editar las copias de `azfunc\` a mano: desde Fase 4 se generan con `tools/sync_azfunc.py` desde la raíz (fuente única).
+**Reglas permanentes:**
+- El proyecto es un **repo git** (`C:\Users\Mateo`, `.gitignore` whitelist). Todo cambio se commitea (idealmente por PR con el CI de `.github/workflows/ci.yml`).
+- **NO editar `azfunc\` a mano** (salvo los archivos azfunc-específicos listados en `tools/sync_azfunc.py`): se GENERA con `python tools/sync_azfunc.py`. El zip del bot se genera con `python tools/build_bot_package.py`.
+- Todo state pasa por `safe_json` (atómico+backup+cuarentena+locks); todo envío programado pasa por `_reliable_job` + `send_ledger` (nunca dos veces, nunca perdido en silencio); identidad SOLO desde el registro AAD (display name prohibido como fuente); config de negocio (destinatarios, feriados, PY_OVERRIDE, umbrales) SOLO en `core_config.py`/env vars; `date.today()` prohibido (usar helpers TZ Ecuador).
+- Suite de tests: `python -m pytest tests/ -q` (50 tests: aislamiento entre usuarios, concurrencia, corrupción, anti-duplicado, horarios, identidad). Correrla antes de cualquier deploy.
 - Código retirado vive en `archive/` con justificación en `archive/README.md`. NO restaurar sin leerla. Retirados: `weekly_report.py` (roto y huérfano — reemplazado por `weekly_summaries` del bot), `agent.py`, `apollo_orchestrator.*`, `run_reply_agent.bat`, `run_weekly_report.bat`.
-- Convenciones, onboarding y checklist de PR: `CONTRIBUTING.md` y `docs/` (desde Fase 5).
+
+**Pendientes operativos del refactor (acción humana, ver runbook):**
+1. Conectar el repo a GitHub y proteger `master` (comandos en CONTRIBUTING §CI/CD).
+2. Deploy del bot (`tools/build_bot_package.py` → `az webapp deploy`) y del azfunc sincronizado.
+3. Setear `ADMIN_API_TOKEN` en el App Service (separa admin del secret OAuth).
+4. Cutover de logística al bot (`LOGISTICS_IN_BOT=1` + disable del timer azfunc, en la misma ventana — runbook §Cutover).
+5. (Opcional) `DISPATCH_TABLE_CONN` en la PC para que `dispatch.py` escriba a la tabla de producción.
 
 **Estado operativo REAL verificado (2026-06-12):**
 | Qué | Dónde corre HOY |
