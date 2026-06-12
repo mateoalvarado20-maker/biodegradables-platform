@@ -85,12 +85,21 @@ COLLABORATORS = _load_collaborators()
 
 
 def _resolve_collaborator(name_or_email: str) -> str | None:
-    """Mapea 'Mateo' → 'malvarado@...'. Si ya es email, lo devuelve normalizado."""
+    """Mapea 'Mateo' → 'malvarado@...'. Si ya es email, lo valida.
+
+    Fase 2 (auditoría A6/C4): SOLO acepta colaboradores registrados en
+    KNOWN_COLLABORATORS. Antes aceptaba cualquier string con '@' — un email
+    mal tipeado (o inyectado vía prompt injection en datos externos) creaba
+    silenciosamente un usuario fantasma en el state y la actividad/reminder
+    "desaparecía" sin llegar a nadie.
+    """
     if not name_or_email:
         return None
     s = name_or_email.strip().lower()
     if "@" in s:
-        return s
+        if s in set(COLLABORATORS.values()):
+            return s
+        return None  # email no registrado — el tool devuelve error explícito
     return COLLABORATORS.get(s)
 
 
@@ -2090,10 +2099,15 @@ Resumen consolidado automático del Activities Bot · {hoy.strftime("%d/%m/%Y")}
 """
 
 
-def _send_consolidated_daily_summary() -> dict:
+def _send_consolidated_daily_summary(
+    to_override: list[str] | None = None,
+    cc_override: list[str] | None = None,
+) -> dict:
     """Manda el correo consolidado con todos los colaboradores no-supervisor.
 
-    To/CC se pueden override con CONSOLIDATED_DAILY_TO / CONSOLIDATED_DAILY_CC.
+    To/CC: parámetros explícitos (testing) > env CONSOLIDATED_DAILY_TO/_CC >
+    defaults. Fase 2 (auditoría A8): los overrides de testing ya NO mutan
+    os.environ del proceso.
     """
     # Tomar todos los users del state que NO son supervisores
     state = activity_state.load()
@@ -2117,6 +2131,10 @@ def _send_consolidated_daily_summary() -> dict:
     cc_str = os.environ.get("CONSOLIDATED_DAILY_CC", CONSOLIDATED_DAILY_CC_DEFAULT)
     to_list = [e.strip() for e in to_str.split(",") if e.strip()]
     cc_list = [e.strip() for e in cc_str.split(",") if e.strip()]
+    if to_override:
+        to_list = [e.strip() for e in to_override if e.strip()]
+    if cc_override is not None:  # lista vacía = sin CC (testing)
+        cc_list = [e.strip() for e in cc_override if e.strip()]
 
     fecha_str = date.today().strftime("%d/%m/%Y")
     subject = f"Resumen diario del equipo — {fecha_str}"

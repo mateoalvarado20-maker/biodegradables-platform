@@ -75,6 +75,20 @@ DATA_APP_PWD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 APP_TENANT_ID = os.environ.get("MICROSOFT_APP_TENANT_ID", "")
 APP_TYPE = os.environ.get("MICROSOFT_APP_TYPE", "SingleTenant")
 
+# Fase 2 (auditoría C5): token admin PROPIO, separado del secret OAuth del
+# bot. Mientras ADMIN_API_TOKEN no esté seteado en el App Service, cae al
+# password del bot (compat con los scripts de testing existentes) — setearlo
+# y rotar es la migración recomendada.
+ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "") or DATA_APP_PWD
+
+
+def _require_admin(request: "Request") -> None:
+    """Valida el header X-Admin-Token (comparación constante, fail-closed)."""
+    import hmac
+    token = request.headers.get("x-admin-token", "")
+    if not ADMIN_API_TOKEN or not hmac.compare_digest(token, ADMIN_API_TOKEN):
+        raise HTTPException(status_code=401, detail="invalid admin token")
+
 ACTIVITIES_APP_ID = os.environ.get("ACTIVITIES_APP_ID", "")
 ACTIVITIES_APP_PWD = os.environ.get("ACTIVITIES_APP_PASSWORD", "")
 
@@ -370,41 +384,80 @@ def _user_email(context: TurnContext) -> str:
                         _remember_aad_email(aad_id_short, email, f"props.{key}")
                         return email
 
-            # 4. Match EXACTO de display name (word-set)
-            resolved = _match_name_to_collaborator(name)
-            if resolved:
-                logger.info(
-                    "Email via display_name word-match '%s' → %s",
-                    name, resolved,
-                )
-                # NO guardamos en cache por display name — es la fuente menos
-                # confiable. Solo channel_data/props son persistidos.
-                return resolved
-
+            # Fase 2 (auditoría A1): el match por display name fue ELIMINADO
+            # como fuente de identidad/autorización. Con alias de una palabra
+            # ("gabriela"), una "Gabriela Bravo" del tenant resolvía a
+            # gsanchez@ — sus marcas caían en el state ajeno Y su chat
+            # sobrescribía el conversation ref de gsanchez@ (contaminación
+            # bidireccional). Ahora el display name solo se loguea como PISTA
+            # para que el admin registre el mapeo AAD→email.
+            hint = _match_name_to_collaborator(name)
             logger.warning(
-                "_user_email: NO RESUELTO display_name='%s' aad='%s'. "
-                "Retornando email aislado.",
+                "_user_email: NO RESUELTO display_name='%s' aad='%s'%s. "
+                "Registrar con POST /admin/aad-lookup/set.",
                 name, aad_id_short,
+                f" (¿quizás {hint}? NO se asume)" if hint else "",
             )
     except Exception as e:
         logger.warning("_user_email: excepción: %s", e)
 
-    # 5. Email aislado por AAD short id
-    isolated = f"unidentified-{aad_id_short or 'unknown'}@biodegradablesecuador.com"
-    logger.warning("Email aislado: %s (name='%s')", isolated, name)
-    return isolated
+    # 5. Email aislado por AAD short id — SOLO si hay AAD id. Sin AAD id ya
+    # no se cae al bucket compartido `unidentified-unknown@` (auditoría A4:
+    # dos personas distintas compartían state, historial y conversation ref).
+    if aad_id_short:
+        isolated = f"unidentified-{aad_id_short}@biodegradablesecuador.com"
+        logger.warning("Email aislado: %s (name='%s')", isolated, name)
+        return isolated
+    logger.error(
+        "_user_email: turno RECHAZADO — sin AAD object id y sin fuentes "
+        "confiables (name='%s'). No se crea state.", name,
+    )
+    return ""
 
 
 def _is_allowed_data(email: str) -> bool:
+    # Fase 2 (auditoría C1): FAIL-CLOSED. Antes, una env var vacía en un
+    # redeploy le daba acceso a ventas/cartera/tools de gerencia a CUALQUIER
+    # usuario del tenant.
+    if not email:
+        return False
     if not DATA_ALLOWED_USERS:
-        return True
+        logger.error(
+            "BOT_ALLOWED_USERS_DATA está VACÍA — Data Bot fail-closed: "
+            "nadie entra hasta configurarla."
+        )
+        return False
     return email.lower() in DATA_ALLOWED_USERS
 
 
 def _is_allowed_activities(email: str) -> bool:
+    if not email:
+        return False
     if not ACTIVITIES_ALLOWED_USERS:
-        return True  # cualquiera del tenant
+        return True  # cualquiera del tenant — intencional para este bot
     return email.lower() in ACTIVITIES_ALLOWED_USERS
+
+
+_UNRESOLVED_MSG = (
+    "🤔 No pude identificarte con certeza, así que no voy a registrar nada "
+    "(esto protege que tus datos no caigan en el usuario equivocado).\n\n"
+    "Pedile a Mateo que registre tu usuario — tu AAD id aparece en los "
+    "logs del bot."
+)
+
+
+async def _resolve_or_reject(context: TurnContext) -> str:
+    """Resuelve la identidad o rechaza el turno con un mensaje claro.
+
+    Fase 2: un turno sin identidad confiable ya NO crea state, ni historial,
+    ni conversation refs (auditoría A1/A4)."""
+    email = _user_email(context)
+    if not email:
+        try:
+            await context.send_activity(_UNRESOLVED_MSG)
+        except Exception:
+            logger.exception("No se pudo enviar el mensaje de identidad")
+    return email
 
 
 # ===== Data Bot =====
@@ -497,7 +550,9 @@ async def _on_turn_data(context: TurnContext) -> None:
     if not text:
         return
 
-    email = _user_email(context)
+    email = await _resolve_or_reject(context)
+    if not email:
+        return
     if not _is_allowed_data(email):
         logger.warning("Data Bot: usuario no autorizado: %s", email)
         await context.send_activity(
@@ -1178,18 +1233,27 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
         "spacing": "Large",
     })
 
+    # Fase 2 (auditoría A5): el card embebe el contexto con el que fue
+    # generado (usuario, fecha, semana). El submit los valida — un card
+    # viejo que quedó vivo en el chat de Teams ya no escribe marcas en la
+    # fecha/semana equivocada ni en otro usuario.
+    _ctx = {
+        "ctx_user": (user_email or "").strip().lower(),
+        "ctx_fecha": activity_state._today().isoformat(),
+        "ctx_wk": activity_state.week_key(),
+    }
     actions: list[dict[str, Any]] = []
     if user_email_l in CIERRE_CAJA_USERS:
         actions.append({
             "type": "Action.Submit",
             "title": "🧮 Calcular total",
-            "data": {"intent": "calc_cierre_caja"},
+            "data": {"intent": "calc_cierre_caja", **_ctx},
         })
     actions.append({
         "type": "Action.Submit",
         "title": "💾 GUARDAR Y ENVIAR RESUMEN",
         "style": "positive",  # botón VERDE para que se resalte
-        "data": {"intent": "submit_checkin"},
+        "data": {"intent": "submit_checkin", **_ctx},
     })
 
     card_json: dict[str, Any] = {
@@ -1210,6 +1274,34 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
 async def _handle_checkin_submission(
     context: TurnContext, form_data: dict[str, Any], user_email: str
 ) -> None:
+    # Fase 2 (auditoría A5): validar el contexto embebido en el card.
+    # Los campos ctx_* faltan en cards generados antes de esta versión —
+    # en ese caso se omite la validación (compat durante la migración).
+    ctx_user = (form_data.get("ctx_user") or "").strip().lower()
+    ctx_fecha = (form_data.get("ctx_fecha") or "").strip()
+    hoy_iso = activity_state._today().isoformat()
+    if ctx_user and ctx_user != (user_email or "").strip().lower():
+        logger.warning(
+            "submit_checkin RECHAZADO: card de %s enviado por %s",
+            ctx_user, user_email,
+        )
+        await context.send_activity(
+            "❌ Este formulario fue generado para otro usuario. "
+            "Tipea `/checkin` para abrir el tuyo."
+        )
+        return
+    if ctx_fecha and ctx_fecha != hoy_iso:
+        logger.info(
+            "submit_checkin tardío: card del %s enviado el %s por %s",
+            ctx_fecha, hoy_iso, user_email,
+        )
+        await context.send_activity(
+            f"⏰ Este formulario es del **{ctx_fecha}** y hoy es {hoy_iso} — "
+            "no lo registré para evitar marcas en el día equivocado. "
+            "Tipea `/checkin` para abrir el de hoy."
+        )
+        return
+
     marcadas_daily = 0
     marcadas_weekly = 0
     # Inicializar acá para que SIEMPRE exista (no solo si user en CIERRE_CAJA_USERS)
@@ -1503,7 +1595,9 @@ async def _on_turn_activities(context: TurnContext) -> None:
     if activity.value and isinstance(activity.value, dict):
         intent = activity.value.get("intent")
         if intent == "submit_checkin":
-            email = _user_email(context)
+            email = await _resolve_or_reject(context)
+            if not email:
+                return
             if not _is_allowed_activities(email):
                 await context.send_activity("No tenés acceso a este bot.")
                 return
@@ -1513,7 +1607,9 @@ async def _on_turn_activities(context: TurnContext) -> None:
             return
         # Phase U: handlers del card de ruta de José
         if isinstance(intent, str) and intent.startswith("jose_"):
-            email = _user_email(context)
+            email = await _resolve_or_reject(context)
+            if not email:
+                return
             if not _is_allowed_activities(email):
                 await context.send_activity("No tenés acceso a este bot.")
                 return
@@ -1522,7 +1618,9 @@ async def _on_turn_activities(context: TurnContext) -> None:
             await _handle_jose_intent(context, intent, activity.value, JOSE_EMAIL)
             return
         if intent in ("calc_apertura_caja", "submit_apertura_caja"):
-            email = _user_email(context)
+            email = await _resolve_or_reject(context)
+            if not email:
+                return
             if not _is_allowed_activities(email):
                 await context.send_activity("No tenés acceso a este bot.")
                 return
@@ -1604,7 +1702,9 @@ async def _on_turn_activities(context: TurnContext) -> None:
 
         if intent == "confirmar_cierre":
             # El validador (Daniel/Gabriela Sánchez) confirma la recepción del efectivo
-            email = _user_email(context)
+            email = await _resolve_or_reject(context)
+            if not email:
+                return
             ref = TurnContext.get_conversation_reference(activity)
             _save_ref_for_user("activities", email, ref)
 
@@ -1619,6 +1719,21 @@ async def _on_turn_activities(context: TurnContext) -> None:
             if not emisor or not fecha:
                 await context.send_activity(
                     "❌ Datos incompletos del card de confirmación."
+                )
+                return
+
+            # Fase 2 (auditoría A11): solo el validador designado de la
+            # sucursal o un supervisor pueden confirmar — el payload del
+            # card es manipulable y antes cualquier usuario del tenant
+            # podía escribir confirmaciones en cierres ajenos.
+            autorizados = set(VALIDADOR_CIERRE_POR_CIUDAD.values()) | SUPERVISORS_ONLY
+            if email not in autorizados:
+                logger.warning(
+                    "confirmar_cierre RECHAZADO: %s no es validador (emisor=%s)",
+                    email, emisor,
+                )
+                await context.send_activity(
+                    "❌ Solo el validador designado puede confirmar cierres de caja."
                 )
                 return
 
@@ -1732,7 +1847,9 @@ async def _on_turn_activities(context: TurnContext) -> None:
     if not text:
         return
 
-    email = _user_email(context)
+    email = await _resolve_or_reject(context)
+    if not email:
+        return
     if not _is_allowed_activities(email):
         logger.warning("Activities Bot: no autorizado: %s", email)
         await context.send_activity("No tenés acceso a este bot.")
@@ -1753,15 +1870,32 @@ async def _on_turn_activities(context: TurnContext) -> None:
         await context.send_activity(_build_jose_ruta_card(JOSE_EMAIL))
         return
 
+    # Fase 2 (auditoría H17): los supervisores no trackean actividades
+    # propias — no se les genera card ni state (el saludo de Daniel le
+    # creaba un bucket vacío que después había que limpiar con wipe).
+    # Conservan el chat natural (tools de supervisor en modo activities).
+    es_supervisor = email in SUPERVISORS_ONLY
+    _SUPERVISOR_CARD_MSG = (
+        "👀 Sos supervisor — no trackeás actividades propias, así que no te "
+        "abro formulario. Preguntame por las actividades del equipo, o usá "
+        "el Data Bot para ventas."
+    )
+
     if lower in ("/help", "help", "?"):
         await context.send_activity(ACTIVITIES_HELP)
         return
     if lower in ("/checkin", "/check-in", "/test-checkin"):
+        if es_supervisor:
+            await context.send_activity(_SUPERVISOR_CARD_MSG)
+            return
         await context.send_activity(_build_checkin_card(email))
         return
 
     # Saludos simples → respuesta fija + abrir el card. NO toca Claude (gratis).
     if _is_greeting(text):
+        if es_supervisor:
+            await context.send_activity(_SUPERVISOR_CARD_MSG)
+            return
         await context.send_activity(
             "¡Hola! 👋 Te dejo el formulario del día para marcar tus actividades:"
         )
@@ -1782,9 +1916,15 @@ async def _on_turn_activities(context: TurnContext) -> None:
         "marcar", "checkin",  # short forms — last so longer ones match first
     ]
     if any(kw in lower for kw in card_keywords):
+        if es_supervisor:
+            await context.send_activity(_SUPERVISOR_CARD_MSG)
+            return
         await context.send_activity(_build_checkin_card(email))
         return
     if lower in ("/status", "/week"):
+        if es_supervisor:
+            await context.send_activity(_SUPERVISOR_CARD_MSG)
+            return
         wk = activity_state.get_week(email)
         monday, friday = activity_state.week_range(activity_state.week_key())
         summary = f"📊 **Tu semana {activity_state.week_key()}** ({monday}–{friday})\n\n"
@@ -3989,9 +4129,7 @@ async def health() -> dict[str, str]:
 
 @app.post("/admin/trigger-checkin")
 async def trigger_checkin(request: Request) -> dict[str, Any]:
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     await send_daily_checkin()
     refs = _load_refs()
     return {
@@ -4003,9 +4141,7 @@ async def trigger_checkin(request: Request) -> dict[str, Any]:
 @app.post("/admin/trigger-reminders")
 async def trigger_reminders(request: Request) -> dict[str, Any]:
     """Forzar entrega de reminders vencidos ahora (testing)."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     await deliver_due_reminders()
     return {
         "status": "triggered",
@@ -4016,9 +4152,7 @@ async def trigger_reminders(request: Request) -> dict[str, Any]:
 @app.post("/admin/trigger-cobranzas")
 async def trigger_cobranzas(request: Request) -> dict[str, Any]:
     """Forzar auto-asignación de cobranzas ahora (testing)."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     await auto_assign_cobranzas()
     return {"status": "triggered"}
 
@@ -4026,9 +4160,7 @@ async def trigger_cobranzas(request: Request) -> dict[str, Any]:
 @app.post("/admin/trigger-weekly-summaries")
 async def trigger_weekly_summaries(request: Request) -> dict[str, Any]:
     """Forzar envío de weekly summaries ahora (testing)."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     await send_weekly_summaries()
     return {"status": "triggered"}
 
@@ -4036,9 +4168,7 @@ async def trigger_weekly_summaries(request: Request) -> dict[str, Any]:
 @app.post("/admin/trigger-news-brief")
 async def trigger_news_brief(request: Request) -> dict[str, Any]:
     """Forzar generación del news brief ahora (testing)."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     await generate_daily_news_brief()
     brief = news_brief.load_brief()
     return {
@@ -4051,9 +4181,7 @@ async def trigger_news_brief(request: Request) -> dict[str, Any]:
 @app.post("/admin/trigger-sales-recap")
 async def trigger_sales_recap(request: Request) -> dict[str, Any]:
     """Forzar sales recap. Body opcional: {year, month}. Default: mes anterior."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4067,9 +4195,7 @@ async def trigger_sales_recap(request: Request) -> dict[str, Any]:
 @app.post("/admin/trigger-activities-recap")
 async def trigger_activities_recap(request: Request) -> dict[str, Any]:
     """Forzar activities recap."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4083,9 +4209,7 @@ async def trigger_activities_recap(request: Request) -> dict[str, Any]:
 @app.post("/admin/trigger-midmonth-status")
 async def trigger_midmonth_status(request: Request) -> dict[str, Any]:
     """Forzar midmonth status."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4107,9 +4231,7 @@ async def seed_template_for_user(request: Request) -> dict[str, Any]:
 
     Body JSON: {"user_email": "gsanchez@biodegradablesecuador.com"}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4177,9 +4299,7 @@ async def show_activities_for_user(request: Request) -> dict[str, Any]:
 
     Query: ?user_email=foo@bar.com (opcional)
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     target_email = request.query_params.get("user_email", "").strip().lower()
     state = activity_state.load()
@@ -4223,9 +4343,7 @@ async def preview_checkin_as_user(request: Request) -> dict[str, Any]:
 
     Body: {"as_email": "info@...", "send_to_email": "malvarado@..." }
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4271,9 +4389,7 @@ async def preview_checkin_as_user(request: Request) -> dict[str, Any]:
 async def admin_aad_lookup_get(request: Request) -> dict[str, Any]:
     """Phase V (2026-06-11): muestra el lookup AAD ID → email aprendido +
     overrides activos. Útil para auditar quién está mapeado a quién."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     return {
         "learned_lookup": _load_aad_lookup(),
         "env_overrides": AAD_OVERRIDE,
@@ -4288,9 +4404,7 @@ async def admin_aad_lookup_set(request: Request) -> dict[str, Any]:
     Body: {"aad_short": "435a855e", "email": "jsolorzano@..."}
     Sobrescribe si ya existía.
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4312,9 +4426,7 @@ async def admin_aad_lookup_remove(request: Request) -> dict[str, Any]:
 
     Body: {"aad_short": "435a855e"}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4332,9 +4444,7 @@ async def admin_aad_lookup_remove(request: Request) -> dict[str, Any]:
 async def trigger_morning_sales_job_admin(request: Request) -> dict[str, Any]:
     """Phase V (2026-06-11): dispara `send_morning_sales_report_job` ahora
     mismo, sin esperar al cron. Útil para test post-fix."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         await send_morning_sales_report_job()
         return {"ok": True, "msg": "morning_sales_report disparado"}
@@ -4350,9 +4460,7 @@ async def preview_jose_route(request: Request) -> dict[str, Any]:
 
     Body: {"send_to_email": "malvarado@..."}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4392,9 +4500,7 @@ async def preview_jose_summary_email(request: Request) -> dict[str, Any]:
 
     Body: {"to_override": "malvarado@..."}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4425,9 +4531,7 @@ async def send_message_to_users(request: Request) -> dict[str, Any]:
 
     Phase S+ (2026-06-08).
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4473,9 +4577,7 @@ async def schedule_one_time_message(request: Request) -> dict[str, Any]:
       job_id: "aviso_sucursales_$timestamp" (optional)
     }
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4546,9 +4648,7 @@ async def schedule_one_time_email(request: Request) -> dict[str, Any]:
       job_id: "..." (optional)
     }
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4614,9 +4714,7 @@ async def preview_apertura_caja(request: Request) -> dict[str, Any]:
 
     Body: {as_email (info@ o quito@), send_to_email (default malvarado@)}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
     try:
         body = await request.json()
     except Exception:
@@ -4652,9 +4750,7 @@ async def preview_confirmacion_cierre(request: Request) -> dict[str, Any]:
 
     Body: {emisor_email, fecha, send_to_email (override del validador real)}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4714,9 +4810,7 @@ async def trigger_consolidated_daily(request: Request) -> dict[str, Any]:
     Body opcional: {"to_override": ["..."], "cc_override": ["..."]} — si se pasan,
     setean las env vars temporalmente para esta corrida solo.
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4724,13 +4818,14 @@ async def trigger_consolidated_daily(request: Request) -> dict[str, Any]:
         body = {}
     to_override = (body or {}).get("to_override")
     cc_override = (body or {}).get("cc_override")
-    if to_override:
-        os.environ["CONSOLIDATED_DAILY_TO"] = ",".join(to_override)
-    if cc_override is not None:  # allows empty list to clear CC
-        os.environ["CONSOLIDATED_DAILY_CC"] = ",".join(cc_override)
 
+    # Fase 2 (auditoría A8): los overrides van como parámetros — ya no se
+    # muta os.environ (el job de las 18:30 heredaba los destinatarios del
+    # último test hasta el siguiente restart).
     from ask_agent import _send_consolidated_daily_summary
-    result = await asyncio.to_thread(_send_consolidated_daily_summary)
+    result = await asyncio.to_thread(
+        _send_consolidated_daily_summary, to_override, cc_override
+    )
     return result
 
 
@@ -4743,9 +4838,7 @@ async def reset_day_for_user(request: Request) -> dict[str, Any]:
 
     Body: {"user_email": "info@...", "fecha": "2026-06-05" (default: hoy)}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4769,9 +4862,7 @@ async def wipe_user_from_activities(request: Request) -> dict[str, Any]:
 
     Body: {"user_email": "dsanchez@biodegradablesecuador.com"}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4819,9 +4910,7 @@ async def add_activity_for_user(request: Request) -> dict[str, Any]:
         "priority": "alta"      (optional)
       }
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4861,9 +4950,7 @@ async def remove_activity_for_user(request: Request) -> dict[str, Any]:
 
     Body: {"user_email": "...", "activity_id": "..."}
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4896,9 +4983,7 @@ async def set_priorities_for_user(request: Request) -> dict[str, Any]:
         }
       }
     """
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     try:
         body = await request.json()
@@ -4932,9 +5017,7 @@ async def set_priorities_for_user(request: Request) -> dict[str, Any]:
 async def state_debug(request: Request) -> dict[str, Any]:
     """Debug: muestra los paths reales donde el bot escribe state, si los
     archivos existen, y un snippet. Para diagnosticar persistence."""
-    token = request.headers.get("x-admin-token", "")
-    if token != DATA_APP_PWD or not DATA_APP_PWD:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+    _require_admin(request)
 
     import os as _os
     paths_to_check = {
