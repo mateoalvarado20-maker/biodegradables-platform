@@ -58,12 +58,9 @@ CHECKIN_SATURDAY_SUCURSALES = (12, 30)  # Sáb → SOLO sucursales
 # Overrides puntuales por fecha ISO: ese día, el job regular del grupo omite
 # a los usuarios listados aquí y en su lugar corre el horario del override.
 # Las fechas pasadas se ignoran al registrar jobs (limpiar de vez en cuando).
-CHECKIN_DATE_OVERRIDES: dict[str, list[tuple[tuple[int, int], list[str]]]] = {
-    "2026-06-12": [
-        ((16, 45), ["info@biodegradablesecuador.com"]),
-        ((16, 50), ["quito@biodegradablesecuador.com"]),
-    ],
-}
+# (El especial del 2026-06-12 16:45/16:50 se canceló — deploy pospuesto;
+#  ese día producción envió con su horario normal de 17:00.)
+CHECKIN_DATE_OVERRIDES: dict[str, list[tuple[tuple[int, int], list[str]]]] = {}
 
 
 # ===== Meta comercial =====
