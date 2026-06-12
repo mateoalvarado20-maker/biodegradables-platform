@@ -346,6 +346,9 @@ def _build_midmonth_status_html(year: int | None = None, month: int | None = Non
     nombre_mes = MESES_ES[month - 1].capitalize()
 
     # Decidir color del semáforo
+    # Fase 3 (auditoría R3): pace_pct=None crasheaba el f-string {pace_pct:.0f}
+    # del HTML — pace_str lo hace seguro.
+    pace_str = f"{pace_pct:.0f}%" if pace_pct is not None else "n/d"
     if pace_pct is None:
         pace_color = "#888"
         pace_emoji = "⚪"
@@ -429,7 +432,7 @@ del mes va alineada con la realidad.</p>
     <td style="text-align:right;"><b>${actual_mtd:,.0f}</b></td></tr>
 <tr style="background:#f4faf6;"><td>Ritmo / pace</td>
     <td style="text-align:right;color:{pace_color};font-weight:600;">
-        {pace_emoji} {pace_pct:.0f}%
+        {pace_emoji} {pace_str}
     </td></tr>
 </table>
 

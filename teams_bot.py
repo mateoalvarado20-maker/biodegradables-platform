@@ -58,6 +58,7 @@ import monthly_recap
 import news_brief
 import reminders
 import safe_json
+import send_ledger
 from ask_agent import _send_daily_summary_email, _send_weekly_summary_email
 from datetime import date as _date_cls
 import re as _re
@@ -3637,97 +3638,130 @@ async def send_jose_summary_email_job() -> None:
         logger.exception("send_jose_summary_email_job falló: %s", e)
 
 
-# Phase U+ (2026-06-10): morning_sales_report MIGRADO del azfunc al bot.
-# El azfunc en Consumption Plan se dormía y tenía timeout 10min. Acá el bot
-# corre 24/7 sin timeout.
-# Phase V (2026-06-11): hardening — retries internos + alerta a Mateo si falla.
-MORNING_SALES_RETRY_ATTEMPTS = 3
-MORNING_SALES_RETRY_WAIT = 60  # 1 min entre intentos
+# ============================================================
+# Fase 3 (2026-06-12): infraestructura de ENTREGA CONFIABLE.
+# Generaliza el patrón retry+alerta que solo tenía morning_sales (auditoría:
+# "solo 1 de ~13 jobs que envían algo tiene reintentos+alerta") y agrega el
+# ledger de envíos: un reporte (key, fecha) se envía EXACTAMENTE una vez.
+# ============================================================
+JOB_RETRY_ATTEMPTS = 3
+JOB_RETRY_WAIT = 60  # segundos entre intentos
+ALERT_EMAIL = os.environ.get(
+    "ALERT_EMAIL", "malvarado@biodegradablesecuador.com"
+).strip()
 
 
-def _send_morning_sales_alert(error_msg: str, attempts: int) -> None:
-    """Cuando el job de morning_sales falla en TODOS los intentos, manda
-    un correo de alerta a Mateo para que sepa al toque y dispare manual.
-    NO falla si el alerta falla."""
+def _send_job_failure_alert(job_name: str, error_msg: str, attempts: int) -> None:
+    """Alerta por correo cuando un job agotó todos los reintentos.
+    NO falla si la alerta falla (best effort + log)."""
     try:
         import graph_mail as _gm
         _gm.send(
-            from_user="malvarado@biodegradablesecuador.com",
-            to="malvarado@biodegradablesecuador.com",
-            subject=f"⚠️ Daily report FALLÓ — disparar manual",
+            from_user=ALERT_EMAIL,
+            to=ALERT_EMAIL,
+            subject=f"⚠️ Job {job_name} FALLÓ tras {attempts} intentos",
             html_body=(
-                f"<h2 style='color:#c53030'>⚠️ El reporte de ventas matinal falló</h2>"
-                f"<p>El job <code>morning_sales_report</code> intentó "
-                f"<b>{attempts}</b> veces y falló todas. Daniel y Gabriela "
-                f"NO recibieron el correo de ventas de hoy.</p>"
-                f"<p><b>Error:</b><br><pre style='background:#f5f5f5;padding:10px;"
-                f"border-radius:4px;font-size:12px'>{error_msg[:1500]}</pre></p>"
-                f"<p><b>Acción manual:</b><br>"
-                f"1. Correr en tu PC: <code>python daily_report.py morning</code><br>"
-                f"2. O disparar el endpoint: "
-                f"<code>POST /admin/trigger-morning-sales-job</code></p>"
+                f"<h2 style='color:#c53030'>⚠️ {job_name} falló</h2>"
+                f"<p>El job <code>{job_name}</code> intentó <b>{attempts}</b> "
+                f"veces y falló todas. El correo/acción de hoy NO salió.</p>"
+                f"<p><b>Último error:</b><br><pre style='background:#f5f5f5;"
+                f"padding:10px;border-radius:4px;font-size:12px'>"
+                f"{error_msg[:1500]}</pre></p>"
+                f"<p>Revisar logs del App Service y disparar manual con el "
+                f"endpoint admin correspondiente.</p>"
             ),
         )
-        logger.warning("Alerta de fallo de morning_sales enviada a Mateo")
+        logger.warning("Alerta de fallo de %s enviada a %s", job_name, ALERT_EMAIL)
     except Exception as alert_err:
-        logger.exception("Alerta de fallo también falló: %s", alert_err)
+        logger.exception("La alerta de %s también falló: %s", job_name, alert_err)
+
+
+async def _reliable_job(
+    job_name: str,
+    fn,
+    *,
+    ledger_key: str | None = None,
+    retries: int = JOB_RETRY_ATTEMPTS,
+    wait: int = JOB_RETRY_WAIT,
+    alert: bool = True,
+) -> bool:
+    """Ejecuta un job con: ledger anti-duplicado + reintentos + alerta.
+
+    `fn` puede ser async o sync (sync corre en thread). Devuelve True si
+    el job completó. Semántica del ledger:
+    - claim() antes de ejecutar — si otro worker/capa ya lo envió hoy o lo
+      está enviando, NO se ejecuta (anti-duplicado, auditoría S1/S9).
+    - confirm() al completar; release() al fallar (permite el reintento del
+      catch-up o de un disparo manual).
+    """
+    fecha = send_ledger.today_iso()
+    if ledger_key and not send_ledger.claim(ledger_key, fecha):
+        logger.info("%s: skip — ya enviado/en curso para %s", job_name, fecha)
+        return False
+
+    ok = False
+    last_err = ""
+    try:
+        for attempt in range(1, retries + 1):
+            try:
+                # Convención: fn devuelve una corutina (función async o
+                # lambda que envuelve un sync con asyncio.to_thread). Un
+                # sync directo bloquearía el event loop.
+                result = fn()
+                if asyncio.iscoroutine(result):
+                    await result
+                ok = True
+                logger.info("%s: completado (intento %d/%d)", job_name, attempt, retries)
+                break
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+                logger.exception(
+                    "%s: intento %d/%d falló: %s", job_name, attempt, retries, e
+                )
+                if attempt < retries:
+                    await asyncio.sleep(wait)
+    finally:
+        if ledger_key:
+            if ok:
+                send_ledger.confirm(ledger_key, fecha)
+            else:
+                send_ledger.release(ledger_key, fecha)
+
+    if not ok:
+        logger.error("%s: TODOS los %d intentos fallaron: %s", job_name, retries, last_err)
+        if alert:
+            try:
+                await asyncio.to_thread(
+                    _send_job_failure_alert, job_name, last_err, retries
+                )
+            except Exception:
+                logger.exception("No se pudo despachar la alerta de %s", job_name)
+    return ok
+
+
+def _run_daily_report_morning() -> None:
+    """Corre daily_report.main() en modo morning (sync, para to_thread)."""
+    import sys as _sys
+    _orig = _sys.argv
+    _sys.argv = ["teams_bot", "morning"]
+    try:
+        import importlib
+        import daily_report
+        importlib.reload(daily_report)  # state más fresco
+        result = daily_report.main()
+        if result != 0:
+            raise RuntimeError(f"daily_report.main retornó exit_code={result}")
+    finally:
+        _sys.argv = _orig
 
 
 async def send_morning_sales_report_job() -> None:
-    """Job ROBUSTO: corre daily_report.main() en modo 'morning' con retries
-    automáticos. Si TODOS los intentos fallan, alerta a Mateo por correo.
-
-    Programado Lun-Sáb 8:00 AM EC.
-    """
-    logger.info("send_morning_sales_report_job: arrancando")
-
-    last_err: str = ""
-    for attempt in range(1, MORNING_SALES_RETRY_ATTEMPTS + 1):
-        try:
-            import sys as _sys
-            _orig = _sys.argv
-            _sys.argv = ["teams_bot", "morning"]
-            try:
-                # Reimport para asegurar que tenga el state más fresco
-                import importlib
-                import daily_report
-                importlib.reload(daily_report)
-                result = await asyncio.to_thread(daily_report.main)
-                logger.info(
-                    "morning_sales_report completado (attempt %d/%d): exit=%s",
-                    attempt, MORNING_SALES_RETRY_ATTEMPTS, result,
-                )
-                if result == 0:
-                    return  # OK, salimos
-                last_err = f"daily_report.main retornó exit_code={result}"
-            finally:
-                _sys.argv = _orig
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-            logger.exception(
-                "send_morning_sales_report_job attempt %d/%d falló: %s",
-                attempt, MORNING_SALES_RETRY_ATTEMPTS, e,
-            )
-
-        if attempt < MORNING_SALES_RETRY_ATTEMPTS:
-            logger.info(
-                "Esperando %ds antes de reintentar morning_sales_report",
-                MORNING_SALES_RETRY_WAIT,
-            )
-            await asyncio.sleep(MORNING_SALES_RETRY_WAIT)
-
-    # Si llegamos acá → todos los intentos fallaron
-    logger.error(
-        "send_morning_sales_report_job: TODOS los %d intentos fallaron. Último error: %s",
-        MORNING_SALES_RETRY_ATTEMPTS, last_err,
+    """Reporte comercial Lun-Sáb 8:00 EC — vía _reliable_job + ledger."""
+    await _reliable_job(
+        "morning_sales_report",
+        lambda: asyncio.to_thread(_run_daily_report_morning),
+        ledger_key="morning_sales",
     )
-    # Alertar a Mateo en thread aparte (no bloqueante)
-    try:
-        await asyncio.to_thread(
-            _send_morning_sales_alert, last_err, MORNING_SALES_RETRY_ATTEMPTS,
-        )
-    except Exception:
-        pass
 
 
 def _build_apertura_caja_card(user_email: str) -> Activity:
@@ -3945,7 +3979,71 @@ async def send_daily_checkin_info() -> None:
 
 # ===== Scheduler =====
 EC_TZ = pytz.timezone("America/Guayaquil")
-scheduler = AsyncIOScheduler(timezone=EC_TZ)
+# Fase 3 (auditoría S2): misfire_grace_time era el default de 1 segundo — un
+# deploy/restart a la hora exacta de un job perdía la ejecución en silencio.
+# Con 1h de gracia + coalesce, una ejecución atrasada corre apenas el
+# scheduler revive (y el ledger evita duplicados si ya había salido).
+scheduler = AsyncIOScheduler(
+    timezone=EC_TZ,
+    job_defaults={"coalesce": True, "misfire_grace_time": 3600},
+)
+
+
+# --- Jobs envueltos en _reliable_job (ledger + retry + alerta) ---
+async def _job_weekly_summaries() -> None:
+    await _reliable_job(
+        "weekly_summaries", send_weekly_summaries, ledger_key="weekly_summaries"
+    )
+
+
+async def _job_consolidated_daily() -> None:
+    await _reliable_job(
+        "consolidated_daily_summary",
+        send_consolidated_daily_summary_job,
+        ledger_key="consolidated_daily",
+    )
+
+
+async def _job_monthly_sales_recap() -> None:
+    # Fase 3 (auditoría S4): los recaps estaban registrados SIN wrapper —
+    # un fallo el día 1 se perdía un mes entero sin alerta.
+    await _reliable_job(
+        "monthly_sales_recap",
+        lambda: asyncio.to_thread(monthly_recap.send_sales_recap),
+        ledger_key="monthly_sales_recap",
+    )
+
+
+async def _job_monthly_activities_recap() -> None:
+    await _reliable_job(
+        "monthly_activities_recap",
+        lambda: asyncio.to_thread(monthly_recap.send_activities_recap),
+        ledger_key="monthly_activities_recap",
+    )
+
+
+def _run_logistics_morning() -> None:
+    """Corre daily_logistics_report.main() en modo morning (para to_thread)."""
+    import sys as _sys
+    _orig = _sys.argv
+    _sys.argv = ["teams_bot", "morning"]
+    try:
+        import importlib
+        import daily_logistics_report
+        importlib.reload(daily_logistics_report)
+        result = daily_logistics_report.main()
+        if result not in (0, None):
+            raise RuntimeError(f"daily_logistics_report.main retornó {result}")
+    finally:
+        _sys.argv = _orig
+
+
+async def _job_logistics_morning() -> None:
+    await _reliable_job(
+        "logistics_morning",
+        lambda: asyncio.to_thread(_run_logistics_morning),
+        ledger_key="logistics_morning",
+    )
 
 
 def _schedule_jobs() -> None:
@@ -3989,7 +4087,7 @@ def _schedule_jobs() -> None:
     )
     # Weekly summaries: viernes 17:00 EC (cierre de semana laboral)
     scheduler.add_job(
-        send_weekly_summaries,
+        _job_weekly_summaries,
         CronTrigger(day_of_week="fri", hour=17, minute=0, timezone=EC_TZ),
         id="weekly_summaries",
         replace_existing=True,
@@ -4003,13 +4101,13 @@ def _schedule_jobs() -> None:
     )
     # Phase M — Monthly recaps día 1: full recap mes anterior + proyección
     scheduler.add_job(
-        monthly_recap.send_sales_recap,
+        _job_monthly_sales_recap,
         CronTrigger(day=1, hour=9, minute=0, timezone=EC_TZ),
         id="monthly_sales_recap_day1",
         replace_existing=True,
     )
     scheduler.add_job(
-        monthly_recap.send_activities_recap,
+        _job_monthly_activities_recap,
         CronTrigger(day=1, hour=10, minute=0, timezone=EC_TZ),
         id="monthly_activities_recap_day1",
         replace_existing=True,
@@ -4040,7 +4138,7 @@ def _schedule_jobs() -> None:
     # — un solo correo a Daniel+Gabriela con TODOS los colaboradores.
     # Reemplaza los emails individuales que se mandaban al hacer check-in.
     scheduler.add_job(
-        send_consolidated_daily_summary_job,
+        _job_consolidated_daily,
         CronTrigger(day_of_week="mon-fri", hour=18, minute=30, timezone=EC_TZ),
         id="consolidated_daily_summary",
         replace_existing=True,
@@ -4061,6 +4159,21 @@ def _schedule_jobs() -> None:
         replace_existing=True,
     )
 
+    # Fase 3 (auditoría S5): logística migrada al bot, como se hizo con el
+    # comercial — sale del Consumption Plan que se dormía y gana ledger +
+    # retry + alerta. CUTOVER: activar LOGISTICS_IN_BOT=1 en el App Service
+    # SOLO junto con AzureWebJobs.logistics_morning.Disabled=true en el
+    # Function App (si ambos corren, los ledgers viven en universos
+    # distintos y Gabriela recibiría dos correos).
+    if os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
+        scheduler.add_job(
+            _job_logistics_morning,
+            CronTrigger(day_of_week="mon-sat", hour=8, minute=0, timezone=EC_TZ),
+            id="logistics_morning",
+            replace_existing=True,
+        )
+        logger.info("logistics_morning programado EN EL BOT (LOGISTICS_IN_BOT=1)")
+
     logger.info(
         "Jobs: checkin weekday 16:30, sat 12:30, reminders */5min, "
         "cobranzas mon-fri 7:30, weekly_summaries fri 17:00, "
@@ -4070,17 +4183,126 @@ def _schedule_jobs() -> None:
     )
 
 
+# ===== Catch-up de envíos perdidos (Fase 3, auditoría S2) =====
+# Si el bot estuvo caído (deploy, restart) a la hora de un reporte, al
+# arrancar revisa el ledger del día y dispara lo que no salió. El ledger
+# evita duplicados si sí había salido.
+def _catchup_specs() -> list[tuple[str, Any, Any]]:
+    specs: list[tuple[str, Any, Any]] = [
+        ("morning_sales", send_morning_sales_report_job,
+         lambda now: now.weekday() <= 5 and (now.hour, now.minute) >= (8, 0)),
+        ("consolidated_daily", _job_consolidated_daily,
+         lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (18, 30)),
+        ("weekly_summaries", _job_weekly_summaries,
+         lambda now: now.weekday() == 4 and (now.hour, now.minute) >= (17, 0)),
+        ("monthly_sales_recap", _job_monthly_sales_recap,
+         lambda now: now.day == 1 and (now.hour, now.minute) >= (9, 0)),
+        ("monthly_activities_recap", _job_monthly_activities_recap,
+         lambda now: now.day == 1 and (now.hour, now.minute) >= (10, 0)),
+    ]
+    if os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
+        specs.append(
+            ("logistics_morning", _job_logistics_morning,
+             lambda now: now.weekday() <= 5 and (now.hour, now.minute) >= (8, 0))
+        )
+    return specs
+
+
+async def _catchup_missed_sends() -> None:
+    # Primer arranque con ledger (archivo aún no existe): NO re-enviar lo de
+    # hoy — pudo haber salido antes de que existiera el ledger. Se siembran
+    # las entradas vencidas como sent para arrancar limpio desde mañana.
+    first_run = not send_ledger.LEDGER_PATH.exists()
+    now = datetime.now(EC_TZ)
+    hoy = send_ledger.today_iso()
+    for key, fn, due in _catchup_specs():
+        try:
+            if not due(now) or send_ledger.already_sent(key, hoy):
+                continue
+            if first_run:
+                send_ledger.confirm(key, hoy, detail="seeded (primer arranque con ledger)")
+                continue
+            logger.warning("CATCH-UP: %s no salió hoy — ejecutando ahora", key)
+            await fn()
+        except Exception:
+            logger.exception("Catch-up de %s falló", key)
+
+
+# ===== Lease de instancia única (Fase 3, auditoría S3) =====
+# Si el App Service escala a >1 instancia, solo la dueña del lease corre el
+# scheduler — sin esto, cada instancia mandaría TODOS los correos y cards.
+# El lease vive en /home (compartido entre instancias) vía safe_json.
+INSTANCE_ID = os.environ.get("WEBSITE_INSTANCE_ID", "") or f"local-{os.getpid()}"
+_LEASE_PATH = REFS_PATH.parent / "scheduler_lease.json"
+LEASE_TTL_SECONDS = 180
+LEASE_REFRESH_SECONDS = 60
+
+
+def _try_acquire_scheduler_lease() -> bool:
+    granted = {"ok": False}
+
+    def mutate(data: dict) -> None:
+        now = datetime.now(EC_TZ)
+        holder = data.get("holder")
+        stale = True
+        try:
+            hb = datetime.fromisoformat(data.get("heartbeat", ""))
+            stale = (now - hb).total_seconds() > LEASE_TTL_SECONDS
+        except (ValueError, TypeError):
+            stale = True
+        if holder in (None, "", INSTANCE_ID) or stale:
+            data["holder"] = INSTANCE_ID
+            data["heartbeat"] = now.isoformat(timespec="seconds")
+            granted["ok"] = True
+
+    safe_json.locked_update(_LEASE_PATH, dict, mutate)
+    return granted["ok"]
+
+
+async def _scheduler_lease_loop() -> None:
+    """Adquiere/renueva el lease; arranca el scheduler solo si es el dueño."""
+    started = False
+    while True:
+        try:
+            ok = await asyncio.to_thread(_try_acquire_scheduler_lease)
+            if ok and not started:
+                _schedule_jobs()
+                scheduler.start()
+                started = True
+                logger.info("Scheduler started (lease %s). Next runs:", INSTANCE_ID)
+                for job in scheduler.get_jobs():
+                    logger.info("  %s → %s", job.id, job.next_run_time)
+                await _catchup_missed_sends()
+            elif not ok and started:
+                logger.error("Lease del scheduler PERDIDO — apagando para no duplicar")
+                scheduler.shutdown(wait=False)
+                started = False
+            elif not ok:
+                logger.info("Otra instancia tiene el lease del scheduler — standby")
+        except Exception:
+            logger.exception("Error en el loop del lease del scheduler")
+        await asyncio.sleep(LEASE_REFRESH_SECONDS)
+
+
 # ===== FastAPI app =====
 app = FastAPI(title="Biodegradables Bots — Data + Activities")
 
 
 @app.on_event("startup")
 async def _startup() -> None:
-    _schedule_jobs()
-    scheduler.start()
-    logger.info("Scheduler started. Next runs:")
-    for job in scheduler.get_jobs():
-        logger.info("  %s → %s", job.id, job.next_run_time)
+    # Fase 3: alerta por correo cuando un state file entra en cuarentena
+    # (la corrupción ya no es silenciosa en ningún nivel).
+    def _corruption_alert(path: Any, reason: str) -> None:
+        _send_job_failure_alert(
+            f"STATE CORRUPTO: {Path(str(path)).name}",
+            f"El archivo fue puesto en cuarentena y se restauró el backup "
+            f"si existía. Motivo: {reason}",
+            1,
+        )
+    safe_json.on_corruption = _corruption_alert
+
+    # El scheduler arranca vía el lease loop (instancia única).
+    asyncio.create_task(_scheduler_lease_loop())
 
     # Warmup del cache de forecasting (Phase H/I) — evita timeout en primera
     # query de proyección. Corre en background, no bloquea startup.
@@ -4098,7 +4320,8 @@ async def _startup() -> None:
 
 @app.on_event("shutdown")
 async def _shutdown() -> None:
-    scheduler.shutdown(wait=False)
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 @app.get("/")
@@ -4123,8 +4346,20 @@ async def root() -> dict[str, Any]:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "healthy"}
+async def health() -> dict[str, Any]:
+    # Fase 3: el health expone qué reportes salieron hoy (ledger) y quién
+    # tiene el scheduler — observabilidad de entregas sin entrar a logs.
+    lease = safe_json.load_json(_LEASE_PATH, dict)
+    return {
+        "status": "healthy",
+        "scheduler_running": scheduler.running,
+        "scheduler_lease": {
+            "holder": lease.get("holder"),
+            "heartbeat": lease.get("heartbeat"),
+            "this_instance": INSTANCE_ID,
+        },
+        "sends_today": send_ledger.status_today(),
+    }
 
 
 @app.post("/admin/trigger-checkin")

@@ -29,6 +29,14 @@ API_KEY = os.environ.get("APOLLO_API_KEY", "")
 CACHE_PATH = Path.home() / ".claude-agent" / "apollo_cache.json"
 CACHE_TTL_SECONDS = 30 * 24 * 3600  # 30 días
 
+
+class ApolloAPIError(RuntimeError):
+    """Error real de la API de Apollo (red/auth/429/5xx).
+
+    Distinto de "Apollo no encontró a la persona" (que es un resultado
+    válido, None). Los callers NO deben tratar esto como no-prospecto.
+    """
+
 _cache: dict[str, dict] | None = None
 
 
@@ -140,9 +148,13 @@ def enrich_by_email(email: str, *, use_cache: bool = True) -> dict | None:
             {"email": email_lc, "reveal_personal_emails": False},
         )
     except RuntimeError as e:
-        # Error real de API (auth, network, etc.) - no cachear, propagar visiblemente
+        # Fase 3 (auditoría C2): un error real de API (429, 5xx, créditos
+        # agotados, key vencida) se PROPAGA como ApolloAPIError. Antes
+        # devolvía None — indistinguible de "no es prospecto" — y el caller
+        # marcaba el correo como procesado PARA SIEMPRE: durante un outage
+        # de Apollo, los prospectos reales quedaban sin borrador sin alerta.
         print(f"[apollo_rest] ERROR enriqueciendo {email_lc}: {e}", file=sys.stderr)
-        return None
+        raise ApolloAPIError(str(e)) from e
 
     person = data.get("person") or {}
     if not person:
