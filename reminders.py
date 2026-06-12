@@ -36,19 +36,31 @@ después de entregarlo crea uno NUEVO con send_at = próxima ocurrencia.
 """
 from __future__ import annotations
 
+import functools
 import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import safe_json
+
 LOCAL_TZ = timezone(timedelta(hours=-5))
 import os as _os
 STATE_PATH = Path(_os.environ.get("STATE_DIR") or str(Path.home() / ".claude-agent")) / "reminders.json"
 
+# Fase 1: lock por archivo — el ciclo load→mutar→save de cada mutadora es
+# atómico dentro del proceso (el job deliver_reminders y la creación desde
+# worker threads del Data Bot se serializan; auditoría H6/H13).
+_LOCK = safe_json.lock_for(STATE_PATH)
 
-def _ensure_dir() -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 def _now() -> datetime:
@@ -60,20 +72,12 @@ def _now_iso() -> str:
 
 
 def load() -> dict[str, Any]:
-    if not STATE_PATH.exists():
-        return {"reminders": []}
-    try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"reminders": []}
+    # safe_json: atómico + backup + cuarentena (auditoría H2).
+    return safe_json.load_json(STATE_PATH, lambda: {"reminders": []})
 
 
 def save(state: dict[str, Any]) -> None:
-    _ensure_dir()
-    STATE_PATH.write_text(
-        json.dumps(state, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    safe_json.save_json(STATE_PATH, state)
 
 
 VALID_RECURRENCES = (
@@ -87,6 +91,7 @@ WEEKLY_DAY_TO_INDEX = {
 }
 
 
+@_locked
 def add_reminder(
     target_user: str,
     send_at_iso: str,
@@ -227,6 +232,7 @@ def get_due_reminders() -> list[dict[str, Any]]:
     return due
 
 
+@_locked
 def mark_sent(reminder_id: str) -> bool:
     state = load()
     for r in state.get("reminders", []):
@@ -238,6 +244,7 @@ def mark_sent(reminder_id: str) -> bool:
     return False
 
 
+@_locked
 def cancel_reminder(reminder_id: str) -> bool:
     """Borra un recordatorio que todavía no se envió."""
     state = load()

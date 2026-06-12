@@ -37,10 +37,13 @@ from __future__ import annotations
 
 import json
 import os
+import functools
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import safe_json
 
 LOCAL_TZ = timezone(timedelta(hours=-5))
 
@@ -71,13 +74,25 @@ def _user_slug(email: str) -> str:
     return re.split(r"[@.]", email)[0]
 
 
+# Lock re-entrante por archivo: las funciones mutadoras (decoradas con
+# @_locked) mantienen el lock durante TODO el ciclo load→mutar→save, para que
+# escritores concurrentes (handlers async, worker threads de ask_agent, jobs
+# de APScheduler) no se pisen entre sí (auditoría H1/A2).
+_LOCK = safe_json.lock_for(STATE_PATH)
+
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
+
+
 def load() -> dict[str, Any]:
-    if not STATE_PATH.exists():
-        return {"users": {}}
-    try:
-        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"users": {}}
+    # safe_json: atómico + backup + cuarentena. Un archivo corrupto ya NO se
+    # convierte en estado vacío silencioso (auditoría H2/A3).
+    data = safe_json.load_json(STATE_PATH, lambda: {"users": {}})
     # Auto-migrate antiguos {weeks: ...} → {users: {DEFAULT_USER: {weeks: ...}}}
     if "weeks" in data and "users" not in data:
         data = {"users": {DEFAULT_USER: {"weeks": data["weeks"]}}}
@@ -87,11 +102,7 @@ def load() -> dict[str, Any]:
 
 
 def save(state: dict[str, Any]) -> None:
-    _ensure_dir()
-    STATE_PATH.write_text(
-        json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
-    )
+    safe_json.save_json(STATE_PATH, state, sort_keys=True)
 
 
 def load_template(user_email: str | None = None) -> dict[str, Any]:
@@ -141,6 +152,7 @@ def _get_user_state(state: dict, user_email: str) -> dict[str, Any]:
 
 
 # ============ Funciones principales (per-user) ============
+@_locked
 def init_week(
     user_email: str | None = None, wk: str | None = None
 ) -> dict[str, Any]:
@@ -189,6 +201,7 @@ def get_week(
     return init_week(user_email, wk)
 
 
+@_locked
 def mark_daily(
     activity_id: str,
     valor: float | int,
@@ -231,6 +244,7 @@ def mark_daily(
     return entry["log"][fecha]
 
 
+@_locked
 def set_weekly_progress(
     activity_id: str,
     avance: float,
@@ -267,6 +281,7 @@ def set_weekly_progress(
     return entry
 
 
+@_locked
 def add_adhoc(
     activity_id: str,
     nombre: str,
@@ -316,6 +331,7 @@ def add_adhoc(
     return entry
 
 
+@_locked
 def remove_activity(
     activity_id: str, *, user_email: str | None = None, wk: str | None = None
 ) -> bool:
@@ -336,6 +352,7 @@ def remove_activity(
 VALID_PRIORITIES: tuple[str, ...] = ("alta", "media", "baja")
 
 
+@_locked
 def set_priority(
     activity_id: str,
     priority: str,
@@ -506,6 +523,7 @@ def get_user_months_summary(
     }
 
 
+@_locked
 def set_day_schedule(
     user_email: str | None,
     fecha: str,
@@ -656,6 +674,7 @@ def calcular_cierre_caja(
     }
 
 
+@_locked
 def set_cierre_caja(
     user_email: str | None,
     fecha: str,
@@ -707,6 +726,7 @@ def get_cierre_caja(
     return user.get("cierres_caja", {}).get(fecha)
 
 
+@_locked
 def set_apertura_caja(
     user_email: str | None,
     fecha: str,
@@ -756,6 +776,7 @@ def get_apertura_caja(
     return user.get("aperturas_caja", {}).get(fecha)
 
 
+@_locked
 def set_cierre_caja_confirmacion(
     user_email: str | None,
     fecha: str,
@@ -806,6 +827,7 @@ def set_cierre_caja_confirmacion(
     return confirm
 
 
+@_locked
 def add_recordatorio_cierre(
     user_email: str | None, fecha: str
 ) -> None:
@@ -855,6 +877,7 @@ def get_cierres_caja_pendientes_confirmacion() -> list[dict[str, Any]]:
 CHOCOLATES_UMBRAL = 5
 
 
+@_locked
 def set_chocolates_stock_inicial(
     user_email: str | None,
     cantidad: int,
@@ -885,6 +908,7 @@ def set_chocolates_stock_inicial(
     return user["chocolates"][wk]
 
 
+@_locked
 def add_chocolates_entrega(
     user_email: str | None,
     fecha: str,
@@ -916,6 +940,7 @@ def add_chocolates_entrega(
     return rec
 
 
+@_locked
 def add_chocolates_recarga(
     user_email: str | None,
     fecha: str,
@@ -952,6 +977,7 @@ def add_chocolates_recarga(
     return rec
 
 
+@_locked
 def marcar_alerta_chocolates_enviada(
     user_email: str | None, wk: str | None = None
 ) -> None:
@@ -1000,6 +1026,7 @@ def get_chocolates_semana(
 # se vuelve a preguntar hasta el lunes siguiente.
 
 
+@_locked
 def set_tiktok_seguidores_semana(
     user_email: str | None,
     cantidad: int,
@@ -1152,6 +1179,7 @@ def get_ruta_dia(
     return rec
 
 
+@_locked
 def set_envios_snapshot(
     user_email: str | None,
     envios: dict[str, dict[str, Any]],
@@ -1182,6 +1210,7 @@ def set_envios_snapshot(
     return {"total": len(snapshot), "nuevos": nuevos, "fecha": fecha}
 
 
+@_locked
 def start_ruta(
     user_email: str | None, fecha: str | None = None
 ) -> dict[str, Any]:
@@ -1222,6 +1251,7 @@ def start_ruta(
     }
 
 
+@_locked
 def end_ruta(
     user_email: str | None,
     razones_no_entrega: dict[str, str] | None = None,
@@ -1278,6 +1308,7 @@ def end_ruta(
     }
 
 
+@_locked
 def marcar_entrega(
     user_email: str | None,
     factura_id: str,
@@ -1357,6 +1388,7 @@ def marcar_entrega(
     return {"ok": True, **entr}
 
 
+@_locked
 def add_destino_adhoc(
     user_email: str | None,
     cliente: str,
@@ -1405,6 +1437,7 @@ def add_destino_adhoc(
     return {"ok": True, "factura_id": fid, "item": item}
 
 
+@_locked
 def carry_over_envios_no_entregados(
     user_email: str | None,
     fecha_hoy: str | None = None,
@@ -1524,6 +1557,7 @@ def get_caja_chica(user_email: str | None) -> dict[str, Any]:
     }
 
 
+@_locked
 def set_caja_chica_inicial(
     user_email: str | None, monto: float
 ) -> dict[str, Any]:
@@ -1545,6 +1579,7 @@ def set_caja_chica_inicial(
     }
 
 
+@_locked
 def add_caja_chica_movimiento(
     user_email: str | None,
     tipo: str,
@@ -1581,6 +1616,7 @@ def caja_chica_movimientos_dia(
     return [m for m in cc.get("movimientos", []) if m.get("ts", "").startswith(fecha)]
 
 
+@_locked
 def reset_day(user_email: str, fecha: str) -> dict[str, Any]:
     """Borra todo lo marcado en un día específico SIN tocar las activities en sí.
 
@@ -1639,6 +1675,7 @@ def reset_day(user_email: str, fecha: str) -> dict[str, Any]:
     return {"ok": True, "user": email, "fecha": fecha, **cambios}
 
 
+@_locked
 def wipe_user(user_email: str) -> bool:
     """Borra TODO el state de un user (weeks, cierres_caja, day_schedules).
 

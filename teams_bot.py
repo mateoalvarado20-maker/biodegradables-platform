@@ -57,6 +57,7 @@ import conversation_history
 import monthly_recap
 import news_brief
 import reminders
+import safe_json
 from ask_agent import _send_daily_summary_email, _send_weekly_summary_email
 from datetime import date as _date_cls
 import re as _re
@@ -129,13 +130,14 @@ activities_adapter.on_turn_error = _on_adapter_error
 REFS_PATH = Path(os.environ.get("STATE_DIR") or str(Path.home() / ".claude-agent")) / "conversation_refs.json"
 
 
+# Fase 1: lock + escritura atómica + cuarentena via safe_json. Si este
+# archivo se corrompía, el bot "olvidaba" a todos los usuarios (los check-ins
+# y reminders proactivos dejaban de llegar) sin ningún error (auditoría H2).
+_REFS_LOCK = safe_json.lock_for(REFS_PATH)
+
+
 def _load_refs() -> dict[str, dict[str, dict[str, Any]]]:
-    if not REFS_PATH.exists():
-        return {"data": {}, "activities": {}}
-    try:
-        data = json.loads(REFS_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"data": {}, "activities": {}}
+    data = safe_json.load_json(REFS_PATH, lambda: {"data": {}, "activities": {}})
     # Migración del formato viejo (sin secciones)
     if "data" not in data and "activities" not in data:
         data = {"data": {}, "activities": data}
@@ -145,19 +147,16 @@ def _load_refs() -> dict[str, dict[str, dict[str, Any]]]:
 
 
 def _save_refs(refs: dict[str, dict[str, dict[str, Any]]]) -> None:
-    REFS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REFS_PATH.write_text(
-        json.dumps(refs, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    safe_json.save_json(REFS_PATH, refs)
 
 
 def _save_ref_for_user(section: str, email: str, ref: ConversationReference) -> None:
     if not email:
         return
-    refs = _load_refs()
-    refs.setdefault(section, {})[email.lower()] = ref.serialize()
-    _save_refs(refs)
+    with _REFS_LOCK:
+        refs = _load_refs()
+        refs.setdefault(section, {})[email.lower()] = ref.serialize()
+        _save_refs(refs)
     logger.info("Saved %s ref for %s", section, email)
 
 
@@ -253,22 +252,19 @@ for _pair in _AAD_OVERRIDE_RAW.split(","):
 _AAD_LOOKUP_PATH = REFS_PATH.parent / "aad_lookup.json"
 
 
+# Fase 1: el lookup AAD→email es el registro canónico de identidad. Si se
+# corrompía y "se recuperaba" vacío, los usuarios volvían a resolverse por
+# display name — reabriendo la contaminación entre usuarios (auditoría H2+H3).
+_AAD_LOOKUP_LOCK = safe_json.lock_for(_AAD_LOOKUP_PATH)
+
+
 def _load_aad_lookup() -> dict[str, str]:
-    try:
-        if _AAD_LOOKUP_PATH.exists():
-            return json.loads(_AAD_LOOKUP_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning("aad_lookup load failed: %s", e)
-    return {}
+    return safe_json.load_json(_AAD_LOOKUP_PATH, dict)
 
 
 def _save_aad_lookup(lookup: dict[str, str]) -> None:
     try:
-        _AAD_LOOKUP_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _AAD_LOOKUP_PATH.write_text(
-            json.dumps(lookup, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        safe_json.save_json(_AAD_LOOKUP_PATH, lookup)
     except Exception as e:
         logger.warning("aad_lookup save failed: %s", e)
 
@@ -282,21 +278,22 @@ def _remember_aad_email(aad_short: str, email: str, source: str) -> None:
         return
     aad_short = aad_short.lower()
     email = email.lower()
-    lookup = _load_aad_lookup()
-    existing = lookup.get(aad_short)
-    if existing == email:
-        return  # ya estaba igual
-    if existing and existing != email:
-        # CONFLICTO. NO sobrescribimos automáticamente — loggeamos y
-        # mantenemos el primero. Mateo puede forzar via env var o admin endpoint.
-        logger.error(
-            "AAD CONFLICT: aad_short=%s mapeado a %s, intentando %s (source=%s). "
-            "MANTENIENDO %s. Para forzar: AAD_ID_TO_EMAIL env var o admin endpoint.",
-            aad_short, existing, email, source, existing,
-        )
-        return
-    lookup[aad_short] = email
-    _save_aad_lookup(lookup)
+    with _AAD_LOOKUP_LOCK:
+        lookup = _load_aad_lookup()
+        existing = lookup.get(aad_short)
+        if existing == email:
+            return  # ya estaba igual
+        if existing and existing != email:
+            # CONFLICTO. NO sobrescribimos automáticamente — loggeamos y
+            # mantenemos el primero. Mateo puede forzar via env var o admin endpoint.
+            logger.error(
+                "AAD CONFLICT: aad_short=%s mapeado a %s, intentando %s (source=%s). "
+                "MANTENIENDO %s. Para forzar: AAD_ID_TO_EMAIL env var o admin endpoint.",
+                aad_short, existing, email, source, existing,
+            )
+            return
+        lookup[aad_short] = email
+        _save_aad_lookup(lookup)
     logger.info("AAD remembered: %s → %s (source=%s)", aad_short, email, source)
 
 
@@ -4787,18 +4784,18 @@ async def wipe_user_from_activities(request: Request) -> dict[str, Any]:
     # 1) Borrar state (weeks + cierres_caja + day_schedules)
     state_wiped = activity_state.wipe_user(user_email)
 
-    # 2) Borrar el ref del Activities Bot (no toca Data Bot)
-    refs = _load_refs()
-    activities_refs = refs.get("activities", {})
+    # 2) Borrar el ref del Activities Bot (no toca Data Bot).
+    # Bajo lock: un mensaje entrante simultáneo ya no puede resucitar el ref
+    # recién borrado ni perder el de otro user (auditoría H12).
     ref_removed = False
-    if user_email in activities_refs:
-        del activities_refs[user_email]
-        refs["activities"] = activities_refs
-        REFS_PATH.write_text(
-            json.dumps(refs, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        ref_removed = True
+    with _REFS_LOCK:
+        refs = _load_refs()
+        activities_refs = refs.get("activities", {})
+        if user_email in activities_refs:
+            del activities_refs[user_email]
+            refs["activities"] = activities_refs
+            _save_refs(refs)
+            ref_removed = True
 
     return {
         "user": user_email,

@@ -20,42 +20,45 @@ anterior con timestamp nuevo.
 """
 from __future__ import annotations
 
+import functools
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+import safe_json
+
 LOCAL_TZ = timezone(timedelta(hours=-5))  # Ecuador (UTC-5)
 
-STATE_PATH = Path.home() / ".claude-agent" / "dispatch_state.json"
+STATE_PATH = Path(os.environ.get("STATE_DIR") or str(Path.home() / ".claude-agent")) / "dispatch_state.json"
 
 StatusType = Literal["OK", "NO", "PARCIAL"]
 VALID_STATUSES: tuple[str, ...] = ("OK", "NO", "PARCIAL")
 
+# Fase 1: atómico + lock (auditoría H1/H2).
+_LOCK = safe_json.lock_for(STATE_PATH)
 
-def _ensure_dir() -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 def load() -> dict[str, dict[str, Any]]:
     """Lee el state file completo. Devuelve {} si no existe."""
-    if not STATE_PATH.exists():
-        return {}
-    try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return safe_json.load_json(STATE_PATH, dict)
 
 
 def save(state: dict[str, dict[str, Any]]) -> None:
-    """Persiste el state file."""
-    _ensure_dir()
-    STATE_PATH.write_text(
-        json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
-    )
+    """Persiste el state file (atómico, con backup)."""
+    safe_json.save_json(STATE_PATH, state, sort_keys=True)
 
 
+@_locked
 def mark(
     factura: str,
     status: StatusType,
@@ -83,6 +86,7 @@ def mark(
     return entry
 
 
+@_locked
 def clear(factura: str) -> bool:
     """Borra la marca de una factura. Devuelve True si existía."""
     state = load()

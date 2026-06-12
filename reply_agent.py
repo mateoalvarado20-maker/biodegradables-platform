@@ -42,22 +42,21 @@ CONTEXT_PATH = Path(__file__).parent / "company_context.md"
 
 
 # ============== STATE ==============
+# Fase 1: safe_json — atómico + backup + cuarentena. Antes, un state corrupto
+# se "recuperaba" vacío y el agente reprocesaba correos ya respondidos
+# (= borradores duplicados a prospectos).
 def _load_state() -> dict:
-    if STATE_PATH.exists():
-        try:
-            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"last_check_iso": None, "processed_message_ids": []}
+    import safe_json
+    return safe_json.load_json(
+        STATE_PATH, lambda: {"last_check_iso": None, "processed_message_ids": []}
+    )
 
 
 def _save_state(state: dict) -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    import safe_json
     # Mantener solo los últimos 500 IDs procesados para no crecer indefinidamente
     state["processed_message_ids"] = state.get("processed_message_ids", [])[-500:]
-    STATE_PATH.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    safe_json.save_json(STATE_PATH, state)
 
 
 # ============== FILTRADO ==============

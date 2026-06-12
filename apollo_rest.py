@@ -46,26 +46,22 @@ def _headers() -> dict[str, str]:
 
 
 def _load_cache() -> dict[str, dict]:
+    # Fase 1: safe_json (atómico + cuarentena). Es solo un cache (perderlo
+    # quema créditos Apollo, no datos de negocio), pero la escritura atómica
+    # evita corromperlo a mitad de un run del Task Scheduler.
     global _cache
     if _cache is not None:
         return _cache
-    if CACHE_PATH.exists():
-        try:
-            _cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            _cache = {}
-    else:
-        _cache = {}
+    import safe_json
+    _cache = safe_json.load_json(CACHE_PATH, dict)
     return _cache
 
 
 def _save_cache() -> None:
     if _cache is None:
         return
-    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_PATH.write_text(
-        json.dumps(_cache, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    import safe_json
+    safe_json.save_json(CACHE_PATH, _cache)
 
 
 def _cache_get(key: str) -> dict | None:

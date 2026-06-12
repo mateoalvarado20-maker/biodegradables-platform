@@ -26,10 +26,13 @@ Phase J (2026-06-01).
 """
 from __future__ import annotations
 
+import functools
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import safe_json
 
 LOCAL_TZ = timezone(timedelta(hours=-5))
 import os as _os
@@ -37,9 +40,16 @@ STATE_PATH = Path(_os.environ.get("STATE_DIR") or str(Path.home() / ".claude-age
 TTL_MINUTES = 30
 MAX_TURNS = 12  # ~6 exchanges (user + assistant cada uno)
 
+# Fase 1: atómico + lock (auditoría H1/H2).
+_LOCK = safe_json.lock_for(STATE_PATH)
 
-def _ensure_dir() -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 def _key(user_email: str, mode: str) -> str:
@@ -51,20 +61,11 @@ def _now() -> datetime:
 
 
 def load() -> dict[str, Any]:
-    if not STATE_PATH.exists():
-        return {}
-    try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return safe_json.load_json(STATE_PATH, dict)
 
 
 def save(state: dict[str, Any]) -> None:
-    _ensure_dir()
-    STATE_PATH.write_text(
-        json.dumps(state, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    safe_json.save_json(STATE_PATH, state)
 
 
 def get_history(user_email: str, mode: str) -> list[dict[str, Any]]:
@@ -87,6 +88,7 @@ def get_history(user_email: str, mode: str) -> list[dict[str, Any]]:
     return entry.get("history", [])
 
 
+@_locked
 def add_turns(
     user_email: str,
     mode: str,
@@ -110,6 +112,7 @@ def add_turns(
     save(state)
 
 
+@_locked
 def clear_history(user_email: str, mode: str) -> bool:
     """Borra la history de un user+mode. Devuelve True si existía."""
     if not user_email:
