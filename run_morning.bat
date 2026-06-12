@@ -16,4 +16,6 @@ set LOG=logs\morning-%TODAY%.log
 echo. >> "%LOG%"
 echo === %date% %time% (run_morning.bat) === >> "%LOG%"
 "%PYTHON_EXE%" daily_report.py morning >> "%LOG%" 2>&1
-echo Exit code: %errorlevel% >> "%LOG%"
+set PYEXIT=%errorlevel%
+echo Exit code: %PYEXIT% >> "%LOG%"
+exit /b %PYEXIT%

@@ -31,6 +31,8 @@
 !/.github/
 
 # --- Exclusiones dentro de directorios incluidos ---
+# Staging viejo del bot (artefacto de deploy, no fuente; rollback = bot_deploy.zip)
+archive/bot_deploy_stage_2026-06-02/
 __pycache__/
 *.pyc
 .pytest_cache/

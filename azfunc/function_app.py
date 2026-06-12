@@ -40,26 +40,13 @@ def logistics_morning(myTimer: func.TimerRequest) -> None:
         raise
 
 
-@app.timer_trigger(
-    schedule="0 0 13 * * *",  # 13:00 UTC = 8:00 AM Ecuador
-    arg_name="myTimer",
-    run_on_startup=False,
-    use_monitor=True,
-)
-def morning_sales_report(myTimer: func.TimerRequest) -> None:
-    """Reporte comercial diario (ventas + Power BI + cartera + HubSpot) a Daniel/Gabriela.
-    Reemplaza la schtask BiodegradablesEcuador-DailyReport-Morning de la PC de Mateo.
-    """
-    logging.info("morning_sales_report: timer fired")
-    sys.argv = ["function_app", "morning"]
-    try:
-        from daily_report import main
-        result = main()
-        logging.info(f"morning_sales_report: completed with exit={result}")
-    except Exception as e:
-        logging.error(f"morning_sales_report FAILED: {e}")
-        logging.error(traceback.format_exc())
-        raise
+# NOTA (2026-06-12, Fase 0 del refactor): el timer `morning_sales_report`
+# se ELIMINO de este archivo. El reporte comercial diario lo envia el job
+# APScheduler `morning_sales_report` de teams_bot.py (App Service), que tiene
+# retry + alerta. Antes estaba deshabilitado solo por app setting
+# (AzureWebJobs.morning_sales_report.Disabled=true) — un redeploy a un app
+# nuevo lo habria revivido y Daniel recibiria DOS correos. El trigger HTTP
+# manual /api/trigger/morning-sales se conserva mas abajo.
 
 
 @app.timer_trigger(
@@ -84,27 +71,10 @@ def reply_agent_tick(myTimer: func.TimerRequest) -> None:
         raise
 
 
-@app.timer_trigger(
-    schedule="0 */30 * * * *",  # cada 30 minutos
-    arg_name="myTimer",
-    run_on_startup=False,
-    use_monitor=True,
-)
-def apollo_orchestrator_tick(myTimer: func.TimerRequest) -> None:
-    """Tick del orquestador Apollo cada 30 minutos.
-    Internamente respeta horario hábil lun-vie 9-18 EC y feriados Ecuador.
-    Reemplaza la schtask BiodegradablesEcuador-ApolloOrchestrator-30min.
-    """
-    logging.info("apollo_orchestrator_tick: timer fired")
-    sys.argv = ["function_app"]  # sin args = modo tick normal
-    try:
-        from apollo_orchestrator import main
-        result = main()
-        logging.info(f"apollo_orchestrator_tick: completed with exit={result}")
-    except Exception as e:
-        logging.error(f"apollo_orchestrator_tick FAILED: {e}")
-        logging.error(traceback.format_exc())
-        raise
+# NOTA (2026-06-12, Fase 0): el timer `apollo_orchestrator_tick` se ELIMINO.
+# El orquestador Apollo fue descartado por el usuario el 2026-05-28 (limitaba
+# volumen) y estaba deshabilitado solo por app setting. El codigo fuente vive
+# en archive/apollo_orchestrator.py por si la logica se reaprovecha.
 
 
 # ============== TEAMS BOT ==============

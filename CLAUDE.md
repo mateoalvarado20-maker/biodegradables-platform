@@ -8,6 +8,27 @@ Toda la lógica clave está aquí.
 
 ---
 
+## ⚠️ REFACTOR EN CURSO (2026-06-12) — leer primero
+
+El proyecto está bajo refactorización en 6 fases tras la auditoría técnica
+(`AUDITORIA_TECNICA_2026-06-12.md` — diagnóstico completo con evidencia archivo:línea).
+
+**Reglas vigentes desde Fase 0:**
+- El proyecto es un **repo git** (`C:\Users\Mateo`, `.gitignore` whitelist). Todo cambio se commitea. No editar las copias de `azfunc\` a mano: desde Fase 4 se generan con `tools/sync_azfunc.py` desde la raíz (fuente única).
+- Código retirado vive en `archive/` con justificación en `archive/README.md`. NO restaurar sin leerla. Retirados: `weekly_report.py` (roto y huérfano — reemplazado por `weekly_summaries` del bot), `agent.py`, `apollo_orchestrator.*`, `run_reply_agent.bat`, `run_weekly_report.bat`.
+- Convenciones, onboarding y checklist de PR: `CONTRIBUTING.md` y `docs/` (desde Fase 5).
+
+**Estado operativo REAL verificado (2026-06-12):**
+| Qué | Dónde corre HOY |
+|---|---|
+| Reporte comercial 8 AM | Job APScheduler `morning_sales_report` en teams_bot (App Service). Timer azfunc ELIMINADO del código en Fase 0. Schtask local DESHABILITADA (run_morning.bat queda para runs manuales). |
+| Reporte logística 8 AM | Timer azfunc `logistics_morning`. Schtask local DESHABILITADA. |
+| Reply agent cada 15 min | Timer azfunc `reply_agent_tick` (state en Azure Table). Schtask local DESHABILITADA y wrapper archivado — re-habilitarla duplicaría borradores. |
+| Apollo notifier cada 2 h | Schtask local `BiodegradablesEcuador-ApolloNotifier-2hrs` (única tarea local activa). |
+| Weekly report de Mateo | Job `weekly_summaries` del bot (Vie 17:00). El `weekly_report.py` viejo está archivado — NO crear su schtask. |
+
+---
+
 ## Stack
 
 - Python 3.14 (Windows Store), instalado para el usuario `Mateo`
