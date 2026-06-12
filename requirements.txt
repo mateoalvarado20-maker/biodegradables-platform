@@ -25,3 +25,9 @@ msal>=1.30
 # === Scheduler (APScheduler para proactive messages del bot) ===
 APScheduler>=3.10
 pytz>=2024.1
+
+# === Chart del daily_report (Phase U+ - el job corre EN el bot) ===
+matplotlib>=3.8
+
+# === Azure Table Storage (dispatch_state / reply_state backend Table) ===
+azure-data-tables>=12.4

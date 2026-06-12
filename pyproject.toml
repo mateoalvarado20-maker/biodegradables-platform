@@ -1,0 +1,32 @@
+[project]
+name = "biodegradables-platform"
+version = "1.0.0"
+description = "Automatización comercial Biodegradables Ecuador: reportes, bots de Teams, agentes"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["archive", "azfunc"]  # azfunc/ es GENERADO (tools/sync_azfunc.py)
+
+[tool.ruff.lint]
+# Gate del CI: empezamos con las reglas de errores reales (sintaxis, nombres
+# indefinidos, comparaciones rotas) — el codebase legacy pasa este nivel HOY.
+# La meta es ampliar gradualmente (ver CONTRIBUTING.md):
+#   +"BLE" (except Exception ciego) y +"T20" (prints) cuando se termine la
+#   migración a logging estructurado.
+select = [
+    "E9",    # errores de sintaxis/indentación
+    "F63",   # comparaciones inválidas
+    "F7",    # errores de sintaxis en statements
+    "F82",   # nombres indefinidos (undefined-name)
+    "PLE",   # errores de pylint (f-strings rotos, etc.)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # FastAPI on_event deprecation — migrar a lifespan handlers está en el
+    # backlog de Fase 5+; no es accionable por cada PR.
+    "ignore::DeprecationWarning",
+]

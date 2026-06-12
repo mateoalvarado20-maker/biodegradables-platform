@@ -2914,13 +2914,15 @@ def _system_prompt(mode: str = "data", user_email: str | None = None) -> str:
 
     mode='data': para Data Bot (gerencia). Tools de Contifico + HubSpot.
     mode='activities': para Activities Bot (colaboradores). Tools de tracker.
-    mode='full': legacy, expone todas las tools (CLI debug).
     """
     if mode == "activities":
         return _system_prompt_activities(user_email)
     if mode == "data":
         return _system_prompt_data()
-    return _system_prompt_full()
+    # Fase 4: el modo 'full' legacy llamaba _system_prompt_full(), función
+    # que NO EXISTE — cualquier mode desconocido crasheaba con NameError
+    # (bug latente detectado por ruff F821). Mejor explícito:
+    raise ValueError(f"mode desconocido: {mode!r} (válidos: 'data', 'activities')")
 
 
 def _system_prompt_activities(user_email: str | None = None) -> str:

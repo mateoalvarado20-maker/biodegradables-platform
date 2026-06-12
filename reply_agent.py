@@ -37,26 +37,13 @@ NO_REPLY_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-STATE_PATH = Path.home() / ".claude-agent" / "reply_state.json"
 CONTEXT_PATH = Path(__file__).parent / "company_context.md"
 
-
 # ============== STATE ==============
-# Fase 1: safe_json — atómico + backup + cuarentena. Antes, un state corrupto
-# se "recuperaba" vacío y el agente reprocesaba correos ya respondidos
-# (= borradores duplicados a prospectos).
-def _load_state() -> dict:
-    import safe_json
-    return safe_json.load_json(
-        STATE_PATH, lambda: {"last_check_iso": None, "processed_message_ids": []}
-    )
-
-
-def _save_state(state: dict) -> None:
-    import safe_json
-    # Mantener solo los últimos 500 IDs procesados para no crecer indefinidamente
-    state["processed_message_ids"] = state.get("processed_message_ids", [])[-500:]
-    safe_json.save_json(STATE_PATH, state)
+# Fase 4: delegado a reply_state.py — módulo ÚNICO para ambos runtimes
+# (Azure Table en producción, archivo local endurecido con safe_json en la
+# PC). Antes la copia raíz y la de azfunc tenían states disjuntos (P3).
+import reply_state
 
 
 # ============== FILTRADO ==============
@@ -241,9 +228,6 @@ def process_inbox(
     verbose: bool = False,
 ) -> dict:
     """Procesa el inbox y devuelve un resumen de lo hecho."""
-    state = _load_state()
-    processed_ids = set(state.get("processed_message_ids", []))
-
     # Calcular ventana de búsqueda
     since_iso = (
         datetime.now(timezone.utc) - timedelta(hours=since_hours)
@@ -266,7 +250,7 @@ def process_inbox(
         subject = msg.get("subject", "(sin asunto)")
         label = f"{sender_addr} | {subject[:50]}"
 
-        if msg_id in processed_ids:
+        if reply_state.is_processed(msg_id):
             stats["skipped_processed"] += 1
             if verbose:
                 print(f"  [skip-procesado] {label}")
@@ -299,7 +283,7 @@ def process_inbox(
             stats["skipped_no_apollo"] += 1
             print(f"  → Apollo no encontró {sender_addr}. Skip.")
             # Igual marcarlo como procesado para no reintentar
-            processed_ids.add(msg_id)
+            reply_state.mark_processed(msg_id)
             continue
 
         print(f"  → Apollo: {prospect.get('name')} ({prospect.get('title')}) "
@@ -332,7 +316,7 @@ def process_inbox(
         if not result.get("should_draft"):
             stats["skipped_claude"] += 1
             print(f"  → Claude decidió SKIP: {result.get('reason_if_skip', '?')}")
-            processed_ids.add(msg_id)
+            reply_state.mark_processed(msg_id)
             continue
 
         body_html = result.get("body_html", "")
@@ -351,16 +335,16 @@ def process_inbox(
                 web_link = draft.get("webLink", "(sin link)")
                 print(f"  → Borrador creado: {web_link}")
                 stats["drafts_created"] += 1
-                processed_ids.add(msg_id)
+                reply_state.mark_processed(msg_id)
             except Exception as e:
                 print(f"  → ERROR creando draft: {e}")
                 stats["errors"] += 1
                 continue
 
-    # Guardar estado
-    state["last_check_iso"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    state["processed_message_ids"] = list(processed_ids)
-    _save_state(state)
+    # Guardar timestamp del check (solo informativo)
+    reply_state.set_last_check(
+        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
 
     return stats
 

@@ -487,6 +487,9 @@ def _parse_fecha_emision(s: str | None) -> date | None:
         return None
 
 
+CARTERA_SALDO_MIN = 1.0  # Phase V (2026-06-11): excluir saldos < $1 (centavos)
+
+
 def cartera_vencida_por_ciudad(
     ciudad: str,
     n: int = 5,
@@ -496,11 +499,13 @@ def cartera_vencida_por_ciudad(
 ) -> list[dict[str, Any]]:
     """Top N clientes con cartera VENCIDA en una ciudad (UIO o GYE).
 
-    Phase R (2026-06-06): SOLO considera clientes que están en
-    `condiciones_credito.json`. Clientes NO en el JSON se asumen venta de
-    contado (sin crédito), y NO se incluyen como cobranza aunque tengan
-    saldo abierto en Contifico. El plazo de cada cliente sale del JSON.
-    Días de atraso = HOY - (fecha_emision + plazo).
+    Phase V (2026-06-11): Solo Contifico, sin Excel.
+      - Usa `fecha_vencimiento` de cada factura (la calcula Contifico desde
+        el plazo configurado en cada cliente del POS).
+      - Si la factura tiene saldo > $1 y `fecha_vencimiento < hoy`, cuenta
+        como cartera vencida.
+      - Excluye saldos ≤ $1 (suelen ser centavos de redondeo, no cobranza real).
+      - El plazo se infiere del documento: `fecha_vencimiento - fecha_emision`.
 
     Devuelve lista de dicts:
         [{"cliente": "X SA", "saldo_vencido": 1234.56, "facturas_vencidas": 3,
@@ -510,7 +515,6 @@ def cartera_vencida_por_ciudad(
     today = fecha_referencia or date.today()
     fecha_inicial = today - timedelta(days=meses_atras * 30)
     ciudad = (ciudad or "").upper()
-    condiciones = _cargar_condiciones_credito()
 
     docs = _filter_validas(get_documentos(fecha_inicial, today))
     by_cli: dict[str, dict[str, Any]] = defaultdict(
@@ -527,29 +531,28 @@ def cartera_vencida_por_ciudad(
         if _doc_ciudad(d) != ciudad:
             continue
         saldo = _doc_saldo(d)
-        if saldo <= 0:
+        if saldo <= CARTERA_SALDO_MIN:
+            continue  # excluye centavos / saldos triviales
+        # Phase V: solo Contifico — la propia factura dice cuándo vence.
+        # Si no hay fecha_vencimiento, lo tratamos como SIN crédito (cuenta
+        # de contado) y NO lo metemos a cartera.
+        venc = _parse_fecha_vencimiento(d.get("fecha_vencimiento"))
+        if venc is None:
             continue
-        cli = _doc_cliente_nombre(d)
-        # Phase R: solo clientes con crédito definido
-        entry_cond = condiciones.get(cli.upper().strip())
-        if not entry_cond:
-            continue  # cliente sin crédito → no es cobranza
-        plazo = int(entry_cond.get("plazo_dias", 0))
-        # Calcular vencimiento desde fecha_emision + plazo (override Contifico)
-        emis = _parse_fecha_emision(d.get("fecha_emision"))
-        if emis is None:
-            # Si no podemos parsear fecha de emisión, caemos a fecha_vencimiento
-            venc = _parse_fecha_vencimiento(d.get("fecha_vencimiento"))
-        else:
-            venc = emis + timedelta(days=plazo)
-        if venc is None or venc >= today:
+        if venc >= today:
             continue  # no vencida todavía
         atraso = (today - venc).days
+        # Plazo se infiere: días entre fecha_emision y fecha_vencimiento
+        emis = _parse_fecha_emision(d.get("fecha_emision"))
+        plazo = (venc - emis).days if emis else 0
+
+        cli = _doc_cliente_nombre(d)
         entry = by_cli[cli]
         entry["cliente"] = cli
         entry["saldo_vencido"] += saldo
         entry["facturas_vencidas"] += 1
-        entry["plazo_dias"] = plazo
+        if plazo > entry["plazo_dias"]:
+            entry["plazo_dias"] = plazo
         if atraso > entry["dias_atraso_max"]:
             entry["dias_atraso_max"] = atraso
             entry["factura_mas_antigua"] = d.get("documento", "")
@@ -711,30 +714,43 @@ def saldos_pendientes_clientes(
 
 def _tiene_transporte_item(d: dict[str, Any]) -> bool:
     """True si alguno de los detalles del documento es un producto de
-    transporte/envío (TRANSP.* o nombre contiene 'TRANSPORTE')."""
+    transporte/envío.
+
+    Match flexible:
+    - producto_codigo empieza con 'TRANSP' (raro: viene vacío en muchos docs)
+    - producto_nombre contiene 'TRANSP' (cubre 'TRANSP. EXT.-CB. 12%',
+      'TRANSP. B.E.', 'TRANSPORTE', 'Transporte', etc.)
+    """
     detalles = d.get("detalles") or []
     for det in detalles:
         nombre = (det.get("producto_nombre") or "").upper()
         codigo = (det.get("producto_codigo") or "").upper()
-        if codigo.startswith("TRANSP") or "TRANSPORTE" in nombre:
+        if codigo.startswith("TRANSP") or "TRANSP" in nombre:
             return True
     return False
 
 
-def envios_dia_gye(fecha: date | None = None) -> list[dict[str, Any]]:
-    """Lista de envíos a entregar HOY desde Guayaquil.
+def envios_dia_gye(
+    fecha: date | None = None,
+    dias_atras: int = 0,
+) -> list[dict[str, Any]]:
+    """Lista de envíos a entregar desde Guayaquil.
 
     Filtra facturas:
-      - Emitidas hoy (`fecha_emision == fecha`)
+      - Emitidas en [fecha - dias_atras, fecha]
       - Con prefijo de documento `001-001` (sucursal GYE)
-      - Con al menos un item de transporte
+      - Con al menos un item de transporte (urbano TRANSP.B.E. o terminal TRANSP.EXT.)
       - No anuladas
 
+    Phase V (2026-06-10): por defecto trae solo `fecha`, pero `dias_atras=1`
+    trae ayer + hoy (útil para el card de José).
+
     Para cada factura retorna:
-        factura_id, documento, cliente, direccion_factura, total, tipo_transporte
+        factura_id, documento, cliente, direccion_factura, total, fecha_emision
     """
     fecha = fecha or date.today()
-    docs = _filter_validas(get_documentos(fecha, fecha))
+    fecha_ini = fecha - timedelta(days=max(0, dias_atras))
+    docs = _filter_validas(get_documentos(fecha_ini, fecha))
     envios: list[dict[str, Any]] = []
     for d in docs:
         doc_num = (d.get("documento") or "").strip()

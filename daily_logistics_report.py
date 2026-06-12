@@ -26,7 +26,18 @@ from typing import Any
 
 import dispatch_state  # noqa: F401  (usado vía _estado_badge en cada Envio)
 from contifico_client import get_documentos
-from pbi_cloud import send_email
+
+# Email backend (Fase 4): misma selección runtime que daily_report — esta
+# línea era LA diferencia entre la copia raíz y la de azfunc (drift).
+import os as _os
+if (
+    _os.environ.get("MICROSOFT_APP_ID")
+    and _os.environ.get("MICROSOFT_APP_PASSWORD")
+    and _os.environ.get("MICROSOFT_APP_TENANT_ID")
+):
+    from graph_mail import send_email
+else:
+    from pbi_cloud import send_email  # type: ignore[no-redef]
 
 # Ventana del reporte respecto a HOY (ambos inclusive). Por ejemplo:
 #   DIAS_DESDE=2, DIAS_HASTA=1 → reporta desde anteayer hasta ayer.

@@ -27,15 +27,22 @@ from typing import Any
 
 import contifico_client
 
-# Email backend: en azfunc (Azure App Service) usamos graph_mail (Service
-# Principal app-only — sin MSAL token cache). En la PC local de Mateo no existe
-# `graph_mail.send_email` (la copia local define `send`, no `send_email`), así
-# que cae al backend pbi_cloud con device-code/MSAL cache para que `python
-# daily_report.py test-morning` siga funcionando sin setup extra.
-try:
-    from graph_mail import send_email  # type: ignore[attr-defined]
+# Email backend (Fase 4, fix auditoría R2): la selección por ImportError era
+# código muerto — graph_mail.send_email SÍ existe en ambas copias, así que un
+# run local sin las credenciales del Service Principal fallaba en runtime en
+# vez de caer a MSAL. Ahora se decide por la PRESENCIA de credenciales:
+# - Con MICROSOFT_APP_ID/PASSWORD/TENANT_ID (Azure o PC con secrets) →
+#   graph_mail (app-only, con retries).
+# - Sin ellas (PC de Mateo) → pbi_cloud (MSAL delegated, device-code cache).
+import os as _os
+if (
+    _os.environ.get("MICROSOFT_APP_ID")
+    and _os.environ.get("MICROSOFT_APP_PASSWORD")
+    and _os.environ.get("MICROSOFT_APP_TENANT_ID")
+):
+    from graph_mail import send_email
     _EMAIL_BACKEND = "graph_mail"
-except ImportError:
+else:
     from pbi_cloud import send_email  # type: ignore[no-redef]
     _EMAIL_BACKEND = "pbi_cloud_msal"
 

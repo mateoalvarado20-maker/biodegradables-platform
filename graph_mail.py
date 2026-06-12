@@ -51,13 +51,26 @@ def _get_token(force_refresh: bool = False) -> str:
     if not force_refresh and _token_cache["token"] and now < _token_cache["expires_at"]:
         return _token_cache["token"]
 
-    app_id = os.environ.get("MICROSOFT_APP_ID", "").strip()
-    app_pwd = os.environ.get("MICROSOFT_APP_PASSWORD", "").strip()
-    tenant = os.environ.get("MICROSOFT_APP_TENANT_ID", "").strip()
+    # Fase 4: acepta ambos sets de credenciales para que este módulo sea
+    # FUENTE ÚNICA. El App Service usa MICROSOFT_APP_*; el Function App
+    # (azfunc) quedó configurado con GRAPH_CLIENT_*/GRAPH_TENANT_ID.
+    app_id = (
+        os.environ.get("MICROSOFT_APP_ID", "").strip()
+        or os.environ.get("GRAPH_CLIENT_ID", "").strip()
+    )
+    app_pwd = (
+        os.environ.get("MICROSOFT_APP_PASSWORD", "").strip()
+        or os.environ.get("GRAPH_CLIENT_SECRET", "").strip()
+    )
+    tenant = (
+        os.environ.get("MICROSOFT_APP_TENANT_ID", "").strip()
+        or os.environ.get("GRAPH_TENANT_ID", "").strip()
+    )
     if not (app_id and app_pwd and tenant):
         raise RuntimeError(
-            "Faltan env vars: MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD, "
-            "MICROSOFT_APP_TENANT_ID"
+            "Faltan env vars: MICROSOFT_APP_ID/GRAPH_CLIENT_ID, "
+            "MICROSOFT_APP_PASSWORD/GRAPH_CLIENT_SECRET, "
+            "MICROSOFT_APP_TENANT_ID/GRAPH_TENANT_ID"
         )
 
     url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"

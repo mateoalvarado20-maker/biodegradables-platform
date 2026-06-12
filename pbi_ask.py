@@ -167,7 +167,7 @@ def main() -> int:
         elif dax_query.startswith("@"):
             dax_query = Path(dax_query[1:]).read_text(encoding="utf-8")
         # Limpiar BOM y caracteres invisibles que PowerShell mete a veces
-        dax_query = dax_query.lstrip("﻿​\xa0 \t\r\n").rstrip()
+        dax_query = dax_query.lstrip("﻿\u200b\xa0 \t\r\n").rstrip()
         return run_dax(dax_query, args.json)
     if args.schema:
         return show_schema(only_measures=False)

@@ -27,15 +27,22 @@ from typing import Any
 
 import contifico_client
 
-# Email backend: en azfunc (Azure App Service) usamos graph_mail (Service
-# Principal app-only — sin MSAL token cache). En la PC local de Mateo no existe
-# `graph_mail.send_email` (la copia local define `send`, no `send_email`), así
-# que cae al backend pbi_cloud con device-code/MSAL cache para que `python
-# daily_report.py test-morning` siga funcionando sin setup extra.
-try:
-    from graph_mail import send_email  # type: ignore[attr-defined]
+# Email backend (Fase 4, fix auditoría R2): la selección por ImportError era
+# código muerto — graph_mail.send_email SÍ existe en ambas copias, así que un
+# run local sin las credenciales del Service Principal fallaba en runtime en
+# vez de caer a MSAL. Ahora se decide por la PRESENCIA de credenciales:
+# - Con MICROSOFT_APP_ID/PASSWORD/TENANT_ID (Azure o PC con secrets) →
+#   graph_mail (app-only, con retries).
+# - Sin ellas (PC de Mateo) → pbi_cloud (MSAL delegated, device-code cache).
+import os as _os
+if (
+    _os.environ.get("MICROSOFT_APP_ID")
+    and _os.environ.get("MICROSOFT_APP_PASSWORD")
+    and _os.environ.get("MICROSOFT_APP_TENANT_ID")
+):
+    from graph_mail import send_email
     _EMAIL_BACKEND = "graph_mail"
-except ImportError:
+else:
     from pbi_cloud import send_email  # type: ignore[no-redef]
     _EMAIL_BACKEND = "pbi_cloud_msal"
 
@@ -380,15 +387,48 @@ def fmt_int(v: Any) -> str:
         return "—"
 
 
-def _safe(fn, default):
-    """Llama `fn()` y devuelve default si falla. Mantiene el correo robusto
-    cuando un endpoint de Contifico devuelve error parcial."""
+# Fase 3 (auditoría R1): registro de fuentes que fallaron en este run.
+# Antes, un fallo de Contifico a las 8 AM producía un correo "Vendimos $0,
+# cumplimiento 0%" con exit 0 — datos falsos presentados como reales.
+_FALLOS: list = []           # fuentes degradadas (banner en el correo)
+_FALLOS_CRITICOS: list = []  # fuentes sin las cuales el reporte MIENTE (no se envía)
+
+
+def _safe(fn, default, label: str = "", critical: bool = False):
+    """Llama `fn()` y devuelve default si falla, REGISTRANDO el fallo.
+
+    critical=True marca la fuente como imprescindible: main() se niega a
+    enviar el correo si falló (el job del bot reintenta y alerta a Mateo).
+    """
     try:
         return fn()
     except Exception as e:
-        print(f"  [WARN] {fn.__name__ if hasattr(fn,'__name__') else fn}: {e}",
-              file=sys.stderr)
+        nombre = label or getattr(fn, "__name__", "fuente")
+        msg = f"{nombre}: {type(e).__name__}: {e}"
+        print(f"  [WARN] {msg}", file=sys.stderr)
+        _FALLOS.append(msg)
+        if critical:
+            _FALLOS_CRITICOS.append(msg)
         return default
+
+
+def _inject_warning_banner(html: str, fallos: list) -> str:
+    """Banner rojo al tope del correo cuando hay secciones degradadas —
+    nunca más cifras en cero con cara de dato real."""
+    import re as _re
+    items = "".join(f"<li>{f}</li>" for f in fallos)
+    banner = (
+        "<div style='background:#fff3cd;border:2px solid #c53030;"
+        "border-radius:6px;padding:12px;margin:0 0 16px 0;"
+        "font-family:Segoe UI,Arial,sans-serif;font-size:13px'>"
+        "<b style='color:#c53030'>⚠️ Datos parciales:</b> estas fuentes "
+        "fallaron y sus secciones pueden aparecer vacías o en cero:"
+        f"<ul style='margin:6px 0 0 0'>{items}</ul></div>"
+    )
+    m = _re.search(r"<body[^>]*>", html)
+    if m:
+        return html[: m.end()] + banner + html[m.end():]
+    return banner + html
 
 
 # ============ Adaptadores Contifico → diccionarios estilo legacy ============
@@ -401,7 +441,8 @@ def q_kpis_cobranza() -> dict:
     """KPIs de cartera total (clientes con crédito). PctVencida ya viene como
     ratio decimal (0–1); Efectividad queda en None porque calcularla requiere
     historial de pagos que Contifico no expone vía esta API."""
-    kpis = _safe(lambda: contifico_client.cartera_kpis(), {})
+    kpis = _safe(lambda: contifico_client.cartera_kpis(), {},
+                 label="KPIs de cartera (Contifico)")
     return {
         "[CarteraTotal]": kpis.get("cartera_total"),
         "[CarteraVencida]": kpis.get("cartera_vencida"),
@@ -414,7 +455,8 @@ def q_kpis_cobranza() -> dict:
 
 def q_antiguedad_completa() -> list[dict]:
     """Buckets de antigüedad de la cartera."""
-    rows = _safe(lambda: contifico_client.cartera_antiguedad_buckets(), [])
+    rows = _safe(lambda: contifico_client.cartera_antiguedad_buckets(), [],
+                 label="Antigüedad de cartera (Contifico)")
     return [
         {"[Bucket]": r["bucket"], "[Saldo]": r["saldo"], "[Orden]": r["orden"]}
         for r in rows
@@ -459,7 +501,10 @@ def q_ventas_mes() -> dict:
     """MTD + ventas mismo mes año anterior (PY). El resto (meta, brecha,
     cumplimiento, meta diaria) lo recalcula `_recalcular_python` en días
     hábiles — así que sólo necesitamos los dos números crudos."""
-    data = _safe(lambda: contifico_client.cumplimiento_mes(), {})
+    data = _safe(
+        lambda: contifico_client.cumplimiento_mes(), {},
+        label="Ventas del mes (Contifico)", critical=True,
+    )
     return {
         "[MTD]": data.get("ventas_mtd"),
         "[VentasMesLY]": data.get("ventas_mismo_mes_anio_anterior"),
@@ -471,7 +516,10 @@ def q_ventas_ayer() -> dict:
     La meta diaria base + cumplimiento ayer se calculan después en
     `_recalcular_python`."""
     ayer_dt = previous_workday(date.today())
-    data = _safe(lambda: contifico_client.ventas_dia(ayer_dt), {})
+    data = _safe(
+        lambda: contifico_client.ventas_dia(ayer_dt), {},
+        label="Ventas de ayer (Contifico)", critical=True,
+    )
     return {"[VentasAyer]": data.get("total")}
 
 
@@ -1342,6 +1390,19 @@ def main() -> int:
             return 0
 
         html = html_morning()
+
+        # Fase 3 (auditoría R1): con fuentes CRÍTICAS caídas el correo NO
+        # sale — antes salía "Vendimos $0" con exit 0 y nadie se enteraba.
+        # El job del bot (_reliable_job) reintenta y alerta a Mateo.
+        if _FALLOS_CRITICOS:
+            raise RuntimeError(
+                "Reporte NO enviado — datos críticos no disponibles: "
+                + " | ".join(_FALLOS_CRITICOS)
+            )
+        # Fuentes secundarias caídas: se envía con banner de advertencia.
+        if _FALLOS:
+            html = _inject_warning_banner(html, _FALLOS)
+
         subject = f"Resumen comercial - {today}"
         to = MIO if mode == "test-morning" else JEFE
         cc = None if mode == "test-morning" else MIO

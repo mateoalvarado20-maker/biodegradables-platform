@@ -1,12 +1,19 @@
-"""Persistencia del estado de despacho.
+"""Persistencia del estado de despacho — módulo ÚNICO para ambos runtimes.
 
-Auto-detecta el entorno:
-- Si está la env var `AzureWebJobsStorage` (estamos en Azure Functions) → usa
-  Azure Table Storage como backend, tabla `dispatchstate`.
-- Si no → fallback al archivo local `~/.claude-agent/dispatch_state.json` (mismo
-  comportamiento que la versión local original).
+Fase 4 (2026-06-12): unifica las dos copias divergentes (raíz solo-archivo
+vs azfunc con Table Storage). Auditoría P1 (split-brain): lo que Mateo o
+Gabriela marcaban con el CLI local iba a un JSON que el reporte de logística
+en Azure (que lee Table Storage) JAMÁS veía — los badges salían "pendiente"
+eternamente.
 
-Estructura por registro (igual en ambos backends):
+Backend, en orden de prioridad:
+1. `DISPATCH_TABLE_CONN` (connection string explícita — para que el CLI
+   local escriba a la MISMA tabla de producción).
+2. `AzureWebJobsStorage` (presente en Azure Functions / App Service).
+3. Archivo local `~/.claude-agent/dispatch_state.json` vía safe_json
+   (atómico + backup + cuarentena, Fase 1).
+
+Estructura por registro (igual en todos los backends):
 
     {
         "status": "OK" | "NO" | "PARCIAL",
@@ -19,35 +26,54 @@ Llave: número de factura (campo `documento` de Contifico).
 """
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-LOCAL_TZ = timezone(timedelta(hours=-5))
+import safe_json
 
-STATE_PATH = Path.home() / ".claude-agent" / "dispatch_state.json"
+logger = logging.getLogger("dispatch_state")
+
+LOCAL_TZ = timezone(timedelta(hours=-5))  # Ecuador (UTC-5)
+
+STATE_PATH = Path(os.environ.get("STATE_DIR") or str(Path.home() / ".claude-agent")) / "dispatch_state.json"
 TABLE_NAME = "dispatchstate"
 PARTITION_KEY = "dispatch"
 
 StatusType = Literal["OK", "NO", "PARCIAL"]
 VALID_STATUSES: tuple[str, ...] = ("OK", "NO", "PARCIAL")
 
+_LOCK = safe_json.lock_for(STATE_PATH)
+
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
+
 
 # ----------- Backend: detección de entorno -----------
-def _is_azure() -> bool:
-    """True si estamos corriendo en Azure Functions (o cualquier proceso que
-    tenga AzureWebJobsStorage configurado)."""
-    return bool(os.environ.get("AzureWebJobsStorage"))
+def _conn_str() -> str:
+    return (
+        os.environ.get("DISPATCH_TABLE_CONN", "").strip()
+        or os.environ.get("AzureWebJobsStorage", "").strip()
+    )
+
+
+def _is_table() -> bool:
+    return bool(_conn_str())
 
 
 def _table_client():
-    """Devuelve un TableClient apuntando a la tabla dispatchstate.
-    Crea la tabla si no existe. Solo llamar cuando _is_azure() es True."""
+    """TableClient de la tabla dispatchstate (la crea si no existe)."""
     from azure.data.tables import TableServiceClient
-    conn_str = os.environ["AzureWebJobsStorage"]
-    service = TableServiceClient.from_connection_string(conn_str)
+    service = TableServiceClient.from_connection_string(_conn_str())
     try:
         service.create_table_if_not_exists(TABLE_NAME)
     except Exception:
@@ -56,9 +82,6 @@ def _table_client():
 
 
 # ----------- Sanitización de RowKey (Azure Tables) -----------
-# RowKey en Azure Tables NO acepta: / \ # ? \t \n \r ni caracteres de control.
-# Los números de factura ("001-002-000008181") son válidos como están, pero
-# por seguridad mantenemos un escape.
 _INVALID_CHARS = "/\\#?\t\n\r"
 
 
@@ -72,7 +95,7 @@ def _safe_key(factura: str) -> str:
 # ----------- API pública -----------
 def load() -> dict[str, dict[str, Any]]:
     """Devuelve todo el state como dict {factura: {status, ...}}."""
-    if _is_azure():
+    if _is_table():
         client = _table_client()
         out: dict[str, dict[str, Any]] = {}
         for ent in client.list_entities():
@@ -84,31 +107,20 @@ def load() -> dict[str, dict[str, Any]]:
                 "razon": ent.get("razon", ""),
             }
         return out
-    # Local fallback
-    if not STATE_PATH.exists():
-        return {}
-    try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return safe_json.load_json(STATE_PATH, dict)
 
 
 def save(state: dict[str, dict[str, Any]]) -> None:
-    """Sobreescribe TODO el state (úsalo con cuidado en Azure — borra el resto).
-    Para una sola factura usar mark() en su lugar."""
-    if _is_azure():
-        client = _table_client()
-        # Borrar todo y reescribir es caro y arriesgado; mejor avisar
+    """Sobreescribe TODO el state. Solo backend archivo — en Table usar
+    mark() por factura (reescribir todo es caro y arriesgado)."""
+    if _is_table():
         raise NotImplementedError(
-            "save() en Azure no está soportado — usar mark() por factura"
+            "save() con backend Table no está soportado — usar mark() por factura"
         )
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(
-        json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
-    )
+    safe_json.save_json(STATE_PATH, state, sort_keys=True)
 
 
+@_locked
 def mark(
     factura: str,
     status: StatusType,
@@ -117,9 +129,11 @@ def mark(
     marcado_por: str = "cli",
 ) -> dict[str, Any]:
     """Marca una factura con el estado de despacho. Sobreescribe el anterior.
-    Devuelve el registro guardado."""
+
+    Devuelve el registro guardado.
+    """
     if status not in VALID_STATUSES:
-        raise ValueError(f"Status inválido: {status}.")
+        raise ValueError(f"Status inválido: {status}. Debe ser uno de {VALID_STATUSES}.")
     if not factura:
         raise ValueError("factura no puede estar vacío.")
     entry = {
@@ -128,7 +142,7 @@ def mark(
         "marcado_en": datetime.now(LOCAL_TZ).isoformat(timespec="seconds"),
         "razon": razon or "",
     }
-    if _is_azure():
+    if _is_table():
         client = _table_client()
         client.upsert_entity({
             "PartitionKey": PARTITION_KEY,
@@ -136,27 +150,24 @@ def mark(
             **entry,
         })
         return entry
-    # Local fallback
     state = load()
     state[factura] = entry
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(
-        json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
-    )
+    save(state)
     return entry
 
 
+@_locked
 def clear(factura: str) -> bool:
     """Borra la marca de una factura. Devuelve True si existía."""
-    if _is_azure():
+    if _is_table():
         client = _table_client()
         try:
             client.delete_entity(
                 partition_key=PARTITION_KEY, row_key=_safe_key(factura)
             )
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning("clear(%s) en Table falló: %s", factura, e)
             return False
     state = load()
     if factura not in state:
@@ -168,7 +179,7 @@ def clear(factura: str) -> bool:
 
 def get(factura: str) -> dict[str, Any] | None:
     """Devuelve el registro de una factura o None si no está marcada."""
-    if _is_azure():
+    if _is_table():
         client = _table_client()
         try:
             ent = client.get_entity(
@@ -194,7 +205,11 @@ def is_ok(factura: str) -> bool:
 def pendientes_anteriores(
     facturas: list[str], *, dias_minimos: int = 1
 ) -> list[str]:
-    """Filtra la lista dejando solo las que NO están marcadas OK."""
+    """Filtra la lista de facturas dejando solo las que NO están marcadas OK.
+
+    `dias_minimos` está reservado para futura lógica de antigüedad si se quiere
+    filtrar por edad de la factura (requiere fecha de emisión).
+    """
     state = load()
     out = []
     for f in facturas:
@@ -205,8 +220,8 @@ def pendientes_anteriores(
 
 
 if __name__ == "__main__":
-    import sys
-    print(f"Azure mode: {_is_azure()}")
+    # Smoke test
+    print(f"Backend: {'Azure Table' if _is_table() else f'archivo {STATE_PATH}'}")
     state = load()
     print(f"Total registros: {len(state)}")
     if state:

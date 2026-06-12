@@ -27,7 +27,6 @@ from anthropic import Anthropic
 
 import apollo_rest
 import outlook_client
-import reply_state
 
 MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 2000
@@ -40,8 +39,11 @@ NO_REPLY_PATTERNS = re.compile(
 
 CONTEXT_PATH = Path(__file__).parent / "company_context.md"
 
-
-# ============== STATE (delegado a reply_state.py - file local o Azure Tables) ==============
+# ============== STATE ==============
+# Fase 4: delegado a reply_state.py — módulo ÚNICO para ambos runtimes
+# (Azure Table en producción, archivo local endurecido con safe_json en la
+# PC). Antes la copia raíz y la de azfunc tenían states disjuntos (P3).
+import reply_state
 
 
 # ============== FILTRADO ==============
@@ -200,10 +202,14 @@ Genera el borrador de respuesta siguiendo las reglas. Devuelve solo el JSON."""
         print(f"  [claude raw] {text[:300]}...", file=sys.stderr)
 
     # Extraer JSON (puede venir envuelto en ```json ... ``` o sin)
+    # Fase 3 (auditoría C3): parse_error=True distingue "Claude FALLÓ en
+    # formatear" (transitorio → reintento) de "Claude decidió no responder"
+    # (definitivo → se marca procesado).
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if not m:
         return {
             "should_draft": False,
+            "parse_error": True,
             "reason_if_skip": f"Claude no devolvió JSON parseable: {text[:200]}",
         }
     try:
@@ -211,6 +217,7 @@ Genera el borrador de respuesta siguiendo las reglas. Devuelve solo el JSON."""
     except json.JSONDecodeError as e:
         return {
             "should_draft": False,
+            "parse_error": True,
             "reason_if_skip": f"JSON inválido: {e}",
         }
 
@@ -264,7 +271,14 @@ def process_inbox(
         print(f"\n[PROCESANDO] {label}")
 
         # Enriquecer remitente
-        prospect = apollo_rest.enrich_by_email(sender_addr)
+        try:
+            prospect = apollo_rest.enrich_by_email(sender_addr)
+        except apollo_rest.ApolloAPIError as e:
+            # Fase 3 (auditoría C2): error transitorio de Apollo — NO se
+            # marca como procesado; el próximo tick lo reintenta.
+            stats["errors"] += 1
+            print(f"  → ERROR Apollo (transitorio): {e}. Reintento en el próximo tick.")
+            continue
         if prospect is None:
             stats["skipped_no_apollo"] += 1
             print(f"  → Apollo no encontró {sender_addr}. Skip.")
@@ -290,6 +304,13 @@ def process_inbox(
         except Exception as e:
             print(f"  → ERROR Claude: {e}")
             stats["errors"] += 1
+            continue
+
+        if result.get("parse_error"):
+            # Fallo de formato transitorio — NO marcar procesado (C3).
+            stats["errors"] += 1
+            print(f"  → ERROR formato Claude: {result.get('reason_if_skip', '?')}. "
+                  "Reintento en el próximo tick.")
             continue
 
         if not result.get("should_draft"):
@@ -324,6 +345,7 @@ def process_inbox(
     reply_state.set_last_check(
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
+
     return stats
 
 

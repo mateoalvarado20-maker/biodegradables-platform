@@ -26,13 +26,16 @@ import httpx
 API_BASE = "https://api.apollo.io/v1"
 API_KEY = os.environ.get("APOLLO_API_KEY", "")
 
-# En Azure Functions el filesystem es ephemero, asi que cacheamos en /tmp.
-# Localmente sigue en ~/.claude-agent para sobrevivir reinicios.
-if os.environ.get("AzureWebJobsStorage"):
-    CACHE_PATH = Path("/tmp/apollo_cache.json")
-else:
-    CACHE_PATH = Path.home() / ".claude-agent" / "apollo_cache.json"
+CACHE_PATH = Path.home() / ".claude-agent" / "apollo_cache.json"
 CACHE_TTL_SECONDS = 30 * 24 * 3600  # 30 días
+
+
+class ApolloAPIError(RuntimeError):
+    """Error real de la API de Apollo (red/auth/429/5xx).
+
+    Distinto de "Apollo no encontró a la persona" (que es un resultado
+    válido, None). Los callers NO deben tratar esto como no-prospecto.
+    """
 
 _cache: dict[str, dict] | None = None
 
@@ -51,26 +54,22 @@ def _headers() -> dict[str, str]:
 
 
 def _load_cache() -> dict[str, dict]:
+    # Fase 1: safe_json (atómico + cuarentena). Es solo un cache (perderlo
+    # quema créditos Apollo, no datos de negocio), pero la escritura atómica
+    # evita corromperlo a mitad de un run del Task Scheduler.
     global _cache
     if _cache is not None:
         return _cache
-    if CACHE_PATH.exists():
-        try:
-            _cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            _cache = {}
-    else:
-        _cache = {}
+    import safe_json
+    _cache = safe_json.load_json(CACHE_PATH, dict)
     return _cache
 
 
 def _save_cache() -> None:
     if _cache is None:
         return
-    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_PATH.write_text(
-        json.dumps(_cache, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    import safe_json
+    safe_json.save_json(CACHE_PATH, _cache)
 
 
 def _cache_get(key: str) -> dict | None:
@@ -149,9 +148,13 @@ def enrich_by_email(email: str, *, use_cache: bool = True) -> dict | None:
             {"email": email_lc, "reveal_personal_emails": False},
         )
     except RuntimeError as e:
-        # Error real de API (auth, network, etc.) - no cachear, propagar visiblemente
+        # Fase 3 (auditoría C2): un error real de API (429, 5xx, créditos
+        # agotados, key vencida) se PROPAGA como ApolloAPIError. Antes
+        # devolvía None — indistinguible de "no es prospecto" — y el caller
+        # marcaba el correo como procesado PARA SIEMPRE: durante un outage
+        # de Apollo, los prospectos reales quedaban sin borrador sin alerta.
         print(f"[apollo_rest] ERROR enriqueciendo {email_lc}: {e}", file=sys.stderr)
-        return None
+        raise ApolloAPIError(str(e)) from e
 
     person = data.get("person") or {}
     if not person:
