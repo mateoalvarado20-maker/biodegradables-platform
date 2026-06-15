@@ -116,6 +116,7 @@ def test_horarios_de_jobs_configurados(bot):
         "monthly_activities_recap_day1": ("day='1'", "hour='10'"),
         "apertura_caja_matinal": ("day_of_week='mon-fri'", "hour='8'", "minute='15'"),
         "consolidated_daily_summary": ("day_of_week='mon-fri'", "hour='18'", "minute='30'"),
+        "saturday_recap": ("day_of_week='mon'", "hour='8'", "minute='0'"),
         "morning_sales_report": ("day_of_week='mon-sat'", "hour='8'", "minute='0'"),
     }
     for job_id, fragmentos in esperados.items():
@@ -261,6 +262,15 @@ def test_catchup_respeta_dias_y_horas(bot, monkeypatch):
     assert specs["weekly_summaries"](lunes_1701) is False
     assert specs["consolidated_daily"](datetime(2026, 6, 9, 18, 29)) is False
     assert specs["consolidated_daily"](datetime(2026, 6, 9, 18, 31)) is True
+    # Recap del sábado: solo lunes desde las 8:00.
+    lunes_0759 = datetime(2026, 6, 15, 7, 59)   # lunes antes de las 8
+    lunes_0800 = datetime(2026, 6, 15, 8, 0)    # lunes 8:00
+    martes_0900 = datetime(2026, 6, 16, 9, 0)   # martes (no es lunes)
+    sabado_0900 = datetime(2026, 6, 13, 9, 0)   # sábado (no es lunes)
+    assert specs["saturday_recap"](lunes_0759) is False
+    assert specs["saturday_recap"](lunes_0800) is True
+    assert specs["saturday_recap"](martes_0900) is False
+    assert specs["saturday_recap"](sabado_0900) is False
 
 
 # ---------- Retry + recuperación ante fallos ----------

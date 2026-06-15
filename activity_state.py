@@ -144,6 +144,53 @@ def week_range(wk: str) -> tuple[date, date]:
     return monday, monday + timedelta(days=4)
 
 
+# ===== Horario estándar por día (2026-06-15) =====
+# Lun-Vie: 8:30 AM – 5:30 PM. Sábado: jornada reducida 9:00 AM – 1:00 PM.
+# Centralizado acá para que el Activity Bot (check-in card) y los resúmenes
+# derivados muestren EXACTAMENTE la misma jornada según el día.
+HORARIO_ESTANDAR_SEMANA = ("8:30 AM", "5:30 PM")
+HORARIO_ESTANDAR_SABADO = ("9:00 AM", "1:00 PM")
+HORARIO_ESTANDAR_SEMANA_CORTO = "8:30–17:30"
+HORARIO_ESTANDAR_SABADO_CORTO = "9:00–13:00"
+
+
+def _coerce_date(fecha: "str | date | None") -> date:
+    if fecha is None:
+        return _today()
+    if isinstance(fecha, date):
+        return fecha
+    return date.fromisoformat(fecha)
+
+
+def es_sabado(fecha: "str | date | None" = None) -> bool:
+    """True si la fecha (default hoy EC) cae en sábado."""
+    return _coerce_date(fecha).weekday() == 5
+
+
+def horario_estandar(fecha: "str | date | None" = None) -> tuple[str, str]:
+    """(desde, hasta) del horario estándar según el día.
+
+    Sábado → 9:00 AM – 1:00 PM (jornada reducida GYE/sucursales).
+    Resto  → 8:30 AM – 5:30 PM.
+    """
+    if es_sabado(fecha):
+        return HORARIO_ESTANDAR_SABADO
+    return HORARIO_ESTANDAR_SEMANA
+
+
+def horario_estandar_label(fecha: "str | date | None" = None) -> str:
+    """Etiqueta larga: "9:00 AM – 1:00 PM" (sáb) o "8:30 AM – 5:30 PM"."""
+    desde, hasta = horario_estandar(fecha)
+    return f"{desde} – {hasta}"
+
+
+def horario_estandar_corto(fecha: "str | date | None" = None) -> str:
+    """Etiqueta compacta: "9:00–13:00" (sáb) o "8:30–17:30"."""
+    if es_sabado(fecha):
+        return HORARIO_ESTANDAR_SABADO_CORTO
+    return HORARIO_ESTANDAR_SEMANA_CORTO
+
+
 def _get_user_state(state: dict, user_email: str) -> dict[str, Any]:
     email = _normalize_email(user_email)
     if email not in state["users"]:
@@ -1525,6 +1572,13 @@ def get_entregas_consolidadas_dia(
                 ) or cur.get("razon_no_entrega")
             if entr.get("direccion_real"):
                 cur["direccion_real"] = entr["direccion_real"]
+            # 2026-06-15: propagar la observación y el pago que José ingresó al
+            # marcar la entrega. Antes se perdían acá (quedaban solo en la
+            # salida), así que ni el card ni el resumen del equipo las mostraban.
+            if entr.get("observacion"):
+                cur["observacion"] = entr["observacion"]
+            if entr.get("pago_envio"):
+                cur["pago_envio"] = entr["pago_envio"]
     return consolidado
 
 

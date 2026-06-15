@@ -748,7 +748,9 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
         },
         {
             "type": "TextBlock",
-            "text": "¿Trabajaste el horario estándar (8:30 AM – 5:30 PM)?",
+            # El horario estándar depende del día: sábados es jornada reducida
+            # 9:00 AM – 1:00 PM (sucursales GYE/UIO), resto 8:30 AM – 5:30 PM.
+            "text": f"¿Trabajaste el horario estándar ({activity_state.horario_estandar_label(hoy.date())})?",
             "wrap": True,
             "spacing": "Small",
         },
@@ -3964,6 +3966,24 @@ async def send_consolidated_daily_summary_job() -> None:
         logger.exception("Falló consolidated daily summary: %s", e)
 
 
+async def send_saturday_recap_summary_job() -> None:
+    """Recap del sábado (2026-06-15): los LUNES a las 8:00 EC manda UN correo a
+    Daniel+Gabriela con el resumen de las actividades del SÁBADO anterior. Es la
+    única vista consolidada del sábado — el consolidado de 18:30 es Lun-Vie y
+    nunca cubría el sábado. NO duplica nada: usa su propia ledger key
+    `saturday_recap` y solo corre el lunes."""
+    try:
+        from ask_agent import send_saturday_recap_summary
+        result = await asyncio.to_thread(send_saturday_recap_summary)
+        logger.info(
+            "Saturday recap OK → fecha=%s to=%s cc=%s collabs=%s",
+            result.get("target_date"), result.get("to"),
+            result.get("cc"), result.get("collaborators"),
+        )
+    except Exception as e:
+        logger.exception("Falló saturday recap: %s", e)
+
+
 # ===== Scheduler =====
 EC_TZ = pytz.timezone("America/Guayaquil")
 # Fase 3 (auditoría S2): misfire_grace_time era el default de 1 segundo — un
@@ -4030,6 +4050,16 @@ async def _job_consolidated_daily() -> None:
         "consolidated_daily_summary",
         send_consolidated_daily_summary_job,
         ledger_key="consolidated_daily",
+    )
+
+
+async def _job_saturday_recap() -> None:
+    # Ledger key propia (`saturday_recap`) → nunca choca con el consolidado de
+    # 18:30 ni se manda dos veces el mismo lunes.
+    await _reliable_job(
+        "saturday_recap",
+        send_saturday_recap_summary_job,
+        ledger_key="saturday_recap",
     )
 
 
@@ -4190,6 +4220,17 @@ def _schedule_jobs() -> None:
         replace_existing=True,
     )
 
+    # Recap del sábado (2026-06-15): LUNES 8:00 EC. Un solo correo con las
+    # actividades del SÁBADO anterior (José + asistente GYE de turno). El job
+    # 18:30 sigue corriendo el lunes con las actividades del propio lunes — son
+    # días distintos, sin duplicación (ledger key `saturday_recap` separada).
+    scheduler.add_job(
+        _job_saturday_recap,
+        CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=EC_TZ),
+        id="saturday_recap",
+        replace_existing=True,
+    )
+
     # Phase U (2026-06-09): José — card on-demand cuando él escribe al bot,
     # NO en horario fijo.
     # Phase V (2026-06-10): el resumen del día de José YA NO se envía como
@@ -4225,7 +4266,7 @@ def _schedule_jobs() -> None:
         "sat 12:30 (domingo NADA), reminders */5min, "
         "cobranzas mon-fri 7:30, weekly_summaries fri 17:00, "
         "news_brief daily 6:00, monthly_recaps day 1 9:00+10:00, "
-        "consolidated_daily mon-fri 18:30, "
+        "consolidated_daily mon-fri 18:30, saturday_recap mon 8:00, "
         "jose_summary mon-sat 18:30 (card on-demand)"
     )
 
@@ -4240,6 +4281,9 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
          lambda now: now.weekday() <= 5 and (now.hour, now.minute) >= (8, 0)),
         ("consolidated_daily", _job_consolidated_daily,
          lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (18, 30)),
+        # Recap del sábado: solo lunes (weekday 0), desde las 8:00.
+        ("saturday_recap", _job_saturday_recap,
+         lambda now: now.weekday() == 0 and (now.hour, now.minute) >= (8, 0)),
         ("weekly_summaries", _job_weekly_summaries,
          lambda now: now.weekday() == 4 and (now.hour, now.minute) >= (17, 0)),
         ("monthly_sales_recap", _job_monthly_sales_recap,
@@ -5128,6 +5172,26 @@ async def trigger_consolidated_daily(request: Request) -> dict[str, Any]:
     from ask_agent import _send_consolidated_daily_summary
     result = await asyncio.to_thread(
         _send_consolidated_daily_summary, to_override, cc_override
+    )
+    return result
+
+
+@app.post("/admin/trigger-saturday-recap")
+async def trigger_saturday_recap(request: Request) -> dict[str, Any]:
+    """Dispara el recap del sábado ahora (testing). Reporta el sábado anterior.
+
+    Body opcional: {"to_override": ["..."], "cc_override": ["..."]}.
+    """
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    to_override = (body or {}).get("to_override")
+    cc_override = (body or {}).get("cc_override")
+    from ask_agent import send_saturday_recap_summary
+    result = await asyncio.to_thread(
+        send_saturday_recap_summary, to_override, cc_override
     )
     return result
 

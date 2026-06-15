@@ -53,6 +53,20 @@ def _hoy_ec() -> date:
     return datetime.now(LOCAL_TZ).date()
 
 
+def _ultimo_sabado(hoy: date | None = None) -> date:
+    """Sábado más reciente. Si `hoy` es sábado, lo retorna; si no, retrocede
+    al sábado anterior. Usado por el recap del lunes (que corre el lunes 8 AM
+    y debe reportar el sábado anterior).
+
+      lunes  → sábado (hoy − 2)
+      martes → sábado (hoy − 3)
+      sábado → ese mismo sábado
+    """
+    hoy = hoy or _hoy_ec()
+    delta = (hoy.weekday() - 5) % 7  # días desde el último sábado
+    return hoy - timedelta(days=delta)
+
+
 
 def _parse_date(s: str | None, default: date | None = None) -> date:
     """Parsea fecha ISO YYYY-MM-DD. Si está vacía, usa default o hoy."""
@@ -339,7 +353,7 @@ def _summary_html(user_email: str | None = None) -> str:
         )
     elif horario.get("estandar"):
         horario_html = (
-            '<p>⏰ Horario: <b>estándar (8:30 AM – 5:30 PM)</b>.</p>'
+            f'<p>⏰ Horario: <b>estándar ({activity_state.horario_estandar_label(hoy)})</b>.</p>'
         )
     else:
         desde = horario.get("desde") or "?"
@@ -795,7 +809,7 @@ def _cierre_caja_html(
 
     horario = activity_state.get_day_schedule(user_email, fecha)
     if horario and horario.get("estandar"):
-        horario_str = "8:30 AM – 5:30 PM (estándar)"
+        horario_str = f"{activity_state.horario_estandar_label(fecha)} (estándar)"
     elif horario:
         horario_str = (
             f"{horario.get('desde','—')} – {horario.get('hasta','—')}"
@@ -882,20 +896,25 @@ table {{ border-collapse:collapse; font-size:13px; width:100%; }}
     return html
 
 
-def _collaborator_block_html_v2(user_email: str) -> str:
+def _collaborator_block_html_v2(user_email: str, target_date: date | None = None) -> str:
     """Phase T (2026-06-09): bloque por colaborador en el correo consolidado.
 
     Diseño nuevo: caja grande con header colorido (alias), horario destacado,
     actividades por tipo, y para sucursales: cierre de caja COMPLETO con
     denominaciones (reemplaza el correo separado de cierre de caja).
+
+    `target_date` (2026-06-15): si se pasa, el bloque se arma para ESA fecha
+    (semana ISO incluida) en vez de hoy — lo usa el recap del sábado que corre
+    el lunes. Si es None, se comporta igual que siempre (hoy EC).
     """
-    hoy = _hoy_ec()
+    hoy = target_date or _hoy_ec()
     yesterday = hoy - timedelta(days=1)
     today_iso = hoy.isoformat()
     yesterday_iso = yesterday.isoformat()
-    week = activity_state.get_week(user_email)
+    week = activity_state.get_week(user_email, wk=activity_state.week_key(hoy))
     horario = activity_state.get_day_schedule(user_email, today_iso)
     alias = user_email.split("@")[0] if "@" in user_email else user_email
+    es_sabado_recap = target_date is not None and hoy.weekday() == 5
 
     # Determinar role + título del bloque
     es_asistente = user_email.lower() in ASISTENTE_EMAILS
@@ -915,6 +934,13 @@ def _collaborator_block_html_v2(user_email: str) -> str:
         titulo_bloque = f"👤 {alias.upper()}"
         sucursal = ""
 
+    # Rotación GYE de sábados: si el Asistente 1 GYE no reportó nada el sábado,
+    # se interpreta como ausencia esperada por turno (no pendiente/error).
+    if (es_sabado_recap
+            and user_email.lower() == GYE_ASISTENTE1_EMAIL
+            and _gye_sin_reporte_dia(user_email, today_iso)):
+        return _ausencia_rotativa_block_html(titulo_bloque, hoy.strftime("%d/%m/%Y"))
+
     # === Horario destacado ===
     if horario is None:
         horario_html = (
@@ -923,7 +949,7 @@ def _collaborator_block_html_v2(user_email: str) -> str:
     elif horario.get("estandar"):
         horario_html = (
             '<span style="color:#2e7d32;font-weight:600;">'
-            '⏰ Horario: 8:30 AM – 5:30 PM (estándar) ✅</span>'
+            f'⏰ Horario: {activity_state.horario_estandar_label(today_iso)} (estándar) ✅</span>'
         )
     else:
         desde = horario.get("desde") or "?"
@@ -1245,6 +1271,54 @@ ASISTENTE_EMAILS = {
 JOSE_EMAIL_CONS = "jsolorzano@biodegradablesecuador.com"
 CAJA_CHICA_ALERTA_JOSE = 30.0
 
+# ===== Rotación de asistentes GYE los sábados (2026-06-15) =====
+# En Guayaquil hay 2 asistentes que se turnan los sábados:
+#   - Asistente 1 GYE: info@  (caja/sucursal)
+#   - Asistente 2 GYE: José Solórzano (jsolorzano@, logística/ruta)
+# Un sábado trabaja uno, el siguiente el otro. Si un asistente NO llena el
+# reporte del sábado, se asume AUSENCIA ESPERADA por el turno rotativo — no
+# es error ni reporte pendiente. Solo aplica al recap del sábado (lunes 8 AM).
+GYE_ASISTENTE1_EMAIL = "info@biodegradablesecuador.com"
+GYE_ROTATIVOS_SABADO = {GYE_ASISTENTE1_EMAIL, JOSE_EMAIL_CONS}
+
+
+def _gye_sin_reporte_dia(email: str, fecha_iso: str) -> bool:
+    """True si el asistente GYE no registró NADA ese día (horario, cierre ni
+    marca diaria). Se usa para interpretar el sábado como ausencia esperada
+    por rotación, en vez de mostrarlo como pendiente/error."""
+    if activity_state.get_day_schedule(email, fecha_iso):
+        return False
+    if activity_state.get_cierre_caja(email, fecha_iso):
+        return False
+    try:
+        wk = activity_state.week_key(date.fromisoformat(fecha_iso))
+        week = activity_state.get_week(email, wk=wk)
+    except Exception:
+        return True
+    for a in (week.get("activities") or {}).values():
+        if a.get("tipo") == "diaria" and (a.get("log") or {}).get(fecha_iso) is not None:
+            return False
+    return True
+
+
+def _ausencia_rotativa_block_html(titulo_bloque: str, fecha_fmt: str) -> str:
+    """Bloque neutro (no rojo) para un asistente GYE ausente por turno rotativo
+    el sábado. Mismo marco verde que los demás asistentes, sin alarma."""
+    header_color = "#0e7c39"
+    return (
+        f'<div style="margin:28px 0;border:2px solid {header_color};border-radius:8px;'
+        f'overflow:hidden;background:#fff;">'
+        f'<div style="background:{header_color};color:#fff;padding:10px 16px;'
+        f'font-weight:700;font-size:16px;">{titulo_bloque}</div>'
+        f'<div style="padding:14px 18px;background:#f4faf6;">'
+        f'<p style="margin:0;font-size:13px;color:#555;">{fecha_fmt}</p>'
+        f'<p style="margin:8px 0 0;font-size:13px;color:#666;">'
+        f'🔁 <b>Ausencia esperada</b> — turno rotativo de sábado. '
+        f'Este asistente no estaba programado para asistir; no es un reporte '
+        f'pendiente.</p>'
+        f'</div></div>'
+    )
+
 
 def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
     """Phase V (2026-06-10): bloque de José para el consolidado diario.
@@ -1265,6 +1339,14 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
     entregas = activity_state.get_entregas_consolidadas_dia(JOSE_EMAIL_CONS, today_iso) or {}
     cc = activity_state.get_caja_chica(JOSE_EMAIL_CONS) or {"inicial": None, "saldo": 0.0, "movimientos": []}
     movs_hoy = activity_state.caja_chica_movimientos_dia(JOSE_EMAIL_CONS, today_iso) or []
+
+    # Rotación GYE de sábados: si José (Asistente 2 GYE) no registró ruta,
+    # envíos ni movimientos un sábado, es ausencia esperada por el turno
+    # rotativo — no un reporte pendiente.
+    if fecha_d.weekday() == 5 and not salidas and not entregas and not movs_hoy:
+        return _ausencia_rotativa_block_html(
+            "📦 ASISTENTE 2 GYE — José Solórzano", fecha_fmt
+        )
 
     # Resumen de entregas
     n_entregadas = sum(1 for e in entregas.values() if e.get("status") == "entregado")
@@ -1376,6 +1458,39 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
             'Sin envíos cargados hoy.</p>'
         )
 
+    # Observaciones de José (2026-06-15): sección dedicada que junta TODAS las
+    # observaciones que José ingresó por entrega (más las razones de no entrega)
+    # en un solo lugar claramente identificado, para que el gerente no tenga que
+    # cazarlas dentro de la tabla de envíos.
+    obs_items = []
+    for fid, e in sorted(entregas.items(), key=lambda kv: kv[1].get("fecha_emision", "")):
+        cliente_o = escape(e.get("cliente", "?"))
+        obs_txt = (e.get("observacion") or "").strip()
+        razon_txt = (e.get("razon_no_entrega") or "").strip()
+        partes = []
+        if obs_txt:
+            partes.append(escape(obs_txt))
+        if razon_txt and e.get("status") == "no_entregado":
+            partes.append(f'<i>No entregado: {escape(razon_txt)}</i>')
+        if partes:
+            obs_items.append(
+                f'<li style="margin:3px 0;"><b>{cliente_o}:</b> '
+                f'{" · ".join(partes)}</li>'
+            )
+    if obs_items:
+        observaciones_html = (
+            '<p style="margin:10px 0 4px;font-weight:600;color:#444">'
+            '📝 Observaciones de José</p>'
+            '<ul style="margin:4px 0 10px;padding-left:20px;font-size:13px;color:#333;">'
+            + "".join(obs_items) +
+            '</ul>'
+        )
+    else:
+        observaciones_html = (
+            '<p style="margin:10px 0;font-size:12px;color:#999;">'
+            '📝 Observaciones de José: sin observaciones registradas hoy.</p>'
+        )
+
     # Caja chica
     saldo = float(cc.get("saldo") or 0)
     inicial = float(cc.get("inicial") or 0)
@@ -1414,19 +1529,24 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'{fecha_fmt}  ·  {summary_chips}</p>'
         f'{salidas_html}'
         f'{entregas_html}'
+        f'{observaciones_html}'
         f'{caja_html}'
         f'</div>'
         f'</div>'
     )
 
 
-def _classify_dailies(user_email: str, today_iso: str) -> dict:
+def _classify_dailies(user_email: str, today_iso: str, wk: str | None = None) -> dict:
     """Cuenta hechas/parciales/no_hechas/sin_marcar de un user para hoy.
 
     Retorna también listas con las items problemáticas (no hechas + parciales)
     con sus razones, para mostrar en sección destacada.
+
+    `wk` (semana ISO) permite leer una semana distinta a la actual — necesario
+    para el recap del sábado que corre el lunes (el sábado cae en la semana
+    ISO anterior). Si es None, usa la semana actual (comportamiento histórico).
     """
-    week = activity_state.get_week(user_email)
+    week = activity_state.get_week(user_email, wk=wk)
     diarias = [
         (aid, a) for aid, a in week["activities"].items() if a["tipo"] == "diaria"
     ]
@@ -1776,14 +1896,22 @@ def _proyectos_pendientes_section(collaborator_data: list[dict]) -> str:
     )
 
 
-def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
+def _consolidated_daily_summary_html(
+    collaborator_emails: list[str], target_date: date | None = None
+) -> str:
     """Arma el HTML consolidado v2 (Phase O.2, 2026-06-05).
 
     Estructura: resumen ejecutivo arriba + sección problemáticas + asistentes en
     2 columnas + proyectos pendientes. Mucho más compacto y accionable.
+
+    `target_date` (2026-06-15): si se pasa, arma el resumen para ESA fecha (con
+    su semana ISO) en vez de hoy — lo usa el recap del sábado que corre el
+    lunes 8 AM. Si es None, comportamiento histórico (hoy EC).
     """
-    hoy = _hoy_ec()
+    hoy = target_date or _hoy_ec()
     today_iso = hoy.isoformat()
+    wk_target = activity_state.week_key(hoy)
+    es_sabado_recap = target_date is not None and hoy.weekday() == 5
     dias_es = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
     meses_es = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
                 "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
@@ -1798,13 +1926,21 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
     collaborator_data: list[dict] = []
     for email in sorted_collabs:
         alias = email.split("@")[0]
-        classif = _classify_dailies(email, today_iso)
+        classif = _classify_dailies(email, today_iso, wk=wk_target)
+        # ¿Asistente GYE ausente por turno rotativo este sábado? (no es error)
+        ausente_rotativo = (
+            es_sabado_recap
+            and email.lower() in GYE_ROTATIVOS_SABADO
+            and _gye_sin_reporte_dia(email, today_iso)
+        )
         # Horario
         horario = activity_state.get_day_schedule(email, today_iso)
-        if horario is None:
+        if ausente_rotativo:
+            hora = '<span style="color:#888;">ausencia esperada (turno)</span>'
+        elif horario is None:
             hora = '<span style="color:#999;">sin reportar</span>'
         elif horario.get("estandar"):
-            hora = "8:30–17:30 (std)"
+            hora = f"{activity_state.horario_estandar_corto(today_iso)} (std)"
         else:
             desde = horario.get("desde") or "?"
             hasta = horario.get("hasta") or "?"
@@ -1813,6 +1949,8 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
         cierre = activity_state.get_cierre_caja(email, today_iso)
         if cierre:
             cierre_html = f'${cierre["entregado"]:,.0f}'
+        elif ausente_rotativo:
+            cierre_html = "—"
         elif email in ASISTENTE_EMAILS:
             cierre_html = '<span style="color:#c62828;">sin marcar</span>'
         else:
@@ -1861,8 +1999,12 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
 
         # Sección "Lo que requiere seguimiento" arriba (problemas)
         problemas = _problemas_section(collaborator_data)
-        # Phase V (2026-06-11): nueva sección — colaboradores que NO marcaron NADA
-        alerta_sin_marcar = _sin_marcar_section(collaborator_data)
+        # Phase V (2026-06-11): nueva sección — colaboradores que NO marcaron NADA.
+        # En el recap del sábado NO aplica: los asistentes GYE pueden estar
+        # ausentes legítimamente por el turno rotativo (no es "no llenaron").
+        alerta_sin_marcar = (
+            "" if es_sabado_recap else _sin_marcar_section(collaborator_data)
+        )
 
         # Phase V (2026-06-11): bloques individuales, con José GYE intercalado
         # después de info@ (Asistente 1 GYE) y antes de quito@ (UIO).
@@ -1870,7 +2012,7 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
         jose_insertado = False
         for d in sorted_data:
             email_l = d["email"].lower()
-            bloques_list.append(_collaborator_block_html_v2(d["email"]))
+            bloques_list.append(_collaborator_block_html_v2(d["email"], target_date=target_date))
             # Después de info@ (GYE Asistente 1), insertar bloque de José
             if email_l == "info@biodegradablesecuador.com" and not jose_insertado:
                 try:
@@ -1890,6 +2032,20 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
         blocks_html = "".join(bloques_list)
         body_html = alerta_sin_marcar + problemas + blocks_html
 
+    if es_sabado_recap:
+        titulo_html = f"Resumen del sábado — {fecha_humana}"
+        intro_html = (
+            "Hola Daniel y Gabriela, acá el resumen de las actividades del "
+            "<b>sábado</b>. En GYE el turno de sábado es rotativo entre los dos "
+            "asistentes: si uno no reportó, es ausencia esperada (no pendiente)."
+        )
+    else:
+        titulo_html = f"Resumen diario del equipo — {fecha_humana}"
+        intro_html = (
+            "Hola Daniel y Gabriela, acá el resumen del día. Foco en lo que "
+            "requiere seguimiento (rojo/ámbar)."
+        )
+
     return f"""<!DOCTYPE html>
 <html><head><meta charset='utf-8'><style>
 body {{ font-family:'Segoe UI',Arial,sans-serif; color:#2c2c2c;
@@ -1901,11 +2057,10 @@ h3 {{ margin-bottom:6px; }}
             padding-top:10px; }}
 </style></head><body>
 
-<h2>Resumen diario del equipo — {fecha_humana}</h2>
+<h2>{titulo_html}</h2>
 
 <p style="font-size:13px;color:#555;">
-Hola Daniel y Gabriela, acá el resumen del día. Foco en lo que requiere
-seguimiento (rojo/ámbar).
+{intro_html}
 </p>
 
 <h3 style="color:#0e7c39;margin-top:18px;">📊 Resumen ejecutivo</h3>
@@ -1924,12 +2079,16 @@ Resumen consolidado automático del Activities Bot · {hoy.strftime("%d/%m/%Y")}
 def _send_consolidated_daily_summary(
     to_override: list[str] | None = None,
     cc_override: list[str] | None = None,
+    target_date: date | None = None,
 ) -> dict:
     """Manda el correo consolidado con todos los colaboradores no-supervisor.
 
     To/CC: parámetros explícitos (testing) > env CONSOLIDATED_DAILY_TO/_CC >
     defaults. Fase 2 (auditoría A8): los overrides de testing ya NO mutan
     os.environ del proceso.
+
+    `target_date` (2026-06-15): si se pasa, el resumen cubre ESA fecha en vez
+    de hoy — lo usa el recap del sábado que corre el lunes 8 AM.
     """
     # Tomar todos los users del state que NO son supervisores
     state = activity_state.load()
@@ -1946,7 +2105,7 @@ def _send_consolidated_daily_summary(
         and not u.lower().startswith("unidentified-")
     )
 
-    html = _consolidated_daily_summary_html(collaborators)
+    html = _consolidated_daily_summary_html(collaborators, target_date=target_date)
 
     sender = TRACKER_EMAIL_FROM  # malvarado@ (siempre desde el mismo)
     to_str = os.environ.get("CONSOLIDATED_DAILY_TO", CONSOLIDATED_DAILY_TO_DEFAULT)
@@ -1958,8 +2117,12 @@ def _send_consolidated_daily_summary(
     if cc_override is not None:  # lista vacía = sin CC (testing)
         cc_list = [e.strip() for e in cc_override if e.strip()]
 
-    fecha_str = _hoy_ec().strftime("%d/%m/%Y")
-    subject = f"Resumen diario del equipo — {fecha_str}"
+    es_sabado_recap = target_date is not None and target_date.weekday() == 5
+    fecha_str = (target_date or _hoy_ec()).strftime("%d/%m/%Y")
+    if es_sabado_recap:
+        subject = f"Resumen del sábado — {fecha_str}"
+    else:
+        subject = f"Resumen diario del equipo — {fecha_str}"
     graph_mail.send(
         from_user=sender,
         to=to_list,
@@ -1974,7 +2137,21 @@ def _send_consolidated_daily_summary(
         "cc": cc_list,
         "subject": subject,
         "collaborators": collaborators,
+        "target_date": (target_date or _hoy_ec()).isoformat(),
     }
+
+
+def send_saturday_recap_summary(
+    to_override: list[str] | None = None,
+    cc_override: list[str] | None = None,
+) -> dict:
+    """Recap del sábado que corre el lunes 8 AM. Reporta el sábado anterior
+    (única vista consolidada del sábado: el job 18:30 es Lun-Vie y nunca lo
+    cubría). Reutiliza toda la maquinaria del consolidado con target_date."""
+    sabado = _ultimo_sabado()
+    return _send_consolidated_daily_summary(
+        to_override, cc_override, target_date=sabado
+    )
 
 
 def _send_confirmacion_cierre_email(
