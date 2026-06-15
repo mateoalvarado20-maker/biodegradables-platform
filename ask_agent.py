@@ -25,8 +25,10 @@ Phase C (2026-05-29):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -44,6 +46,8 @@ MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 4000
 MAX_ITERATIONS = 10
 LOCAL_TZ = timezone(timedelta(hours=-5))
+
+logger = logging.getLogger("ask_agent")
 
 
 def _hoy_ec() -> date:
@@ -106,23 +110,149 @@ def _load_collaborators() -> dict[str, str]:
 COLLABORATORS = _load_collaborators()
 
 
-def _resolve_collaborator(name_or_email: str) -> str | None:
-    """Mapea 'Mateo' → 'malvarado@...'. Si ya es email, lo valida.
+def _strip_accents_lower(s: str) -> str:
+    """Minúsculas + sin acentos (NFKD). 'Sánchez' → 'sanchez'."""
+    if not s:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
-    Fase 2 (auditoría A6/C4): SOLO acepta colaboradores registrados en
-    KNOWN_COLLABORATORS. Antes aceptaba cualquier string con '@' — un email
-    mal tipeado (o inyectado vía prompt injection en datos externos) creaba
-    silenciosamente un usuario fantasma en el state y la actividad/reminder
-    "desaparecía" sin llegar a nadie.
+
+def _norm_name(s: str) -> str:
+    """Normaliza un nombre para matching: sin acentos, sin paréntesis (roles),
+    puntuación → espacio, espacios colapsados.
+
+    'Gabriela Bravo (Asistente 1 GYE)' → 'gabriela bravo'
+    'GABRIELA  SÁNCHEZ.' → 'gabriela sanchez'
     """
-    if not name_or_email:
-        return None
-    s = name_or_email.strip().lower()
-    if "@" in s:
-        if s in set(COLLABORATORS.values()):
-            return s
-        return None  # email no registrado — el tool devuelve error explícito
-    return COLLABORATORS.get(s)
+    s = _strip_accents_lower(s)
+    # Quitar lo que esté entre paréntesis (roles, sucursales)
+    out: list[str] = []
+    depth = 0
+    for ch in s:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    s = "".join(out)
+    # No alfanumérico → espacio (incluye '@' y '.', para tokens de email)
+    s = "".join(ch if ch.isalnum() else " " for ch in s)
+    return " ".join(s.split())
+
+
+def _collaborator_directory() -> tuple[dict[str, set[str]], dict[str, set[str]], set[str]]:
+    """Construye el índice de búsqueda de colaboradores REGISTRADOS.
+
+    Solo se delega a emails presentes en KNOWN_COLLABORATORS (garantía A6/C4:
+    nunca a un email arbitrario). EMAIL_TO_NAME solo aporta el nombre humano
+    de esos emails registrados; un email que aparece en EMAIL_TO_NAME pero NO
+    en KNOWN_COLLABORATORS (ej. dsanchez@ supervisor) NO es destino válido.
+
+    Devuelve:
+      exact: término_normalizado → {emails}  (alias, local-part, nombre completo)
+      tokens: email → {tokens del nombre/alias/local-part}  (para match parcial)
+      registered: set de emails registrados (lower)
+    """
+    registered = {e.strip().lower() for e in COLLABORATORS.values() if e}
+    exact: dict[str, set[str]] = {}
+    tokens: dict[str, set[str]] = {e: set() for e in registered}
+
+    def _add_exact(term: str, email: str) -> None:
+        nt = _norm_name(term)
+        if nt:
+            exact.setdefault(nt, set()).add(email)
+            tokens[email].update(nt.split())
+
+    # Aliases de KNOWN_COLLABORATORS (incluye 'gabriela'→gsanchez@, 'gye'→info@)
+    for alias, email in COLLABORATORS.items():
+        email = email.strip().lower()
+        if email in registered:
+            _add_exact(alias, email)
+    # Local-part del email ('gsanchez', 'malvarado') + nombre humano completo
+    for email in registered:
+        _add_exact(email.split("@")[0], email)
+        human = EMAIL_TO_NAME.get(email)
+        if human:
+            _add_exact(human, email)
+    return exact, tokens, registered
+
+
+def _resolve_collaborator_detail(name_or_email: str) -> dict:
+    """Resuelve un nombre/email a un colaborador registrado, con diagnóstico.
+
+    Robusto a: acentos, mayúsculas, espacios extra, nombre completo
+    ('Gabriela Sánchez'), alias ('gabriela'), local-part ('gsanchez') y email
+    completo. Si un término identifica a >1 colaborador, devuelve 'ambiguous'
+    con los candidatos en vez de elegir uno al azar (evita asignar a la
+    Gabriela equivocada).
+
+    Returns dict: {status: 'ok'|'ambiguous'|'not_found', email, candidates}
+      - candidates: lista de {email, nombre} cuando ambiguous/not_found.
+    """
+    exact, tokens, registered = _collaborator_directory()
+
+    def _cands(emails) -> list[dict]:
+        return [
+            {"email": e, "nombre": EMAIL_TO_NAME.get(e, e)}
+            for e in sorted(emails)
+        ]
+
+    def _all() -> list[dict]:
+        return _cands(registered)
+
+    if not name_or_email or not str(name_or_email).strip():
+        return {"status": "not_found", "email": None, "candidates": _all()}
+
+    raw = str(name_or_email).strip()
+
+    # 1. Email explícito: debe estar registrado (preserva A6/C4 — no fantasmas).
+    if "@" in raw:
+        low = raw.lower()
+        if low in registered:
+            return {"status": "ok", "email": low, "candidates": []}
+        # ¿el local-part o el nombre matchea aunque el dominio esté mal tipeado?
+        # NO asumimos: lo tratamos como término más abajo solo si no tiene
+        # dominio externo distinto. Para un email completo no registrado,
+        # rechazamos explícito.
+        return {"status": "not_found", "email": None, "candidates": _all()}
+
+    nq = _norm_name(raw)
+    if not nq:
+        return {"status": "not_found", "email": None, "candidates": _all()}
+
+    # 2. Match exacto por término normalizado (alias / nombre completo / local-part)
+    if nq in exact:
+        emails = exact[nq]
+        if len(emails) == 1:
+            return {"status": "ok", "email": next(iter(emails)), "candidates": []}
+        return {"status": "ambiguous", "email": None, "candidates": _cands(emails)}
+
+    # 3. Match parcial: los tokens de la query son subconjunto de los de UN
+    #    colaborador ('sanchez' → gabriela sanchez; 'mateo alvarado' exacto ya
+    #    cayó arriba). Si matchea a varios, es ambiguo.
+    qtokens = set(nq.split())
+    matches = [e for e, toks in tokens.items() if qtokens and qtokens <= toks]
+    if len(matches) == 1:
+        return {"status": "ok", "email": matches[0], "candidates": []}
+    if len(matches) > 1:
+        return {"status": "ambiguous", "email": None, "candidates": _cands(matches)}
+
+    return {"status": "not_found", "email": None, "candidates": _all()}
+
+
+def _resolve_collaborator(name_or_email: str) -> str | None:
+    """Mapea 'Mateo'/'Gabriela Sánchez'/'gsanchez@...' → email registrado.
+
+    Wrapper de compatibilidad: devuelve el email solo si la resolución es
+    inequívoca ('ok'). Para 'ambiguous' o 'not_found' devuelve None (los tool
+    handlers usan `_resolve_collaborator_detail` para dar el detalle al user).
+
+    Fase 2 (auditoría A6/C4): SOLO colaboradores registrados en
+    KNOWN_COLLABORATORS — nunca un email arbitrario (evita usuario fantasma).
+    """
+    return _resolve_collaborator_detail(name_or_email).get("email")
 
 
 def _list_today_activities(user_email: str | None = None) -> dict:
@@ -2929,6 +3059,25 @@ def _system_prompt_activities(user_email: str | None = None) -> str:
     target_email = (user_email or activity_state.DEFAULT_USER).lower()
     target_humano = _humano(target_email)
     es_supervisor = target_email in SUPERVISORS_ONLY_EMAILS
+    es_no_identificado = target_email.startswith("unidentified-")
+
+    # Cuenta sin vincular: el AAD del usuario no está registrado, así que el bot
+    # no sabe quién es ni qué permisos tiene (un supervisor como Daniel aparece
+    # acá si su AAD nunca se mapeó → pierde las tools de delegación). Damos un
+    # mensaje claro y accionable en vez de improvisar o "perder" la petición.
+    no_id_block = ""
+    if es_no_identificado:
+        no_id_block = """
+
+⚠️ CUENTA NO VINCULADA:
+El AAD de este usuario no está registrado, así que NO sé con certeza quién es
+ni qué puede hacer. NO asumas que es un colaborador ni un supervisor.
+Si pide asignar/delegar algo a otra persona, o marcar actividades, respondé:
+"Tu cuenta todavía no está vinculada al sistema, por eso no puedo registrar ni
+delegar nada de forma segura. Escribile a Mateo (malvarado@biodegradablesecuador.com)
+para que vincule tu usuario — tu AAD id aparece en los logs del bot." NO inventes
+ni crees actividades a ciegas.
+"""
 
     # Phase V (2026-06-11): si es supervisor (Daniel), bloque extra que le dice
     # cómo asignar actividades a OTROS colaboradores.
@@ -2961,7 +3110,7 @@ NO uses `add_activity_to_week` ni `mark_daily_activity` con el email de
 
 Estás hablando con: {target_humano}
 Hoy es {now_ec.strftime("%A %d de %B de %Y, %H:%M")} (Ecuador, UTC-5).
-{supervisor_block}
+{no_id_block}{supervisor_block}
 NO TENÉS acceso a datos de ventas, HubSpot, ni nada de gerencia. Si el usuario
 pregunta "cuánto vendimos hoy", "cómo va el mes", etc., decile amablemente:
 "Para consultas de ventas, cartera, leads y deals, usá el **Data Bot** (otro
@@ -3196,6 +3345,63 @@ DATA_TOOL_NAMES = {
 }
 
 
+def _missing_args(args: dict, required: tuple[str, ...]) -> list[str]:
+    """Devuelve los nombres de args requeridos que faltan o vienen vacíos.
+
+    Robustece contra el modelo omitiendo un campo 'required' del schema: en vez
+    de un KeyError críptico, el tool devuelve un error legible y accionable.
+    """
+    out: list[str] = []
+    for k in required:
+        v = args.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            out.append(k)
+    return out
+
+
+def _require_collaborator(
+    tool_name: str, args: dict, *, requested_by: str | None = None
+) -> dict:
+    """Resuelve `args['target_user']` a un colaborador registrado.
+
+    Centraliza la validación de TODOS los tools de delegación: un único lugar
+    para el manejo de 'falta target', 'no encontrado' y 'ambiguo'. Devuelve
+    `{'target': email}` si resolvió, o `{'error': msg}` listo para serializar.
+    Loguea cada intento para facilitar futuras investigaciones.
+    """
+    raw = args.get("target_user")
+    if raw is None or not str(raw).strip():
+        logger.warning("%s: sin target_user (requested_by=%s)",
+                       tool_name, requested_by or "?")
+        return {"error": "No me dijiste a QUIÉN asignar. Decime el nombre del "
+                         "colaborador (ej. 'Gabriela Sánchez', 'Mateo')."}
+
+    detail = _resolve_collaborator_detail(raw)
+    status = detail["status"]
+    if status == "ok":
+        return {"target": detail["email"]}
+
+    if status == "ambiguous":
+        opciones = ", ".join(
+            f"{c['nombre']} ({c['email']})" for c in detail["candidates"]
+        )
+        logger.warning("%s: '%s' ambiguo → %s (requested_by=%s)",
+                       tool_name, raw, opciones, requested_by or "?")
+        return {"error": f"'{raw}' coincide con varios colaboradores: "
+                         f"{opciones}. ¿A cuál te referís?"}
+
+    # not_found
+    disponibles = ", ".join(
+        f"{c['nombre']} ({c['email']})" for c in detail["candidates"]
+    )
+    logger.warning("%s: colaborador no encontrado '%s' (requested_by=%s)",
+                   tool_name, raw, requested_by or "?")
+    return {"error": f"No encontré a '{raw}' entre los colaboradores "
+                     f"registrados. Disponibles: {disponibles or '(ninguno)'}. "
+                     f"Si falta alguien, hay que registrarlo en "
+                     f"KNOWN_COLLABORATORS."}
+
+
 def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
     """Ejecuta una herramienta y devuelve el resultado como string JSON."""
     try:
@@ -3270,52 +3476,98 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
 
         # === Gestión de equipo (Phase E — Data Bot) ===
         if name == "list_team_collaborators":
-            return json.dumps(
-                [{"alias": k, "email": v} for k, v in COLLABORATORS.items()],
-                ensure_ascii=False,
-            )
+            seen: dict[str, dict] = {}
+            for alias, email in COLLABORATORS.items():
+                email = email.strip().lower()
+                entry = seen.setdefault(
+                    email,
+                    {"email": email, "nombre": EMAIL_TO_NAME.get(email, email),
+                     "alias": []},
+                )
+                entry["alias"].append(alias)
+            return json.dumps(list(seen.values()), ensure_ascii=False)
 
         if name == "add_activity_for_collaborator":
-            target = _resolve_collaborator(args["target_user"])
-            if not target:
+            res = _require_collaborator(name, args, requested_by=user_email)
+            if "error" in res:
+                return json.dumps(res, ensure_ascii=False)
+            target = res["target"]
+            miss = _missing_args(args, ("activity_id", "nombre"))
+            if miss:
+                logger.warning("add_activity_for_collaborator: faltan args %s "
+                               "(target=%s)", miss, target)
                 return json.dumps({
-                    "error": f"Colaborador no encontrado: '{args['target_user']}'. "
-                             f"Llamá list_team_collaborators para ver los disponibles.",
-                })
-            rec = activity_state.add_adhoc(
-                args["activity_id"],
-                args["nombre"],
-                user_email=target,
-                tipo=args.get("tipo", "unica"),
-                meta=args.get("meta"),
-                unidad=args.get("unidad", ""),
-            )
+                    "error": f"Faltan datos para crear la actividad: {', '.join(miss)}. "
+                             f"Pedile al usuario que aclare qué actividad asignar.",
+                }, ensure_ascii=False)
+            tipo = args.get("tipo") or "unica"
+            try:
+                rec = activity_state.add_adhoc(
+                    args["activity_id"],
+                    args["nombre"],
+                    user_email=target,
+                    tipo=tipo,
+                    meta=args.get("meta"),
+                    unidad=args.get("unidad", ""),
+                )
+            except ValueError as e:
+                # Actividad ya asignada (id duplicado) o tipo inválido.
+                logger.warning("add_activity_for_collaborator rechazada (target=%s, "
+                               "id=%s): %s", target, args.get("activity_id"), e)
+                msg = str(e)
+                if "Ya existe" in msg:
+                    msg = (f"'{args['activity_id']}' ya está asignada a "
+                           f"{_humano(target)} esta semana. Si querés cambiarla, "
+                           f"usá otro id o quitá la anterior primero.")
+                return json.dumps({"error": msg}, ensure_ascii=False)
+            logger.info("Actividad '%s' asignada a %s por %s",
+                        args["activity_id"], target, user_email or "?")
             return json.dumps({
                 "ok": True,
                 "target": target,
+                "target_nombre": _humano(target),
                 "activity_id": args["activity_id"],
                 "nombre": rec["nombre"],
                 "tipo": rec["tipo"],
             }, ensure_ascii=False)
 
         if name == "schedule_reminder_for_collaborator":
-            target = _resolve_collaborator(args["target_user"])
-            if not target:
+            res = _require_collaborator(name, args, requested_by=user_email)
+            if "error" in res:
+                return json.dumps(res, ensure_ascii=False)
+            target = res["target"]
+            miss = _missing_args(args, ("send_at", "message"))
+            if miss:
+                logger.warning("schedule_reminder_for_collaborator: faltan args %s "
+                               "(target=%s)", miss, target)
                 return json.dumps({
-                    "error": f"Colaborador no encontrado: '{args['target_user']}'. "
-                             f"Llamá list_team_collaborators primero.",
-                })
-            rec = reminders.add_reminder(
-                target,
-                args["send_at"],
-                args["message"],
-                created_by=user_email or "",
-                recurrence=args.get("recurrence", ""),
-            )
+                    "error": f"Faltan datos para programar el recordatorio: "
+                             f"{', '.join(miss)}. Necesito fecha/hora y el mensaje.",
+                }, ensure_ascii=False)
+            try:
+                rec = reminders.add_reminder(
+                    target,
+                    args["send_at"],
+                    args["message"],
+                    created_by=user_email or "",
+                    recurrence=args.get("recurrence", "") or "",
+                )
+            except (ValueError, KeyError) as e:
+                logger.warning("schedule_reminder_for_collaborator rechazado "
+                               "(target=%s, send_at=%s): %s",
+                               target, args.get("send_at"), e)
+                return json.dumps({
+                    "error": f"No pude programar el recordatorio: {e}. "
+                             f"Revisá que la fecha/hora esté en formato "
+                             f"ISO (YYYY-MM-DDTHH:MM).",
+                }, ensure_ascii=False)
+            logger.info("Reminder %s para %s @ %s creado por %s",
+                        rec["id"], target, rec["send_at"], user_email or "?")
             return json.dumps({
                 "ok": True,
                 "reminder_id": rec["id"],
                 "target": target,
+                "target_nombre": _humano(target),
                 "send_at": rec["send_at"],
                 "message": rec["message"],
                 "recurrence": rec.get("recurrence", ""),
@@ -3323,18 +3575,30 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
 
         if name == "list_pending_reminders":
             filt = args.get("target_user")
-            target = _resolve_collaborator(filt) if filt else None
+            target = None
+            if filt:
+                detail = _resolve_collaborator_detail(filt)
+                if detail["status"] != "ok":
+                    # Filtro no resoluble: no rompemos, listamos todos.
+                    logger.info("list_pending_reminders: filtro '%s' no resuelto "
+                                "(%s) — listo todos", filt, detail["status"])
+                else:
+                    target = detail["email"]
             pending = reminders.list_reminders(
                 target_user=target, only_pending=True
             )
             return json.dumps(pending, ensure_ascii=False)
 
         if name == "set_activity_priority_for_collaborator":
-            target = _resolve_collaborator(args["target_user"])
-            if not target:
+            res = _require_collaborator(name, args, requested_by=user_email)
+            if "error" in res:
+                return json.dumps(res, ensure_ascii=False)
+            target = res["target"]
+            miss = _missing_args(args, ("activity_id", "priority"))
+            if miss:
                 return json.dumps({
-                    "error": f"Colaborador no encontrado: '{args['target_user']}'.",
-                })
+                    "error": f"Faltan datos: {', '.join(miss)}.",
+                }, ensure_ascii=False)
             try:
                 rec = activity_state.set_priority(
                     args["activity_id"],
@@ -3344,12 +3608,15 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
                 return json.dumps({
                     "ok": True,
                     "target": target,
+                    "target_nombre": _humano(target),
                     "activity_id": args["activity_id"],
                     "priority": rec.get("priority"),
                     "nombre": rec.get("nombre"),
                 }, ensure_ascii=False)
             except ValueError as e:
-                return json.dumps({"error": str(e)})
+                logger.warning("set_activity_priority_for_collaborator (target=%s, "
+                               "id=%s): %s", target, args.get("activity_id"), e)
+                return json.dumps({"error": str(e)}, ensure_ascii=False)
 
         # === Proyecciones (Phase H — Data Bot) ===
         if name == "forecast_sales_for_month":
