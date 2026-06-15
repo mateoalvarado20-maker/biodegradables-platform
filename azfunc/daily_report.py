@@ -765,31 +765,27 @@ def _ventas_exportacion_ayer() -> dict | None:
 
 
 def _hubspot_data() -> dict | None:
-    """Consulta los KPIs de HubSpot + serie de leads 7d. Devuelve None si falla.
+    """Consulta los KPIs de leads de HubSpot. Devuelve None si falla.
 
-    Incluye métricas extendidas (deals stuck, conversion rate, leads sin
-    responder) para el resumen ejecutivo con Claude.
+    Enfoque 2026-06-15: Marketing = solo generación de demanda (leads). Las
+    métricas de cierre (deals ganados, pipeline, tasa de cierre) viven en la
+    sección Ventas del correo, no acá. Trae: leads de ayer, promedio 7d, serie
+    7d para el gráfico, resumen semanal con comparación WoW y leads recientes
+    sin responder (ventana móvil de 7 días).
     """
     if not HUBSPOT_OK:
         return None
     try:
         leads = hubspot_client.leads_ayer()
         promedio = hubspot_client.leads_promedio_7d()
-        deals = hubspot_client.deals_ganados_ayer()
-        pipe = hubspot_client.pipeline_abierto()
         serie_7d = hubspot_client.leads_por_dia_ultimos_7d()
-        # Nuevas métricas accionables
-        stuck = hubspot_client.deals_stuck(dias_min=14)
-        conv = hubspot_client.conversion_rate_30d()
-        sin_responder = hubspot_client.leads_sin_responder(horas_min=24)
+        semana = hubspot_client.leads_semana_wow()
+        sin_responder = hubspot_client.leads_sin_responder(horas_min=24, dias_ventana=7)
         return {
             "leads": leads,
             "promedio_7d": promedio,
-            "deals": deals,
-            "pipeline": pipe,
             "serie_7d": serie_7d,
-            "stuck": stuck,
-            "conversion": conv,
+            "semana": semana,
             "sin_responder": sin_responder,
         }
     except Exception as e:
@@ -818,38 +814,35 @@ def _generate_marketing_summary(hs: dict) -> dict:
         leads_total = hs["leads"]["total"]
         prom = hs.get("promedio_7d") or 0
         deltas_lead = ((leads_total - prom) / prom * 100) if prom > 0 else None
+        semana = hs.get("semana") or {}
+        sin_resp = hs.get("sin_responder") or {}
 
         prompt_data = {
             "leads_ayer": leads_total,
             "leads_promedio_7d": round(prom, 1),
             "delta_leads_pct": round(deltas_lead, 1) if deltas_lead is not None else None,
             "top_fuente": hs["leads"].get("top_source"),
-            "deals_ganados_ayer": hs["deals"]["count"],
-            "revenue_ganado_ayer": round(hs["deals"]["revenue"], 2),
-            "pipeline_count": hs["pipeline"]["count"],
-            "pipeline_valor": round(hs["pipeline"]["valor"], 2),
-            "deals_stuck_count": hs["stuck"]["count"],
-            "deals_stuck_valor": round(hs["stuck"]["valor"], 2),
-            "deals_stuck_top": hs["stuck"]["top"][:3],
-            "tasa_cierre_30d_pct": (
-                round(hs["conversion"]["tasa_cierre"] * 100, 1)
-                if hs["conversion"]["tasa_cierre"] is not None else None
+            "leads_esta_semana": semana.get("total"),
+            "leads_semana_pasada_misma_altura": semana.get("anterior"),
+            "delta_semanal_pct": (
+                round(semana["delta_pct"], 1)
+                if semana.get("delta_pct") is not None else None
             ),
-            "ganados_30d": hs["conversion"]["ganados"],
-            "perdidos_30d": hs["conversion"]["perdidos"],
-            "leads_sin_responder_count": hs["sin_responder"]["count"],
+            "leads_sin_responder_ultimos_7d": sin_resp.get("count", 0),
         }
 
         system = """Eres un asistente que ayuda a Daniel Sánchez, gerente general de
 Biodegradables Ecuador (empresa de empaques biodegradables en Quito y Guayaquil).
 
-Tu tarea: en base a datos de marketing del día anterior, escribir:
+Esta sección del correo es SOLO sobre generación de leads (demanda nueva). NO
+hables de ventas cerradas, pipeline ni tasa de cierre: eso va en otra sección.
+
+Tu tarea: en base a los datos de leads, escribir:
 1. Un resumen ejecutivo de 2-3 oraciones EN ESPAÑOL, claro, sin jerga, que le
-   diga a Daniel cómo estuvo ayer y qué destacaría. Habla en segunda persona
-   (vos / te).
-2. Una lista de 1 a 3 acciones concretas recomendadas para HOY. Cada acción
-   debe ser específica, no genérica. Si los datos están sanos, decílo y propone
-   acciones para mantener el ritmo, no inventes problemas.
+   diga a Daniel cómo viene la captación de leads (ayer y la semana) y qué
+   destacaría. Habla en segunda persona (vos / te).
+2. Una lista de 1 a 3 acciones concretas recomendadas para HOY. Específicas, no
+   genéricas. Si los datos están sanos, decílo y propone mantener el ritmo.
 
 Devuelve EXACTAMENTE este JSON, sin texto antes ni después:
 {
@@ -858,10 +851,9 @@ Devuelve EXACTAMENTE este JSON, sin texto antes ni después:
 }
 
 Reglas:
-- Si leads ayer son mucho menos que el promedio (>30% abajo): mencionalo
-- Si hay deals stuck con valor alto: priorizalos con nombre y monto
-- Si hay leads sin responder de >24h: alertálo
-- Si la tasa de cierre es <15%: sugerí revisar el funnel
+- Si los leads de ayer están muy por debajo del promedio (>30%): mencionalo
+- Si los leads de la semana caen vs la semana pasada (misma altura): alertálo
+- Si hay leads sin responder de los últimos 7 días: priorizá contactarlos
 - Si los números están bien: felicitálo y propone consolidar
 - No uses emojis en el resumen
 - No menciones números que no estén en los datos
@@ -905,7 +897,7 @@ Reglas:
 
 
 def _marketing_summary_fallback(hs: dict) -> dict:
-    """Resumen heurístico básico cuando Claude no está disponible."""
+    """Resumen heurístico básico (solo leads) cuando Claude no está disponible."""
     leads_total = hs["leads"]["total"]
     prom = hs.get("promedio_7d") or 0
     if prom > 0:
@@ -919,27 +911,65 @@ def _marketing_summary_fallback(hs: dict) -> dict:
     else:
         tendencia = f"{leads_total} leads nuevos"
 
-    deals = hs["deals"]
-    if deals["count"] > 0:
-        deals_msg = f" Cerraste {deals['count']} deal{'s' if deals['count']>1 else ''} por ${deals['revenue']:,.0f}."
+    semana = hs.get("semana") or {}
+    sem_total = semana.get("total")
+    sem_delta = semana.get("delta_pct")
+    if sem_total is not None:
+        lead_w = "lead" if sem_total == 1 else "leads"
+        if sem_delta is None:
+            semana_msg = f" En la semana van {sem_total} {lead_w}."
+        elif sem_delta >= 0:
+            semana_msg = (f" En la semana van {sem_total} {lead_w}, "
+                          f"{sem_delta:.0f}% más que a esta altura de la semana pasada.")
+        else:
+            semana_msg = (f" En la semana van {sem_total} {lead_w}, "
+                          f"{abs(sem_delta):.0f}% menos que a esta altura de la semana pasada.")
     else:
-        deals_msg = " No hubo deals cerrados ayer."
-    resumen = f"Ayer fue {tendencia}.{deals_msg}"
+        semana_msg = ""
+    resumen = f"Ayer fue {tendencia}.{semana_msg}"
 
     acciones = []
-    if hs["stuck"]["count"] > 0:
+    sin_resp = hs.get("sin_responder") or {"count": 0}
+    if sin_resp["count"] > 0:
         acciones.append(
-            f"Revisar los {hs['stuck']['count']} deals abiertos sin movimiento >14 días "
-            f"(${hs['stuck']['valor']:,.0f} en juego)."
-        )
-    if hs["sin_responder"]["count"] > 0:
-        acciones.append(
-            f"Responder a {hs['sin_responder']['count']} lead{'s' if hs['sin_responder']['count']>1 else ''} "
-            "que llevan >24h sin contacto."
+            f"Contactar a {sin_resp['count']} lead{'s' if sin_resp['count']>1 else ''} "
+            "de los últimos 7 días que siguen sin respuesta."
         )
     if not acciones:
-        acciones.append("Mantener el ritmo de prospección.")
+        acciones.append("Mantener el ritmo de captación de leads.")
     return {"resumen": resumen, "acciones": acciones}
+
+
+# Paleta semáforo reutilizada por las tarjetas y el veredicto de Marketing.
+_MKT_COLOR = {"ok": "#16a34a", "warn": "#f59e0b", "bad": "#dc2626"}
+
+
+def _marketing_verdict(ratio_leads, n_atencion: int, delta_semanal) -> dict:
+    """Veredicto de una palabra para el encabezado de Marketing (semáforo).
+
+    Solo leads. Traduce los datos a 🟢 BIEN / 🟡 REGULAR / 🔴 ATENCIÓN para que
+    cualquiera entienda el estado en 5 segundos. Regla:
+    - 🔴 si los leads de ayer cayeron fuerte (<50% del promedio), la semana
+      cae fuerte (>30% bajo la semana pasada), o hay 2+ leads sin responder.
+    - 🟡 si los leads de ayer están flojos (<85% del promedio), la semana cae
+      algo (<0%), o hay al menos 1 lead sin responder.
+    - 🟢 en cualquier otro caso.
+
+    Devuelve dict con emoji, etiqueta y colores (texto, fondo, borde) inline
+    porque Outlook estripa el CSS de <style> (ver Issue #3 del proyecto).
+    """
+    severe = ratio_leads is not None and ratio_leads < 0.5
+    weak = ratio_leads is not None and ratio_leads < 0.85
+    semana_cae_fuerte = delta_semanal is not None and delta_semanal < -30
+    semana_cae = delta_semanal is not None and delta_semanal < 0
+    if severe or semana_cae_fuerte or n_atencion >= 2:
+        return {"emoji": "🔴", "label": "ATENCIÓN", "texto": "#991b1b",
+                "fondo": "#fef2f2", "borde": "#dc2626"}
+    if weak or semana_cae or n_atencion >= 1:
+        return {"emoji": "🟡", "label": "REGULAR", "texto": "#78350f",
+                "fondo": "#fffbeb", "borde": "#f59e0b"}
+    return {"emoji": "🟢", "label": "BIEN", "texto": "#14532d",
+            "fondo": "#f0fdf4", "borde": "#16a34a"}
 
 
 CIUDAD_NOMBRE = {"UIO": "Quito", "GYE": "Guayaquil"}
@@ -1038,83 +1068,72 @@ def html_morning() -> str:
             tendencia_leads = "—"
         elif ratio_leads >= 1.0:
             leads_cls = "ok"
-            tendencia_leads = f"↑ +{(ratio_leads-1)*100:.0f}% vs promedio 7d"
+            tendencia_leads = f"↑ +{(ratio_leads-1)*100:.0f}% vs promedio diario"
         elif ratio_leads >= 0.7:
             leads_cls = "warn"
-            tendencia_leads = f"↓ {(ratio_leads-1)*100:.0f}% vs promedio 7d"
+            tendencia_leads = f"↓ {(ratio_leads-1)*100:.0f}% vs promedio diario"
         else:
             leads_cls = "bad"
-            tendencia_leads = f"↓ {(ratio_leads-1)*100:.0f}% vs promedio 7d"
+            tendencia_leads = f"↓ {(ratio_leads-1)*100:.0f}% vs promedio diario"
 
-        top_src_raw = hs["leads"]["top_source"] or "UNKNOWN"
-        top_src = SOURCE_NOMBRE.get(top_src_raw, top_src_raw.title())
-        top_src_count = hs["leads"]["top_source_count"]
-
-        deals_count = hs["deals"]["count"]
-        deals_revenue = hs["deals"]["revenue"]
-        deals_cls = "ok" if deals_count > 0 else "muted"
-
-        pipe_count = hs["pipeline"]["count"]
-        pipe_valor = hs["pipeline"]["valor"]
-
-        conv = hs.get("conversion") or {}
-        tasa_cierre = conv.get("tasa_cierre")
-        tasa_cierre_str = f"{tasa_cierre*100:.0f}%" if tasa_cierre is not None else "—"
-        ganados_30d = conv.get("ganados", 0)
-        perdidos_30d = conv.get("perdidos", 0)
-        if tasa_cierre is None:
-            cierre_cls = ""
-        elif tasa_cierre >= 0.20:
-            cierre_cls = "ok"
-        elif tasa_cierre >= 0.10:
-            cierre_cls = "warn"
+        # ----- Leads de la semana + comparación WoW (misma altura) -----
+        sem = hs.get("semana") or {}
+        sem_total = sem.get("total") or 0
+        sem_delta = sem.get("delta_pct")
+        if sem_delta is None:
+            sem_cls = ""
+            tendencia_sem = "Sin comparación disponible"
+        elif sem_delta >= 0:
+            sem_cls = "ok"
+            tendencia_sem = f"↑ +{sem_delta:.0f}% vs semana pasada (misma altura)"
         else:
-            cierre_cls = "bad"
+            sem_cls = "bad" if sem_delta < -15 else "warn"
+            tendencia_sem = f"↓ {sem_delta:.0f}% vs semana pasada (misma altura)"
 
-        stuck = hs.get("stuck") or {"count": 0, "valor": 0, "top": []}
+        # Fuente top de la semana (cae a la fuente de ayer si la semana no tiene)
+        top_src_raw = sem.get("top_source") or hs["leads"]["top_source"] or "UNKNOWN"
+        top_src = SOURCE_NOMBRE.get(top_src_raw, top_src_raw.title())
+        top_src_count = sem.get("top_source_count") or 0
+
+        # ----- Leads sin responder (ventana móvil 7 días) -----
         sin_resp = hs.get("sin_responder") or {"count": 0, "leads": []}
+        sin_count = sin_resp["count"]
+        if sin_count == 0:
+            sin_cls = "ok"
+            sin_sub = "Todos contactados"
+        else:
+            sin_cls = "warn" if sin_count < 3 else "bad"
+            sin_sub = "Requieren contacto"
 
         # Resumen ejecutivo + acciones con Claude
         summary = _generate_marketing_summary(hs)
         resumen_html = summary.get("resumen") or ""
         acciones = summary.get("acciones") or []
 
-        # Sección "Necesita atención" — combina items concretos + acciones IA
+        # Sección "Necesita atención" — solo leads (Marketing = generación de demanda)
         atencion_items: list[str] = []
-        if stuck["count"] > 0:
-            top_stuck = stuck["top"][0] if stuck["top"] else None
-            if top_stuck:
-                atencion_items.append(
-                    f"<b>{stuck['count']} deals sin movimiento &gt;14 días</b> "
-                    f"({fmt_money(stuck['valor'])} en juego). "
-                    f"El más grande: <i>{top_stuck['nombre']}</i> "
-                    f"({fmt_money(top_stuck['monto'])}, "
-                    f"{top_stuck.get('dias_sin_movimiento','?')}d sin update)"
-                )
-            else:
-                atencion_items.append(
-                    f"<b>{stuck['count']} deals sin movimiento &gt;14 días</b> "
-                    f"({fmt_money(stuck['valor'])} en juego)"
-                )
-        if sin_resp["count"] > 0:
+        if sin_count > 0:
             top_lead = sin_resp["leads"][0] if sin_resp["leads"] else None
+            plural = "s" if sin_count > 1 else ""
             if top_lead:
+                dias = top_lead.get("dias")
+                dias_txt = (f", hace {dias} día{'s' if dias != 1 else ''}"
+                            if dias is not None else "")
                 atencion_items.append(
-                    f"<b>{sin_resp['count']} lead{'s' if sin_resp['count']>1 else ''} "
-                    f"sin responder &gt;24h.</b> Ej: <i>{top_lead['nombre']}</i>"
+                    f"<b>{sin_count} lead{plural} sin responder (últimos 7 días).</b> "
+                    f"El más antiguo: <i>{top_lead['nombre']}</i>"
                     + (f" ({top_lead['email']})" if top_lead.get('email') else "")
+                    + dias_txt
                 )
             else:
                 atencion_items.append(
-                    f"<b>{sin_resp['count']} lead{'s' if sin_resp['count']>1 else ''} "
-                    f"sin responder &gt;24h</b>"
+                    f"<b>{sin_count} lead{plural} sin responder (últimos 7 días)</b>"
                 )
         # Sumar las acciones que sugiere Claude (que no estén ya cubiertas)
         for a in acciones:
             if a and a not in atencion_items:
                 atencion_items.append(a)
 
-        atencion_html = ""
         if atencion_items:
             li_items = "".join(f'<li style="margin:4px 0;">{it}</li>' for it in atencion_items[:5])
             atencion_html = f"""
@@ -1123,6 +1142,11 @@ def html_morning() -> str:
   <ul style="margin:0;padding-left:20px;color:#78350f;">
     {li_items}
   </ul>
+</div>"""
+        else:
+            atencion_html = """
+<div style="background:#f0fdf4;border-left:4px solid #16a34a;padding:10px 16px;border-radius:4px;margin:14px 0;">
+  <p style="margin:0;font-weight:600;color:#14532d;">✅ Nada urgente — el equipo está al día.</p>
 </div>"""
 
         # Gráfico de tendencia 7d
@@ -1135,56 +1159,76 @@ def html_morning() -> str:
        style="max-width:100%;height:auto;border:1px solid #d9e0d9;border-radius:6px;"/>
 </div>"""
 
-        # Resumen ejecutivo (cita destacada arriba de todo)
-        resumen_html_block = ""
-        if resumen_html:
-            resumen_html_block = f"""
-<div style="background:#f0fdf4;border-left:4px solid #16a34a;padding:12px 16px;margin:12px 0;border-radius:4px;">
-  <p style="margin:0;color:#14532d;line-height:1.45;">{resumen_html}</p>
+        # ----- Veredicto semáforo (encabezado de una línea) -----
+        veredicto = _marketing_verdict(ratio_leads, len(atencion_items), sem_delta)
+        resumen_txt = resumen_html or "Sin novedades de captación de leads para destacar."
+        veredicto_block = f"""
+<div style="background:{veredicto['fondo']};border-left:4px solid {veredicto['borde']};padding:12px 16px;margin:12px 0;border-radius:4px;">
+  <p style="margin:0 0 4px 0;font-weight:700;color:{veredicto['texto']};font-size:15px;">
+    Marketing hoy: {veredicto['emoji']} {veredicto['label']}
+  </p>
+  <p style="margin:0;color:{veredicto['texto']};line-height:1.45;">{resumen_txt}</p>
 </div>"""
 
-        hubspot_section = f"""
-<h3>📣 Marketing y Prospección</h3>
-{resumen_html_block}
+        # ----- Colores de cada tarjeta -----
+        leads_color = _MKT_COLOR.get(leads_cls, "#6b7280")
+        sem_color = _MKT_COLOR.get(sem_cls, "#6b7280")
+        sin_color = _MKT_COLOR.get(sin_cls, "#6b7280")
 
-<p style="margin:14px 0 6px 0;font-weight:600;color:#374151;">📊 Captación de ayer</p>
+        # ----- ¿De dónde vinieron los leads? (de la semana) -----
+        fuente_block = ""
+        if sem_total > 0 and top_src_count:
+            fuente_block = f"""
+<p style="margin:14px 0 0 0;color:#374151;font-size:13px;">
+  <b>¿De dónde vinieron?</b> La mayoría llegó por <b>{top_src}</b>
+  ({top_src_count} de {sem_total} {"lead" if sem_total == 1 else "leads"} esta semana).
+</p>"""
+
+        hubspot_section = f"""
+<h3>📣 Marketing</h3>
+{veredicto_block}
+
+<p style="margin:14px 0 6px 0;font-weight:600;color:#374151;">📊 Generación de leads</p>
 <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:6px 0 0 0;">
   <tr>
-    <td style="padding:8px 12px;background:#f9fafb;border-left:3px solid #16a34a;">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Leads nuevos</div>
+    <td style="padding:10px 12px;background:#f9fafb;border-left:3px solid {leads_color};">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Leads nuevos (ayer)</div>
       <div style="font-size:22px;font-weight:700;color:#111827;margin-top:2px;">{leads_ayer_total}</div>
-      <div style="font-size:12px;color:#6b7280;">{tendencia_leads}</div>
-      <div style="font-size:11px;color:#9ca3af;margin-top:4px;font-style:italic;">
-        Lead = persona o empresa que mostró interés por primera vez (web, llamada, evento, Apollo).
+      <div style="font-size:12px;color:{leads_color};font-weight:600;margin-top:2px;">{tendencia_leads}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:3px;font-style:italic;">
+        Personas o empresas que mostraron interés por primera vez.
       </div>
     </td>
   </tr>
   <tr><td style="height:6px;"></td></tr>
   <tr>
-    <td style="padding:8px 12px;background:#f9fafb;border-left:3px solid #2563eb;">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Deals ganados ayer</div>
-      <div style="font-size:22px;font-weight:700;color:#111827;margin-top:2px;">{deals_count} · {fmt_money(deals_revenue)}</div>
-      <div style="font-size:11px;color:#9ca3af;margin-top:4px;font-style:italic;">
-        Deal ganado = lead que cerró compra y se vuelve cliente.
+    <td style="padding:10px 12px;background:#f9fafb;border-left:3px solid {sem_color};">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Leads esta semana</div>
+      <div style="font-size:22px;font-weight:700;color:#111827;margin-top:2px;">{sem_total}</div>
+      <div style="font-size:12px;color:{sem_color};font-weight:600;margin-top:2px;">{tendencia_sem}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:3px;font-style:italic;">
+        Acumulado de lunes a hoy.
       </div>
     </td>
   </tr>
   <tr><td style="height:6px;"></td></tr>
   <tr>
-    <td style="padding:8px 12px;background:#f9fafb;border-left:3px solid #f59e0b;">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">En negociación ahora</div>
-      <div style="font-size:22px;font-weight:700;color:#111827;margin-top:2px;">{pipe_count} deals · {fmt_money(pipe_valor)}</div>
-      <div style="font-size:11px;color:#9ca3af;margin-top:4px;font-style:italic;">
-        Leads que están en proceso de venta pero aún no cerraron.
+    <td style="padding:10px 12px;background:#f9fafb;border-left:3px solid {sin_color};">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Sin responder (últimos 7 días)</div>
+      <div style="font-size:22px;font-weight:700;color:#111827;margin-top:2px;">{sin_count}</div>
+      <div style="font-size:12px;color:{sin_color};font-weight:600;margin-top:2px;">{sin_sub}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-top:3px;font-style:italic;">
+        Leads recientes que aún no reciben respuesta.
       </div>
     </td>
   </tr>
 </table>
+{fuente_block}
 
 {atencion_html}
 {chart_html}
 <p class="muted-text" style="margin-top:8px;font-size:11px;">
-  Fuente: HubSpot CRM. Próximamente: costo por lead cuando conectemos Meta Ads y Google Ads.
+  Fuente: HubSpot CRM. Próximamente en este resumen: tráfico web y costo por lead.
 </p>"""
     elif HUBSPOT_OK is False:
         hubspot_section = ""  # módulo no cargó, omitir silenciosamente
