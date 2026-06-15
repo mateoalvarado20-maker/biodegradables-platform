@@ -42,6 +42,7 @@ BOT_FILES = [
     "contifico_client.py",
     "hubspot_client.py",
     "graph_mail.py",
+    "graph_calendar_app.py",
     "pbi_cloud.py",
     "apollo_rest.py",
     # reportes que corren dentro del bot

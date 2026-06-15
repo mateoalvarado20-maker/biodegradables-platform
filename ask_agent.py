@@ -36,7 +36,9 @@ from anthropic import Anthropic
 
 import activity_state
 import contifico_client
+import core_config
 import forecasting
+import graph_calendar_app
 import graph_mail
 import hubspot_client
 import news_brief
@@ -2284,6 +2286,139 @@ def send_saturday_recap_summary(
     )
 
 
+# ===== Resumen de carga por colaborador (Feature 2026-06-15) =====
+def _team_collaborator_emails() -> list[str]:
+    """Colaboradores no-supervisor con state (excluye José y unidentified)."""
+    state = activity_state.load()
+    return sorted(
+        u for u in (state.get("users") or {})
+        if u.lower() not in SUPERVISORS_ONLY_EMAILS
+        and u.lower() != JOSE_EMAIL_CONS
+        and not u.lower().startswith("unidentified-")
+    )
+
+
+def _workload_rollup(user_email: str | None) -> dict:
+    """Carga de UN colaborador: cuenta tareas no-diarias por estado efectivo y
+    lista las próximas fechas (no finalizadas). Las diarias no cuentan acá."""
+    email = (user_email or "").lower()
+    tasks = activity_state.list_tasks(email)
+    counts = {"pendiente": 0, "en_progreso": 0, "finalizada": 0, "vencida": 0}
+    proximas: list[dict] = []
+    for aid, entry, eff in tasks:
+        if eff in counts:
+            counts[eff] += 1
+        if eff != "finalizada" and entry.get("fecha_limite"):
+            proximas.append({
+                "nombre": entry.get("nombre", aid),
+                "fecha_limite": entry["fecha_limite"],
+                "status": eff,
+            })
+    proximas.sort(key=lambda p: p["fecha_limite"])
+    return {
+        "email": email,
+        "nombre": EMAIL_TO_NAME.get(email, user_email),
+        "pendientes": counts["pendiente"],
+        "en_progreso": counts["en_progreso"],
+        "finalizadas": counts["finalizada"],
+        "vencidas": counts["vencida"],
+        "abiertas": counts["pendiente"] + counts["en_progreso"] + counts["vencida"],
+        "proximas": proximas,
+    }
+
+
+def _team_workload_html() -> str:
+    """HTML del roll-up de carga de TODO el equipo (tabla resumen + próximas
+    fechas por colaborador). Lo usa el reporte semanal y el endpoint admin."""
+    emails = _team_collaborator_emails()
+    css = (
+        "<style>body{font-family:Segoe UI,Arial,sans-serif;color:#222;}"
+        "table{border-collapse:collapse;width:100%;margin:6px 0 18px;}"
+        "th,td{border:1px solid #ddd;padding:6px 8px;font-size:13px;text-align:left;}"
+        "th{background:#0e7c39;color:#fff;}h3{margin:18px 0 4px;}"
+        ".v{color:#c62828;font-weight:bold;}</style>"
+    )
+    hoy = _hoy_ec().strftime("%d/%m/%Y")
+    parts = [css, f"<h2>📋 Carga de tareas del equipo — {hoy}</h2>"]
+    if not emails:
+        parts.append("<p>No hay colaboradores con tareas registradas.</p>")
+        return "".join(parts)
+    parts.append(
+        "<table><tr><th>Colaborador</th><th>Pendientes</th><th>En progreso</th>"
+        "<th>Vencidas</th><th>Finalizadas (semana)</th></tr>"
+    )
+    rollups = [_workload_rollup(e) for e in emails]
+    for r in rollups:
+        venc = f'<span class="v">{r["vencidas"]}</span>' if r["vencidas"] else "0"
+        parts.append(
+            f'<tr><td>{r["nombre"]}</td><td>{r["pendientes"]}</td>'
+            f'<td>{r["en_progreso"]}</td><td>{venc}</td>'
+            f'<td>{r["finalizadas"]}</td></tr>'
+        )
+    parts.append("</table>")
+    for r in rollups:
+        if not r["proximas"]:
+            continue
+        parts.append(
+            f'<h3>{r["nombre"]} — próximas fechas</h3><table>'
+            "<tr><th>Tarea</th><th>Fecha límite</th><th>Estado</th></tr>"
+        )
+        for p in r["proximas"]:
+            cls = ' class="v"' if p["status"] == "vencida" else ""
+            parts.append(
+                f'<tr><td>{p["nombre"]}</td><td{cls}>{p["fecha_limite"]}</td>'
+                f'<td>{p["status"]}</td></tr>'
+            )
+        parts.append("</table>")
+    return "".join(parts)
+
+
+def _workload_text_for_chat(user_email: str | None = None) -> str:
+    """Markdown compacto para el comando del bot. user_email None = todo el
+    equipo; con valor = solo ese colaborador."""
+    targets = [user_email.lower()] if user_email else _team_collaborator_emails()
+    if not targets:
+        return "No hay colaboradores con tareas registradas."
+    lines = ["📋 **Carga de tareas**"]
+    for email in targets:
+        r = _workload_rollup(email)
+        lines.append(
+            f"\n**{r['nombre']}** — "
+            f"⏳ {r['pendientes']} pend · 🔄 {r['en_progreso']} en progreso · "
+            f"⚠️ {r['vencidas']} vencidas · ✅ {r['finalizadas']} finalizadas"
+        )
+        for p in r["proximas"][:5]:
+            marca = "⚠️" if p["status"] == "vencida" else "•"
+            lines.append(f"  {marca} {p['nombre']} → {p['fecha_limite']} ({p['status']})")
+    return "\n".join(lines)
+
+
+def send_team_workload_summary(
+    to_override: list[str] | None = None,
+    cc_override: list[str] | None = None,
+) -> dict:
+    """Envía el roll-up de carga del equipo a supervisores (Daniel + Gabriela).
+
+    Lo llama el job semanal del viernes (tras los resúmenes per-user) y el
+    endpoint admin de testing. Reusa los destinatarios del consolidado diario.
+    """
+    html = _team_workload_html()
+    sender = TRACKER_EMAIL_FROM
+    to_str = os.environ.get("CONSOLIDATED_DAILY_TO", CONSOLIDATED_DAILY_TO_DEFAULT)
+    cc_str = os.environ.get("CONSOLIDATED_DAILY_CC", CONSOLIDATED_DAILY_CC_DEFAULT)
+    to_list = [e.strip() for e in to_str.split(",") if e.strip()]
+    cc_list = [e.strip() for e in cc_str.split(",") if e.strip()]
+    if to_override:
+        to_list = [e.strip() for e in to_override if e.strip()]
+    if cc_override is not None:
+        cc_list = [e.strip() for e in cc_override if e.strip()]
+    subject = f"Resumen de carga del equipo — semana {activity_state.week_key()}"
+    graph_mail.send(
+        from_user=sender, to=to_list, subject=subject, html_body=html, cc=cc_list,
+    )
+    return {"ok": True, "from": sender, "to": to_list, "cc": cc_list, "subject": subject}
+
+
 def _send_confirmacion_cierre_email(
     emisor_email: str,
     fecha: str,
@@ -2723,6 +2858,59 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_team_workload",
+        "description": (
+            "Resumen de carga de tareas del equipo: pendientes, en progreso, "
+            "vencidas, finalizadas y próximas fechas por colaborador. Usá cuando "
+            "el user pregunte '¿cómo va el equipo?', '¿qué tiene pendiente Mateo?', "
+            "'mostrame las tareas vencidas'. Si pasás `target_user` muestra solo "
+            "ese colaborador; sin él, todo el equipo."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_user": {
+                    "type": "string",
+                    "description": "Opcional. Nombre o email del colaborador. Vacío = todo el equipo.",
+                },
+            },
+        },
+    },
+    {
+        "name": "create_calendar_meeting_for_collaborator",
+        "description": (
+            "Crea una reunión/evento en el calendario de Outlook/Teams de un "
+            "colaborador (SOLO Daniel o Gabriela Sánchez por ahora). Usá cuando "
+            "el user pida 'agéndame reunión con X el martes 10am', 'ponme un "
+            "evento el viernes 3pm'. Necesita inicio y fin con hora en ISO."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_user": {
+                    "type": "string",
+                    "description": "Nombre o email. Solo Daniel/Gabriela Sánchez habilitados.",
+                },
+                "subject": {"type": "string", "description": "Título de la reunión."},
+                "start": {
+                    "type": "string",
+                    "description": "Inicio ISO con hora YYYY-MM-DDTHH:MM (hora Ecuador).",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "Fin ISO con hora YYYY-MM-DDTHH:MM.",
+                },
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Emails de invitados (opcional).",
+                },
+                "body": {"type": "string", "description": "Descripción (opcional)."},
+            },
+            "required": ["target_user", "subject", "start", "end"],
+        },
+    },
+    {
         "name": "add_activity_for_collaborator",
         "description": (
             "Asigna una actividad nueva a un colaborador (NO a vos mismo). "
@@ -2759,6 +2947,11 @@ TOOLS = [
                 "unidad": {
                     "type": "string",
                     "description": "Unidad de la meta (ej. '%', 'correos').",
+                },
+                "fecha_limite": {
+                    "type": "string",
+                    "description": "Fecha límite opcional ISO YYYY-MM-DD. Cuando llegue, "
+                                   "el bot le pregunta al colaborador si ya la completó.",
                 },
             },
             "required": ["target_user", "activity_id", "nombre"],
@@ -2974,6 +3167,11 @@ TOOLS = [
                 "unidad": {
                     "type": "string",
                     "description": "Unidad de la meta (ej. 'correos', '%', 'horas').",
+                },
+                "fecha_limite": {
+                    "type": "string",
+                    "description": "Fecha límite opcional ISO YYYY-MM-DD. Al llegar, el "
+                                   "bot te pregunta si la completaste antes de cerrarla.",
                 },
             },
             "required": ["activity_id", "nombre"],
@@ -3303,10 +3501,12 @@ TRACKER_TOOL_NAMES = {
 # Daniel puede asignar actividades a cualquier colaborador desde su chat.
 SUPERVISOR_EXTRA_TOOLS_ACTIVITIES = {
     "list_team_collaborators",
+    "list_team_workload",
     "add_activity_for_collaborator",
     "schedule_reminder_for_collaborator",
     "set_activity_priority_for_collaborator",
     "list_pending_reminders",
+    "create_calendar_meeting_for_collaborator",
 }
 
 # Phase V (2026-06-11): mapa email → nombre humano. Evita que Claude se
@@ -3336,10 +3536,12 @@ DATA_TOOL_NAMES = {
     "get_hubspot_leads_ayer", "get_hubspot_leads_promedio_7d",
     "get_hubspot_deals_ganados_ayer", "get_hubspot_pipeline_abierto",
     "list_team_collaborators",
+    "list_team_workload",
     "add_activity_for_collaborator",
     "schedule_reminder_for_collaborator",
     "set_activity_priority_for_collaborator",
     "list_pending_reminders",
+    "create_calendar_meeting_for_collaborator",
     "forecast_sales_for_month",
     "analyze_product_mix",
 }
@@ -3487,6 +3689,64 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
                 entry["alias"].append(alias)
             return json.dumps(list(seen.values()), ensure_ascii=False)
 
+        if name == "list_team_workload":
+            filt = args.get("target_user")
+            target = None
+            if filt:
+                detail = _resolve_collaborator_detail(filt)
+                if detail["status"] != "ok":
+                    return json.dumps({
+                        "error": f"No pude resolver '{filt}' a un colaborador. "
+                                 f"Usá list_team_collaborators para ver los nombres.",
+                    }, ensure_ascii=False)
+                target = detail["email"]
+            if target:
+                return json.dumps(_workload_rollup(target), ensure_ascii=False)
+            rollups = [_workload_rollup(e) for e in _team_collaborator_emails()]
+            return json.dumps({"equipo": rollups}, ensure_ascii=False)
+
+        if name == "create_calendar_meeting_for_collaborator":
+            res = _require_collaborator(name, args, requested_by=user_email)
+            if "error" in res:
+                return json.dumps(res, ensure_ascii=False)
+            target = res["target"]
+            if target.lower() not in {e.lower() for e in core_config.CALENDAR_SYNC_USERS}:
+                return json.dumps({
+                    "error": f"El calendario solo está habilitado para Daniel y "
+                             f"Gabriela Sánchez por ahora ({_humano(target)} no).",
+                }, ensure_ascii=False)
+            miss = _missing_args(args, ("subject", "start", "end"))
+            if miss:
+                return json.dumps({
+                    "error": f"Faltan datos para la reunión: {', '.join(miss)}. "
+                             f"Necesito título, inicio y fin con hora (ISO).",
+                }, ensure_ascii=False)
+            try:
+                ev = graph_calendar_app.create_meeting(
+                    target,
+                    subject=args["subject"],
+                    start_iso=args["start"],
+                    end_iso=args["end"],
+                    body_html=args.get("body", ""),
+                    attendees=args.get("attendees"),
+                )
+            except Exception as e:
+                logger.warning("create_calendar_meeting_for_collaborator falló "
+                               "(target=%s): %s", target, e)
+                return json.dumps({
+                    "error": f"No pude crear la reunión: {e}",
+                }, ensure_ascii=False)
+            logger.info("Reunión '%s' creada en calendario de %s por %s",
+                        args["subject"], target, user_email or "?")
+            return json.dumps({
+                "ok": True,
+                "target": target,
+                "target_nombre": _humano(target),
+                "subject": args["subject"],
+                "event_id": ev.get("id"),
+                "web_link": ev.get("webLink"),
+            }, ensure_ascii=False)
+
         if name == "add_activity_for_collaborator":
             res = _require_collaborator(name, args, requested_by=user_email)
             if "error" in res:
@@ -3509,6 +3769,7 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
                     tipo=tipo,
                     meta=args.get("meta"),
                     unidad=args.get("unidad", ""),
+                    fecha_limite=args.get("fecha_limite"),
                 )
             except ValueError as e:
                 # Actividad ya asignada (id duplicado) o tipo inválido.
@@ -3663,6 +3924,7 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
                 tipo=args.get("tipo", "unica"),
                 meta=args.get("meta"),
                 unidad=args.get("unidad", ""),
+                fecha_limite=args.get("fecha_limite"),
             )
             return json.dumps(
                 {"ok": True, "activity_id": args["activity_id"],
