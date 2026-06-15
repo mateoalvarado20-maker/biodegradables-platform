@@ -452,7 +452,8 @@ def q_top_deudores_ciudad(ciudad: str, n: int = 7) -> list[dict]:
         [],
     )
     return [
-        {"[Cliente]": r["cliente"], "[Deuda]": r["saldo_vencido"]}
+        {"[Cliente]": r["cliente"], "[Deuda]": r["saldo_vencido"],
+         "[DiasAtraso]": r.get("dias_atraso_max", 0)}
         for r in rows
     ]
 
@@ -989,11 +990,12 @@ def html_morning() -> str:
     )
     def _top_rows(rows: list[dict]) -> str:
         if not rows:
-            return '<tr><td colspan="2" class="muted-text">Sin clientes con cartera vencida.</td></tr>'
+            return '<tr><td colspan="3" class="muted-text">Sin clientes con cartera vencida.</td></tr>'
         return "".join(
             f'<tr><td>{r.get("[Cliente]","—")}</td>'
             f'<td class="right" style="color:#c62828;font-weight:600">'
-            f'{fmt_money(r.get("[Deuda]"))}</td></tr>'
+            f'{fmt_money(r.get("[Deuda]"))}</td>'
+            f'<td class="right">{r.get("[DiasAtraso]", 0)} días</td></tr>'
             for r in rows
         )
 
@@ -1260,13 +1262,13 @@ te comparto el estado de la operación al inicio del día.<br>
 
 <h3>⚠️ Top 10 deudores — Quito (UIO)</h3>
 <table>
-<tr><th>Cliente</th><th class="right">Deuda vencida</th></tr>
+<tr><th>Cliente</th><th class="right">Deuda vencida</th><th class="right">Días de retraso</th></tr>
 {top_uio_rows}
 </table>
 
 <h3>⚠️ Top 10 deudores — Guayaquil (GYE)</h3>
 <table>
-<tr><th>Cliente</th><th class="right">Deuda vencida</th></tr>
+<tr><th>Cliente</th><th class="right">Deuda vencida</th><th class="right">Días de retraso</th></tr>
 {top_gye_rows}
 </table>
 
