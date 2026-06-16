@@ -209,7 +209,14 @@ def _get_user_state(state: dict, user_email: str) -> dict[str, Any]:
     email = _normalize_email(user_email)
     if email not in state["users"]:
         state["users"][email] = {"weeks": {}}
-    return state["users"][email]
+    user = state["users"][email]
+    # Robustez (2026-06-16): un usuario puede existir SIN la key "weeks" — lo
+    # crearon otras vías (cierres_caja, rutas, caja_chica) o pseudo-users viejos.
+    # Garantizarla evita KeyError 'weeks' cuando un job recorre TODOS los users
+    # (list_open_tasks_all_users / workload / task_confirmations).
+    if "weeks" not in user:
+        user["weeks"] = {}
+    return user
 
 
 # ============ Tareas persistentes: helpers (no mutan el state file) ============
