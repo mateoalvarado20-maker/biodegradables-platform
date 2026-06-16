@@ -167,6 +167,53 @@ def _send_with_retry(url: str, payload: dict, attempt_token_refresh: bool = True
     raise RuntimeError(f"Graph sendMail dio up tras {RETRY_ATTEMPTS} intentos: {last_err}")
 
 
+def lookup_user_email(aad_object_id: str) -> str:
+    """Resuelve el email de un usuario por su AAD object id, vía Graph
+    (`GET /users/{id}`). App-only — requiere el permiso de APLICACIÓN
+    `User.Read.All` con admin consent.
+
+    Devuelve '' (sin romperse) si no se puede resolver: sin permiso (403),
+    usuario inexistente (404), error de red, o sin token. Así el llamador
+    (`teams_bot._user_email`) cae a su fallback. Pensado para llamarse solo
+    cuando Teams NO manda el email en el mensaje; el resultado se cachea
+    arriba, así solo el PRIMER mensaje de cada usuario pega a Graph.
+    """
+    aad_object_id = (aad_object_id or "").strip()
+    if not aad_object_id:
+        return ""
+    try:
+        token = _get_token()
+    except Exception as e:  # noqa: BLE001
+        _logger.warning("lookup_user_email: no se pudo obtener token: %s", e)
+        return ""
+    url = f"{GRAPH_BASE}/users/{aad_object_id}"
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            r = client.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                params={"$select": "mail,userPrincipalName"},
+            )
+    except httpx.RequestError as e:
+        _logger.warning("lookup_user_email: error de red para id=%s: %s", aad_object_id, e)
+        return ""
+    if r.status_code == 403:
+        _logger.warning(
+            "lookup_user_email: 403 — falta el permiso de aplicación "
+            "User.Read.All (admin consent). id=%s", aad_object_id,
+        )
+        return ""
+    if r.status_code != 200:
+        _logger.warning(
+            "lookup_user_email: Graph %s para id=%s: %s",
+            r.status_code, aad_object_id, (r.text or "")[:200],
+        )
+        return ""
+    data = r.json()
+    email = (data.get("mail") or data.get("userPrincipalName") or "").strip().lower()
+    return email if "@" in email else ""
+
+
 def send(
     from_user: str,
     to: list[str] | str,

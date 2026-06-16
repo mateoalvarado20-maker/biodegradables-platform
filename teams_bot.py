@@ -387,6 +387,20 @@ def _user_email(context: TurnContext) -> str:
                         _remember_aad_email(aad_id_short, email, f"props.{key}")
                         return email
 
+            # 3.5. Microsoft Graph (alta confianza) — la solución correcta:
+            # cuando Teams NO manda el email en props (prop_keys=[]), se resuelve
+            # por AAD object id consultando Graph. Requiere el permiso de
+            # APLICACIÓN User.Read.All con admin consent; si no está concedido
+            # devuelve '' y cae al fallback (no rompe). Una vez resuelto se
+            # cachea en aad_lookup.json, así solo el PRIMER mensaje de cada
+            # usuario pega a Graph — elimina el mapeo manual por persona.
+            if aad_id:
+                graph_email = graph_mail.lookup_user_email(aad_id)
+                if graph_email and "@" in graph_email:
+                    logger.info("Email via Graph lookup → %s", graph_email)
+                    _remember_aad_email(aad_id_short, graph_email, "graph")
+                    return graph_email
+
             # Fase 2 (auditoría A1): el match por display name fue ELIMINADO
             # como fuente de identidad/autorización. Con alias de una palabra
             # ("gabriela"), una "Gabriela Bravo" del tenant resolvía a
