@@ -12,6 +12,7 @@
 !/run_*.bat
 !/requirements.txt
 !/requirements_bot.txt
+!/requirements-dev.txt
 !/pyproject.toml
 
 # --- Config y templates (datos chicos, fuente de verdad) ---

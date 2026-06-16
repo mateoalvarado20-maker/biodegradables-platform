@@ -128,6 +128,65 @@ def leads_promedio_7d() -> float:
     return float(data.get("total", 0)) / 7.0
 
 
+def _count_contacts_rango(start_dt: datetime, end_dt: datetime) -> int:
+    """Cuenta contactos creados en [start, end) (solo el total, sin traerlos)."""
+    data = search_objects(
+        "contacts",
+        properties=["createdate"],
+        filters=[
+            {"propertyName": "createdate", "operator": "GTE", "value": _iso_utc(start_dt)},
+            {"propertyName": "createdate", "operator": "LT", "value": _iso_utc(end_dt)},
+        ],
+        limit=1,
+    )
+    return int(data.get("total", 0))
+
+
+def leads_semana_wow() -> dict:
+    """Leads de la semana actual (lunes 00:00 EC → ahora) y comparación WoW.
+
+    La comparación es JUSTA: 'misma altura' = del lunes pasado hasta el mismo
+    tiempo transcurrido de la semana en curso (parcial vs parcial, nunca contra
+    un total histórico). Incluye la fuente top de la semana para "¿de dónde
+    vinieron?".
+    """
+    ec = timezone(timedelta(hours=-5))
+    ahora = datetime.now(ec)
+    lunes = (ahora - timedelta(days=ahora.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    transcurrido = ahora - lunes
+    lunes_pasado = lunes - timedelta(days=7)
+    fin_pasado = lunes_pasado + transcurrido
+
+    # Semana actual: total + fuente top (traemos hasta 100 para el desglose)
+    data = search_objects(
+        "contacts",
+        properties=["createdate", "hs_analytics_source"],
+        filters=[
+            {"propertyName": "createdate", "operator": "GTE", "value": _iso_utc(lunes)},
+            {"propertyName": "createdate", "operator": "LT", "value": _iso_utc(ahora)},
+        ],
+        limit=100,
+    )
+    total = data.get("total", 0)
+    by_source: dict[str, int] = {}
+    for c in data.get("results", []):
+        src = c.get("properties", {}).get("hs_analytics_source") or "UNKNOWN"
+        by_source[src] = by_source.get(src, 0) + 1
+    top_source = max(by_source.items(), key=lambda x: x[1]) if by_source else (None, 0)
+
+    anterior = _count_contacts_rango(lunes_pasado, fin_pasado)
+    delta_pct = ((total - anterior) / anterior * 100) if anterior > 0 else None
+    return {
+        "total": total,
+        "anterior": anterior,
+        "delta_pct": delta_pct,
+        "top_source": top_source[0],
+        "top_source_count": top_source[1],
+    }
+
+
 def deals_ganados_ayer() -> dict:
     """Deals que se cerraron ganados ayer (closedate) + revenue."""
     start, end = _local_yesterday_range()
@@ -336,19 +395,26 @@ def conversion_rate_30d() -> dict:
     }
 
 
-def leads_sin_responder(horas_min: int = 24) -> dict:
-    """Leads creados hace más de N horas que siguen sin contacto.
+def leads_sin_responder(horas_min: int = 24, dias_ventana: int = 7) -> dict:
+    """Leads RECIENTES sin responder: creados entre hace `dias_ventana` días y
+    hace `horas_min` horas, que siguen sin contacto.
 
-    Heurística: si lifecyclestage == 'lead' o 'subscriber' (no 'opportunity' ni
-    'customer'), y el contacto no tiene actividad reciente, lo marcamos como
-    'sin responder'. Esto requiere que el equipo use HubSpot.
+    Cambio 2026-06-15: antes no había cota inferior de fecha, así que contaba
+    TODOS los leads sin tocar desde que se instaló HubSpot (número inflado e
+    inútil para la operación diaria). Ahora la ventana es móvil de 7 días: solo
+    el backlog reciente y accionable. Ver decisión en CLAUDE.md / memoria.
 
-    NOTA: depende de las propiedades disponibles. Si tu instancia no tiene
-    hs_last_sales_activity_timestamp, devuelve 0 con un warning.
+    Heurística: lifecyclestage en [lead, subscriber, MQL] (no convertido) y sin
+    actividad de ventas reciente. Ordena del más antiguo al más nuevo y calcula
+    los días de espera de cada uno.
+
+    NOTA: depende de hs_last_sales_activity_timestamp. Si no existe en la
+    instancia, devuelve 0 con un warning.
     """
     ec = timezone(timedelta(hours=-5))
     hoy_ec = datetime.now(ec)
-    cutoff_creacion = hoy_ec - timedelta(hours=horas_min)
+    cutoff_creacion_sup = hoy_ec - timedelta(hours=horas_min)   # creado hace > 24h
+    cutoff_creacion_inf = hoy_ec - timedelta(days=dias_ventana)  # pero no más viejo que 7d
     cutoff_actividad = hoy_ec - timedelta(hours=horas_min)
     try:
         data = search_objects(
@@ -358,14 +424,27 @@ def leads_sin_responder(horas_min: int = 24) -> dict:
                 "lifecyclestage", "hs_last_sales_activity_timestamp",
             ],
             filters=[
-                {"propertyName": "createdate", "operator": "LT", "value": _iso_utc(cutoff_creacion)},
+                # Ventana reciente: [hace 7 días, hace 24h)
+                {"propertyName": "createdate", "operator": "GTE", "value": _iso_utc(cutoff_creacion_inf)},
+                {"propertyName": "createdate", "operator": "LT", "value": _iso_utc(cutoff_creacion_sup)},
                 # No tiene actividad reciente
                 {"propertyName": "hs_last_sales_activity_timestamp", "operator": "LT", "value": _iso_utc(cutoff_actividad)},
                 # Sigue siendo lead (no convertido aún)
                 {"propertyName": "lifecyclestage", "operator": "IN", "values": ["lead", "subscriber", "marketingqualifiedlead"]},
             ],
+            sorts=[{"propertyName": "createdate", "direction": "ASCENDING"}],
             limit=20,
         )
+
+        def _dias_espera(created_str: str | None) -> int | None:
+            if not created_str:
+                return None
+            try:
+                created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                return max(0, (hoy_ec - created.astimezone(ec)).days)
+            except (ValueError, TypeError):
+                return None
+
         return {
             "count": data.get("total", 0),
             "leads": [
@@ -376,6 +455,7 @@ def leads_sin_responder(horas_min: int = 24) -> dict:
                     ])) or "(sin nombre)",
                     "email": c.get("properties", {}).get("email"),
                     "created": c.get("properties", {}).get("createdate"),
+                    "dias": _dias_espera(c.get("properties", {}).get("createdate")),
                 }
                 for c in data.get("results", [])[:5]
             ],

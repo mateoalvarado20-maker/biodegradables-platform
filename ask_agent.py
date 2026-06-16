@@ -25,8 +25,10 @@ Phase C (2026-05-29):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -34,7 +36,9 @@ from anthropic import Anthropic
 
 import activity_state
 import contifico_client
+import core_config
 import forecasting
+import graph_calendar_app
 import graph_mail
 import hubspot_client
 import news_brief
@@ -45,12 +49,28 @@ MAX_TOKENS = 4000
 MAX_ITERATIONS = 10
 LOCAL_TZ = timezone(timedelta(hours=-5))
 
+logger = logging.getLogger("ask_agent")
+
 
 def _hoy_ec() -> date:
     """Fecha de HOY en zona Ecuador. Fase 5 (auditoría A9): date.today()
     usa la TZ del server — en Azure (UTC) entre 19:00 y 23:59 EC ya es
     MAÑANA, y las marcas caían en la fecha equivocada."""
     return datetime.now(LOCAL_TZ).date()
+
+
+def _ultimo_sabado(hoy: date | None = None) -> date:
+    """Sábado más reciente. Si `hoy` es sábado, lo retorna; si no, retrocede
+    al sábado anterior. Usado por el recap del lunes (que corre el lunes 8 AM
+    y debe reportar el sábado anterior).
+
+      lunes  → sábado (hoy − 2)
+      martes → sábado (hoy − 3)
+      sábado → ese mismo sábado
+    """
+    hoy = hoy or _hoy_ec()
+    delta = (hoy.weekday() - 5) % 7  # días desde el último sábado
+    return hoy - timedelta(days=delta)
 
 
 
@@ -92,23 +112,149 @@ def _load_collaborators() -> dict[str, str]:
 COLLABORATORS = _load_collaborators()
 
 
-def _resolve_collaborator(name_or_email: str) -> str | None:
-    """Mapea 'Mateo' → 'malvarado@...'. Si ya es email, lo valida.
+def _strip_accents_lower(s: str) -> str:
+    """Minúsculas + sin acentos (NFKD). 'Sánchez' → 'sanchez'."""
+    if not s:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
 
-    Fase 2 (auditoría A6/C4): SOLO acepta colaboradores registrados en
-    KNOWN_COLLABORATORS. Antes aceptaba cualquier string con '@' — un email
-    mal tipeado (o inyectado vía prompt injection en datos externos) creaba
-    silenciosamente un usuario fantasma en el state y la actividad/reminder
-    "desaparecía" sin llegar a nadie.
+
+def _norm_name(s: str) -> str:
+    """Normaliza un nombre para matching: sin acentos, sin paréntesis (roles),
+    puntuación → espacio, espacios colapsados.
+
+    'Gabriela Bravo (Asistente 1 GYE)' → 'gabriela bravo'
+    'GABRIELA  SÁNCHEZ.' → 'gabriela sanchez'
     """
-    if not name_or_email:
-        return None
-    s = name_or_email.strip().lower()
-    if "@" in s:
-        if s in set(COLLABORATORS.values()):
-            return s
-        return None  # email no registrado — el tool devuelve error explícito
-    return COLLABORATORS.get(s)
+    s = _strip_accents_lower(s)
+    # Quitar lo que esté entre paréntesis (roles, sucursales)
+    out: list[str] = []
+    depth = 0
+    for ch in s:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    s = "".join(out)
+    # No alfanumérico → espacio (incluye '@' y '.', para tokens de email)
+    s = "".join(ch if ch.isalnum() else " " for ch in s)
+    return " ".join(s.split())
+
+
+def _collaborator_directory() -> tuple[dict[str, set[str]], dict[str, set[str]], set[str]]:
+    """Construye el índice de búsqueda de colaboradores REGISTRADOS.
+
+    Solo se delega a emails presentes en KNOWN_COLLABORATORS (garantía A6/C4:
+    nunca a un email arbitrario). EMAIL_TO_NAME solo aporta el nombre humano
+    de esos emails registrados; un email que aparece en EMAIL_TO_NAME pero NO
+    en KNOWN_COLLABORATORS (ej. dsanchez@ supervisor) NO es destino válido.
+
+    Devuelve:
+      exact: término_normalizado → {emails}  (alias, local-part, nombre completo)
+      tokens: email → {tokens del nombre/alias/local-part}  (para match parcial)
+      registered: set de emails registrados (lower)
+    """
+    registered = {e.strip().lower() for e in COLLABORATORS.values() if e}
+    exact: dict[str, set[str]] = {}
+    tokens: dict[str, set[str]] = {e: set() for e in registered}
+
+    def _add_exact(term: str, email: str) -> None:
+        nt = _norm_name(term)
+        if nt:
+            exact.setdefault(nt, set()).add(email)
+            tokens[email].update(nt.split())
+
+    # Aliases de KNOWN_COLLABORATORS (incluye 'gabriela'→gsanchez@, 'gye'→info@)
+    for alias, email in COLLABORATORS.items():
+        email = email.strip().lower()
+        if email in registered:
+            _add_exact(alias, email)
+    # Local-part del email ('gsanchez', 'malvarado') + nombre humano completo
+    for email in registered:
+        _add_exact(email.split("@")[0], email)
+        human = EMAIL_TO_NAME.get(email)
+        if human:
+            _add_exact(human, email)
+    return exact, tokens, registered
+
+
+def _resolve_collaborator_detail(name_or_email: str) -> dict:
+    """Resuelve un nombre/email a un colaborador registrado, con diagnóstico.
+
+    Robusto a: acentos, mayúsculas, espacios extra, nombre completo
+    ('Gabriela Sánchez'), alias ('gabriela'), local-part ('gsanchez') y email
+    completo. Si un término identifica a >1 colaborador, devuelve 'ambiguous'
+    con los candidatos en vez de elegir uno al azar (evita asignar a la
+    Gabriela equivocada).
+
+    Returns dict: {status: 'ok'|'ambiguous'|'not_found', email, candidates}
+      - candidates: lista de {email, nombre} cuando ambiguous/not_found.
+    """
+    exact, tokens, registered = _collaborator_directory()
+
+    def _cands(emails) -> list[dict]:
+        return [
+            {"email": e, "nombre": EMAIL_TO_NAME.get(e, e)}
+            for e in sorted(emails)
+        ]
+
+    def _all() -> list[dict]:
+        return _cands(registered)
+
+    if not name_or_email or not str(name_or_email).strip():
+        return {"status": "not_found", "email": None, "candidates": _all()}
+
+    raw = str(name_or_email).strip()
+
+    # 1. Email explícito: debe estar registrado (preserva A6/C4 — no fantasmas).
+    if "@" in raw:
+        low = raw.lower()
+        if low in registered:
+            return {"status": "ok", "email": low, "candidates": []}
+        # ¿el local-part o el nombre matchea aunque el dominio esté mal tipeado?
+        # NO asumimos: lo tratamos como término más abajo solo si no tiene
+        # dominio externo distinto. Para un email completo no registrado,
+        # rechazamos explícito.
+        return {"status": "not_found", "email": None, "candidates": _all()}
+
+    nq = _norm_name(raw)
+    if not nq:
+        return {"status": "not_found", "email": None, "candidates": _all()}
+
+    # 2. Match exacto por término normalizado (alias / nombre completo / local-part)
+    if nq in exact:
+        emails = exact[nq]
+        if len(emails) == 1:
+            return {"status": "ok", "email": next(iter(emails)), "candidates": []}
+        return {"status": "ambiguous", "email": None, "candidates": _cands(emails)}
+
+    # 3. Match parcial: los tokens de la query son subconjunto de los de UN
+    #    colaborador ('sanchez' → gabriela sanchez; 'mateo alvarado' exacto ya
+    #    cayó arriba). Si matchea a varios, es ambiguo.
+    qtokens = set(nq.split())
+    matches = [e for e, toks in tokens.items() if qtokens and qtokens <= toks]
+    if len(matches) == 1:
+        return {"status": "ok", "email": matches[0], "candidates": []}
+    if len(matches) > 1:
+        return {"status": "ambiguous", "email": None, "candidates": _cands(matches)}
+
+    return {"status": "not_found", "email": None, "candidates": _all()}
+
+
+def _resolve_collaborator(name_or_email: str) -> str | None:
+    """Mapea 'Mateo'/'Gabriela Sánchez'/'gsanchez@...' → email registrado.
+
+    Wrapper de compatibilidad: devuelve el email solo si la resolución es
+    inequívoca ('ok'). Para 'ambiguous' o 'not_found' devuelve None (los tool
+    handlers usan `_resolve_collaborator_detail` para dar el detalle al user).
+
+    Fase 2 (auditoría A6/C4): SOLO colaboradores registrados en
+    KNOWN_COLLABORATORS — nunca un email arbitrario (evita usuario fantasma).
+    """
+    return _resolve_collaborator_detail(name_or_email).get("email")
 
 
 def _list_today_activities(user_email: str | None = None) -> dict:
@@ -339,7 +485,7 @@ def _summary_html(user_email: str | None = None) -> str:
         )
     elif horario.get("estandar"):
         horario_html = (
-            '<p>⏰ Horario: <b>estándar (8:30 AM – 5:30 PM)</b>.</p>'
+            f'<p>⏰ Horario: <b>estándar ({activity_state.horario_estandar_label(hoy)})</b>.</p>'
         )
     else:
         desde = horario.get("desde") or "?"
@@ -795,7 +941,7 @@ def _cierre_caja_html(
 
     horario = activity_state.get_day_schedule(user_email, fecha)
     if horario and horario.get("estandar"):
-        horario_str = "8:30 AM – 5:30 PM (estándar)"
+        horario_str = f"{activity_state.horario_estandar_label(fecha)} (estándar)"
     elif horario:
         horario_str = (
             f"{horario.get('desde','—')} – {horario.get('hasta','—')}"
@@ -882,20 +1028,25 @@ table {{ border-collapse:collapse; font-size:13px; width:100%; }}
     return html
 
 
-def _collaborator_block_html_v2(user_email: str) -> str:
+def _collaborator_block_html_v2(user_email: str, target_date: date | None = None) -> str:
     """Phase T (2026-06-09): bloque por colaborador en el correo consolidado.
 
     Diseño nuevo: caja grande con header colorido (alias), horario destacado,
     actividades por tipo, y para sucursales: cierre de caja COMPLETO con
     denominaciones (reemplaza el correo separado de cierre de caja).
+
+    `target_date` (2026-06-15): si se pasa, el bloque se arma para ESA fecha
+    (semana ISO incluida) en vez de hoy — lo usa el recap del sábado que corre
+    el lunes. Si es None, se comporta igual que siempre (hoy EC).
     """
-    hoy = _hoy_ec()
+    hoy = target_date or _hoy_ec()
     yesterday = hoy - timedelta(days=1)
     today_iso = hoy.isoformat()
     yesterday_iso = yesterday.isoformat()
-    week = activity_state.get_week(user_email)
+    week = activity_state.get_week(user_email, wk=activity_state.week_key(hoy))
     horario = activity_state.get_day_schedule(user_email, today_iso)
     alias = user_email.split("@")[0] if "@" in user_email else user_email
+    es_sabado_recap = target_date is not None and hoy.weekday() == 5
 
     # Determinar role + título del bloque
     es_asistente = user_email.lower() in ASISTENTE_EMAILS
@@ -915,6 +1066,13 @@ def _collaborator_block_html_v2(user_email: str) -> str:
         titulo_bloque = f"👤 {alias.upper()}"
         sucursal = ""
 
+    # Rotación GYE de sábados: si el Asistente 1 GYE no reportó nada el sábado,
+    # se interpreta como ausencia esperada por turno (no pendiente/error).
+    if (es_sabado_recap
+            and user_email.lower() == GYE_ASISTENTE1_EMAIL
+            and _gye_sin_reporte_dia(user_email, today_iso)):
+        return _ausencia_rotativa_block_html(titulo_bloque, hoy.strftime("%d/%m/%Y"))
+
     # === Horario destacado ===
     if horario is None:
         horario_html = (
@@ -923,7 +1081,7 @@ def _collaborator_block_html_v2(user_email: str) -> str:
     elif horario.get("estandar"):
         horario_html = (
             '<span style="color:#2e7d32;font-weight:600;">'
-            '⏰ Horario: 8:30 AM – 5:30 PM (estándar) ✅</span>'
+            f'⏰ Horario: {activity_state.horario_estandar_label(today_iso)} (estándar) ✅</span>'
         )
     else:
         desde = horario.get("desde") or "?"
@@ -1245,6 +1403,54 @@ ASISTENTE_EMAILS = {
 JOSE_EMAIL_CONS = "jsolorzano@biodegradablesecuador.com"
 CAJA_CHICA_ALERTA_JOSE = 30.0
 
+# ===== Rotación de asistentes GYE los sábados (2026-06-15) =====
+# En Guayaquil hay 2 asistentes que se turnan los sábados:
+#   - Asistente 1 GYE: info@  (caja/sucursal)
+#   - Asistente 2 GYE: José Solórzano (jsolorzano@, logística/ruta)
+# Un sábado trabaja uno, el siguiente el otro. Si un asistente NO llena el
+# reporte del sábado, se asume AUSENCIA ESPERADA por el turno rotativo — no
+# es error ni reporte pendiente. Solo aplica al recap del sábado (lunes 8 AM).
+GYE_ASISTENTE1_EMAIL = "info@biodegradablesecuador.com"
+GYE_ROTATIVOS_SABADO = {GYE_ASISTENTE1_EMAIL, JOSE_EMAIL_CONS}
+
+
+def _gye_sin_reporte_dia(email: str, fecha_iso: str) -> bool:
+    """True si el asistente GYE no registró NADA ese día (horario, cierre ni
+    marca diaria). Se usa para interpretar el sábado como ausencia esperada
+    por rotación, en vez de mostrarlo como pendiente/error."""
+    if activity_state.get_day_schedule(email, fecha_iso):
+        return False
+    if activity_state.get_cierre_caja(email, fecha_iso):
+        return False
+    try:
+        wk = activity_state.week_key(date.fromisoformat(fecha_iso))
+        week = activity_state.get_week(email, wk=wk)
+    except Exception:
+        return True
+    for a in (week.get("activities") or {}).values():
+        if a.get("tipo") == "diaria" and (a.get("log") or {}).get(fecha_iso) is not None:
+            return False
+    return True
+
+
+def _ausencia_rotativa_block_html(titulo_bloque: str, fecha_fmt: str) -> str:
+    """Bloque neutro (no rojo) para un asistente GYE ausente por turno rotativo
+    el sábado. Mismo marco verde que los demás asistentes, sin alarma."""
+    header_color = "#0e7c39"
+    return (
+        f'<div style="margin:28px 0;border:2px solid {header_color};border-radius:8px;'
+        f'overflow:hidden;background:#fff;">'
+        f'<div style="background:{header_color};color:#fff;padding:10px 16px;'
+        f'font-weight:700;font-size:16px;">{titulo_bloque}</div>'
+        f'<div style="padding:14px 18px;background:#f4faf6;">'
+        f'<p style="margin:0;font-size:13px;color:#555;">{fecha_fmt}</p>'
+        f'<p style="margin:8px 0 0;font-size:13px;color:#666;">'
+        f'🔁 <b>Ausencia esperada</b> — turno rotativo de sábado. '
+        f'Este asistente no estaba programado para asistir; no es un reporte '
+        f'pendiente.</p>'
+        f'</div></div>'
+    )
+
 
 def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
     """Phase V (2026-06-10): bloque de José para el consolidado diario.
@@ -1265,6 +1471,14 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
     entregas = activity_state.get_entregas_consolidadas_dia(JOSE_EMAIL_CONS, today_iso) or {}
     cc = activity_state.get_caja_chica(JOSE_EMAIL_CONS) or {"inicial": None, "saldo": 0.0, "movimientos": []}
     movs_hoy = activity_state.caja_chica_movimientos_dia(JOSE_EMAIL_CONS, today_iso) or []
+
+    # Rotación GYE de sábados: si José (Asistente 2 GYE) no registró ruta,
+    # envíos ni movimientos un sábado, es ausencia esperada por el turno
+    # rotativo — no un reporte pendiente.
+    if fecha_d.weekday() == 5 and not salidas and not entregas and not movs_hoy:
+        return _ausencia_rotativa_block_html(
+            "📦 ASISTENTE 2 GYE — José Solórzano", fecha_fmt
+        )
 
     # Resumen de entregas
     n_entregadas = sum(1 for e in entregas.values() if e.get("status") == "entregado")
@@ -1376,6 +1590,39 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
             'Sin envíos cargados hoy.</p>'
         )
 
+    # Observaciones de José (2026-06-15): sección dedicada que junta TODAS las
+    # observaciones que José ingresó por entrega (más las razones de no entrega)
+    # en un solo lugar claramente identificado, para que el gerente no tenga que
+    # cazarlas dentro de la tabla de envíos.
+    obs_items = []
+    for fid, e in sorted(entregas.items(), key=lambda kv: kv[1].get("fecha_emision", "")):
+        cliente_o = escape(e.get("cliente", "?"))
+        obs_txt = (e.get("observacion") or "").strip()
+        razon_txt = (e.get("razon_no_entrega") or "").strip()
+        partes = []
+        if obs_txt:
+            partes.append(escape(obs_txt))
+        if razon_txt and e.get("status") == "no_entregado":
+            partes.append(f'<i>No entregado: {escape(razon_txt)}</i>')
+        if partes:
+            obs_items.append(
+                f'<li style="margin:3px 0;"><b>{cliente_o}:</b> '
+                f'{" · ".join(partes)}</li>'
+            )
+    if obs_items:
+        observaciones_html = (
+            '<p style="margin:10px 0 4px;font-weight:600;color:#444">'
+            '📝 Observaciones de José</p>'
+            '<ul style="margin:4px 0 10px;padding-left:20px;font-size:13px;color:#333;">'
+            + "".join(obs_items) +
+            '</ul>'
+        )
+    else:
+        observaciones_html = (
+            '<p style="margin:10px 0;font-size:12px;color:#999;">'
+            '📝 Observaciones de José: sin observaciones registradas hoy.</p>'
+        )
+
     # Caja chica
     saldo = float(cc.get("saldo") or 0)
     inicial = float(cc.get("inicial") or 0)
@@ -1414,19 +1661,24 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'{fecha_fmt}  ·  {summary_chips}</p>'
         f'{salidas_html}'
         f'{entregas_html}'
+        f'{observaciones_html}'
         f'{caja_html}'
         f'</div>'
         f'</div>'
     )
 
 
-def _classify_dailies(user_email: str, today_iso: str) -> dict:
+def _classify_dailies(user_email: str, today_iso: str, wk: str | None = None) -> dict:
     """Cuenta hechas/parciales/no_hechas/sin_marcar de un user para hoy.
 
     Retorna también listas con las items problemáticas (no hechas + parciales)
     con sus razones, para mostrar en sección destacada.
+
+    `wk` (semana ISO) permite leer una semana distinta a la actual — necesario
+    para el recap del sábado que corre el lunes (el sábado cae en la semana
+    ISO anterior). Si es None, usa la semana actual (comportamiento histórico).
     """
-    week = activity_state.get_week(user_email)
+    week = activity_state.get_week(user_email, wk=wk)
     diarias = [
         (aid, a) for aid, a in week["activities"].items() if a["tipo"] == "diaria"
     ]
@@ -1776,14 +2028,22 @@ def _proyectos_pendientes_section(collaborator_data: list[dict]) -> str:
     )
 
 
-def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
+def _consolidated_daily_summary_html(
+    collaborator_emails: list[str], target_date: date | None = None
+) -> str:
     """Arma el HTML consolidado v2 (Phase O.2, 2026-06-05).
 
     Estructura: resumen ejecutivo arriba + sección problemáticas + asistentes en
     2 columnas + proyectos pendientes. Mucho más compacto y accionable.
+
+    `target_date` (2026-06-15): si se pasa, arma el resumen para ESA fecha (con
+    su semana ISO) en vez de hoy — lo usa el recap del sábado que corre el
+    lunes 8 AM. Si es None, comportamiento histórico (hoy EC).
     """
-    hoy = _hoy_ec()
+    hoy = target_date or _hoy_ec()
     today_iso = hoy.isoformat()
+    wk_target = activity_state.week_key(hoy)
+    es_sabado_recap = target_date is not None and hoy.weekday() == 5
     dias_es = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
     meses_es = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
                 "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
@@ -1798,13 +2058,21 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
     collaborator_data: list[dict] = []
     for email in sorted_collabs:
         alias = email.split("@")[0]
-        classif = _classify_dailies(email, today_iso)
+        classif = _classify_dailies(email, today_iso, wk=wk_target)
+        # ¿Asistente GYE ausente por turno rotativo este sábado? (no es error)
+        ausente_rotativo = (
+            es_sabado_recap
+            and email.lower() in GYE_ROTATIVOS_SABADO
+            and _gye_sin_reporte_dia(email, today_iso)
+        )
         # Horario
         horario = activity_state.get_day_schedule(email, today_iso)
-        if horario is None:
+        if ausente_rotativo:
+            hora = '<span style="color:#888;">ausencia esperada (turno)</span>'
+        elif horario is None:
             hora = '<span style="color:#999;">sin reportar</span>'
         elif horario.get("estandar"):
-            hora = "8:30–17:30 (std)"
+            hora = f"{activity_state.horario_estandar_corto(today_iso)} (std)"
         else:
             desde = horario.get("desde") or "?"
             hasta = horario.get("hasta") or "?"
@@ -1813,6 +2081,8 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
         cierre = activity_state.get_cierre_caja(email, today_iso)
         if cierre:
             cierre_html = f'${cierre["entregado"]:,.0f}'
+        elif ausente_rotativo:
+            cierre_html = "—"
         elif email in ASISTENTE_EMAILS:
             cierre_html = '<span style="color:#c62828;">sin marcar</span>'
         else:
@@ -1861,8 +2131,12 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
 
         # Sección "Lo que requiere seguimiento" arriba (problemas)
         problemas = _problemas_section(collaborator_data)
-        # Phase V (2026-06-11): nueva sección — colaboradores que NO marcaron NADA
-        alerta_sin_marcar = _sin_marcar_section(collaborator_data)
+        # Phase V (2026-06-11): nueva sección — colaboradores que NO marcaron NADA.
+        # En el recap del sábado NO aplica: los asistentes GYE pueden estar
+        # ausentes legítimamente por el turno rotativo (no es "no llenaron").
+        alerta_sin_marcar = (
+            "" if es_sabado_recap else _sin_marcar_section(collaborator_data)
+        )
 
         # Phase V (2026-06-11): bloques individuales, con José GYE intercalado
         # después de info@ (Asistente 1 GYE) y antes de quito@ (UIO).
@@ -1870,7 +2144,7 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
         jose_insertado = False
         for d in sorted_data:
             email_l = d["email"].lower()
-            bloques_list.append(_collaborator_block_html_v2(d["email"]))
+            bloques_list.append(_collaborator_block_html_v2(d["email"], target_date=target_date))
             # Después de info@ (GYE Asistente 1), insertar bloque de José
             if email_l == "info@biodegradablesecuador.com" and not jose_insertado:
                 try:
@@ -1890,6 +2164,20 @@ def _consolidated_daily_summary_html(collaborator_emails: list[str]) -> str:
         blocks_html = "".join(bloques_list)
         body_html = alerta_sin_marcar + problemas + blocks_html
 
+    if es_sabado_recap:
+        titulo_html = f"Resumen del sábado — {fecha_humana}"
+        intro_html = (
+            "Hola Daniel y Gabriela, acá el resumen de las actividades del "
+            "<b>sábado</b>. En GYE el turno de sábado es rotativo entre los dos "
+            "asistentes: si uno no reportó, es ausencia esperada (no pendiente)."
+        )
+    else:
+        titulo_html = f"Resumen diario del equipo — {fecha_humana}"
+        intro_html = (
+            "Hola Daniel y Gabriela, acá el resumen del día. Foco en lo que "
+            "requiere seguimiento (rojo/ámbar)."
+        )
+
     return f"""<!DOCTYPE html>
 <html><head><meta charset='utf-8'><style>
 body {{ font-family:'Segoe UI',Arial,sans-serif; color:#2c2c2c;
@@ -1901,11 +2189,10 @@ h3 {{ margin-bottom:6px; }}
             padding-top:10px; }}
 </style></head><body>
 
-<h2>Resumen diario del equipo — {fecha_humana}</h2>
+<h2>{titulo_html}</h2>
 
 <p style="font-size:13px;color:#555;">
-Hola Daniel y Gabriela, acá el resumen del día. Foco en lo que requiere
-seguimiento (rojo/ámbar).
+{intro_html}
 </p>
 
 <h3 style="color:#0e7c39;margin-top:18px;">📊 Resumen ejecutivo</h3>
@@ -1924,12 +2211,16 @@ Resumen consolidado automático del Activities Bot · {hoy.strftime("%d/%m/%Y")}
 def _send_consolidated_daily_summary(
     to_override: list[str] | None = None,
     cc_override: list[str] | None = None,
+    target_date: date | None = None,
 ) -> dict:
     """Manda el correo consolidado con todos los colaboradores no-supervisor.
 
     To/CC: parámetros explícitos (testing) > env CONSOLIDATED_DAILY_TO/_CC >
     defaults. Fase 2 (auditoría A8): los overrides de testing ya NO mutan
     os.environ del proceso.
+
+    `target_date` (2026-06-15): si se pasa, el resumen cubre ESA fecha en vez
+    de hoy — lo usa el recap del sábado que corre el lunes 8 AM.
     """
     # Tomar todos los users del state que NO son supervisores
     state = activity_state.load()
@@ -1946,7 +2237,7 @@ def _send_consolidated_daily_summary(
         and not u.lower().startswith("unidentified-")
     )
 
-    html = _consolidated_daily_summary_html(collaborators)
+    html = _consolidated_daily_summary_html(collaborators, target_date=target_date)
 
     sender = TRACKER_EMAIL_FROM  # malvarado@ (siempre desde el mismo)
     to_str = os.environ.get("CONSOLIDATED_DAILY_TO", CONSOLIDATED_DAILY_TO_DEFAULT)
@@ -1958,8 +2249,12 @@ def _send_consolidated_daily_summary(
     if cc_override is not None:  # lista vacía = sin CC (testing)
         cc_list = [e.strip() for e in cc_override if e.strip()]
 
-    fecha_str = _hoy_ec().strftime("%d/%m/%Y")
-    subject = f"Resumen diario del equipo — {fecha_str}"
+    es_sabado_recap = target_date is not None and target_date.weekday() == 5
+    fecha_str = (target_date or _hoy_ec()).strftime("%d/%m/%Y")
+    if es_sabado_recap:
+        subject = f"Resumen del sábado — {fecha_str}"
+    else:
+        subject = f"Resumen diario del equipo — {fecha_str}"
     graph_mail.send(
         from_user=sender,
         to=to_list,
@@ -1974,7 +2269,154 @@ def _send_consolidated_daily_summary(
         "cc": cc_list,
         "subject": subject,
         "collaborators": collaborators,
+        "target_date": (target_date or _hoy_ec()).isoformat(),
     }
+
+
+def send_saturday_recap_summary(
+    to_override: list[str] | None = None,
+    cc_override: list[str] | None = None,
+) -> dict:
+    """Recap del sábado que corre el lunes 8 AM. Reporta el sábado anterior
+    (única vista consolidada del sábado: el job 18:30 es Lun-Vie y nunca lo
+    cubría). Reutiliza toda la maquinaria del consolidado con target_date."""
+    sabado = _ultimo_sabado()
+    return _send_consolidated_daily_summary(
+        to_override, cc_override, target_date=sabado
+    )
+
+
+# ===== Resumen de carga por colaborador (Feature 2026-06-15) =====
+def _team_collaborator_emails() -> list[str]:
+    """Colaboradores no-supervisor con state (excluye José y unidentified)."""
+    state = activity_state.load()
+    return sorted(
+        u for u in (state.get("users") or {})
+        if u.lower() not in SUPERVISORS_ONLY_EMAILS
+        and u.lower() != JOSE_EMAIL_CONS
+        and not u.lower().startswith("unidentified-")
+    )
+
+
+def _workload_rollup(user_email: str | None) -> dict:
+    """Carga de UN colaborador: cuenta tareas no-diarias por estado efectivo y
+    lista las próximas fechas (no finalizadas). Las diarias no cuentan acá."""
+    email = (user_email or "").lower()
+    tasks = activity_state.list_tasks(email)
+    counts = {"pendiente": 0, "en_progreso": 0, "finalizada": 0, "vencida": 0}
+    proximas: list[dict] = []
+    for aid, entry, eff in tasks:
+        if eff in counts:
+            counts[eff] += 1
+        if eff != "finalizada" and entry.get("fecha_limite"):
+            proximas.append({
+                "nombre": entry.get("nombre", aid),
+                "fecha_limite": entry["fecha_limite"],
+                "status": eff,
+            })
+    proximas.sort(key=lambda p: p["fecha_limite"])
+    return {
+        "email": email,
+        "nombre": EMAIL_TO_NAME.get(email, user_email),
+        "pendientes": counts["pendiente"],
+        "en_progreso": counts["en_progreso"],
+        "finalizadas": counts["finalizada"],
+        "vencidas": counts["vencida"],
+        "abiertas": counts["pendiente"] + counts["en_progreso"] + counts["vencida"],
+        "proximas": proximas,
+    }
+
+
+def _team_workload_html() -> str:
+    """HTML del roll-up de carga de TODO el equipo (tabla resumen + próximas
+    fechas por colaborador). Lo usa el reporte semanal y el endpoint admin."""
+    emails = _team_collaborator_emails()
+    css = (
+        "<style>body{font-family:Segoe UI,Arial,sans-serif;color:#222;}"
+        "table{border-collapse:collapse;width:100%;margin:6px 0 18px;}"
+        "th,td{border:1px solid #ddd;padding:6px 8px;font-size:13px;text-align:left;}"
+        "th{background:#0e7c39;color:#fff;}h3{margin:18px 0 4px;}"
+        ".v{color:#c62828;font-weight:bold;}</style>"
+    )
+    hoy = _hoy_ec().strftime("%d/%m/%Y")
+    parts = [css, f"<h2>📋 Carga de tareas del equipo — {hoy}</h2>"]
+    if not emails:
+        parts.append("<p>No hay colaboradores con tareas registradas.</p>")
+        return "".join(parts)
+    parts.append(
+        "<table><tr><th>Colaborador</th><th>Pendientes</th><th>En progreso</th>"
+        "<th>Vencidas</th><th>Finalizadas (semana)</th></tr>"
+    )
+    rollups = [_workload_rollup(e) for e in emails]
+    for r in rollups:
+        venc = f'<span class="v">{r["vencidas"]}</span>' if r["vencidas"] else "0"
+        parts.append(
+            f'<tr><td>{r["nombre"]}</td><td>{r["pendientes"]}</td>'
+            f'<td>{r["en_progreso"]}</td><td>{venc}</td>'
+            f'<td>{r["finalizadas"]}</td></tr>'
+        )
+    parts.append("</table>")
+    for r in rollups:
+        if not r["proximas"]:
+            continue
+        parts.append(
+            f'<h3>{r["nombre"]} — próximas fechas</h3><table>'
+            "<tr><th>Tarea</th><th>Fecha límite</th><th>Estado</th></tr>"
+        )
+        for p in r["proximas"]:
+            cls = ' class="v"' if p["status"] == "vencida" else ""
+            parts.append(
+                f'<tr><td>{p["nombre"]}</td><td{cls}>{p["fecha_limite"]}</td>'
+                f'<td>{p["status"]}</td></tr>'
+            )
+        parts.append("</table>")
+    return "".join(parts)
+
+
+def _workload_text_for_chat(user_email: str | None = None) -> str:
+    """Markdown compacto para el comando del bot. user_email None = todo el
+    equipo; con valor = solo ese colaborador."""
+    targets = [user_email.lower()] if user_email else _team_collaborator_emails()
+    if not targets:
+        return "No hay colaboradores con tareas registradas."
+    lines = ["📋 **Carga de tareas**"]
+    for email in targets:
+        r = _workload_rollup(email)
+        lines.append(
+            f"\n**{r['nombre']}** — "
+            f"⏳ {r['pendientes']} pend · 🔄 {r['en_progreso']} en progreso · "
+            f"⚠️ {r['vencidas']} vencidas · ✅ {r['finalizadas']} finalizadas"
+        )
+        for p in r["proximas"][:5]:
+            marca = "⚠️" if p["status"] == "vencida" else "•"
+            lines.append(f"  {marca} {p['nombre']} → {p['fecha_limite']} ({p['status']})")
+    return "\n".join(lines)
+
+
+def send_team_workload_summary(
+    to_override: list[str] | None = None,
+    cc_override: list[str] | None = None,
+) -> dict:
+    """Envía el roll-up de carga del equipo a supervisores (Daniel + Gabriela).
+
+    Lo llama el job semanal del viernes (tras los resúmenes per-user) y el
+    endpoint admin de testing. Reusa los destinatarios del consolidado diario.
+    """
+    html = _team_workload_html()
+    sender = TRACKER_EMAIL_FROM
+    to_str = os.environ.get("CONSOLIDATED_DAILY_TO", CONSOLIDATED_DAILY_TO_DEFAULT)
+    cc_str = os.environ.get("CONSOLIDATED_DAILY_CC", CONSOLIDATED_DAILY_CC_DEFAULT)
+    to_list = [e.strip() for e in to_str.split(",") if e.strip()]
+    cc_list = [e.strip() for e in cc_str.split(",") if e.strip()]
+    if to_override:
+        to_list = [e.strip() for e in to_override if e.strip()]
+    if cc_override is not None:
+        cc_list = [e.strip() for e in cc_override if e.strip()]
+    subject = f"Resumen de carga del equipo — semana {activity_state.week_key()}"
+    graph_mail.send(
+        from_user=sender, to=to_list, subject=subject, html_body=html, cc=cc_list,
+    )
+    return {"ok": True, "from": sender, "to": to_list, "cc": cc_list, "subject": subject}
 
 
 def _send_confirmacion_cierre_email(
@@ -2416,6 +2858,59 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_team_workload",
+        "description": (
+            "Resumen de carga de tareas del equipo: pendientes, en progreso, "
+            "vencidas, finalizadas y próximas fechas por colaborador. Usá cuando "
+            "el user pregunte '¿cómo va el equipo?', '¿qué tiene pendiente Mateo?', "
+            "'mostrame las tareas vencidas'. Si pasás `target_user` muestra solo "
+            "ese colaborador; sin él, todo el equipo."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_user": {
+                    "type": "string",
+                    "description": "Opcional. Nombre o email del colaborador. Vacío = todo el equipo.",
+                },
+            },
+        },
+    },
+    {
+        "name": "create_calendar_meeting_for_collaborator",
+        "description": (
+            "Crea una reunión/evento en el calendario de Outlook/Teams de un "
+            "colaborador (SOLO Daniel o Gabriela Sánchez por ahora). Usá cuando "
+            "el user pida 'agéndame reunión con X el martes 10am', 'ponme un "
+            "evento el viernes 3pm'. Necesita inicio y fin con hora en ISO."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_user": {
+                    "type": "string",
+                    "description": "Nombre o email. Solo Daniel/Gabriela Sánchez habilitados.",
+                },
+                "subject": {"type": "string", "description": "Título de la reunión."},
+                "start": {
+                    "type": "string",
+                    "description": "Inicio ISO con hora YYYY-MM-DDTHH:MM (hora Ecuador).",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "Fin ISO con hora YYYY-MM-DDTHH:MM.",
+                },
+                "attendees": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Emails de invitados (opcional).",
+                },
+                "body": {"type": "string", "description": "Descripción (opcional)."},
+            },
+            "required": ["target_user", "subject", "start", "end"],
+        },
+    },
+    {
         "name": "add_activity_for_collaborator",
         "description": (
             "Asigna una actividad nueva a un colaborador (NO a vos mismo). "
@@ -2452,6 +2947,11 @@ TOOLS = [
                 "unidad": {
                     "type": "string",
                     "description": "Unidad de la meta (ej. '%', 'correos').",
+                },
+                "fecha_limite": {
+                    "type": "string",
+                    "description": "Fecha límite opcional ISO YYYY-MM-DD. Cuando llegue, "
+                                   "el bot le pregunta al colaborador si ya la completó.",
                 },
             },
             "required": ["target_user", "activity_id", "nombre"],
@@ -2668,6 +3168,11 @@ TOOLS = [
                     "type": "string",
                     "description": "Unidad de la meta (ej. 'correos', '%', 'horas').",
                 },
+                "fecha_limite": {
+                    "type": "string",
+                    "description": "Fecha límite opcional ISO YYYY-MM-DD. Al llegar, el "
+                                   "bot te pregunta si la completaste antes de cerrarla.",
+                },
             },
             "required": ["activity_id", "nombre"],
         },
@@ -2752,6 +3257,25 @@ def _system_prompt_activities(user_email: str | None = None) -> str:
     target_email = (user_email or activity_state.DEFAULT_USER).lower()
     target_humano = _humano(target_email)
     es_supervisor = target_email in SUPERVISORS_ONLY_EMAILS
+    es_no_identificado = target_email.startswith("unidentified-")
+
+    # Cuenta sin vincular: el AAD del usuario no está registrado, así que el bot
+    # no sabe quién es ni qué permisos tiene (un supervisor como Daniel aparece
+    # acá si su AAD nunca se mapeó → pierde las tools de delegación). Damos un
+    # mensaje claro y accionable en vez de improvisar o "perder" la petición.
+    no_id_block = ""
+    if es_no_identificado:
+        no_id_block = """
+
+⚠️ CUENTA NO VINCULADA:
+El AAD de este usuario no está registrado, así que NO sé con certeza quién es
+ni qué puede hacer. NO asumas que es un colaborador ni un supervisor.
+Si pide asignar/delegar algo a otra persona, o marcar actividades, respondé:
+"Tu cuenta todavía no está vinculada al sistema, por eso no puedo registrar ni
+delegar nada de forma segura. Escribile a Mateo (malvarado@biodegradablesecuador.com)
+para que vincule tu usuario — tu AAD id aparece en los logs del bot." NO inventes
+ni crees actividades a ciegas.
+"""
 
     # Phase V (2026-06-11): si es supervisor (Daniel), bloque extra que le dice
     # cómo asignar actividades a OTROS colaboradores.
@@ -2784,7 +3308,7 @@ NO uses `add_activity_to_week` ni `mark_daily_activity` con el email de
 
 Estás hablando con: {target_humano}
 Hoy es {now_ec.strftime("%A %d de %B de %Y, %H:%M")} (Ecuador, UTC-5).
-{supervisor_block}
+{no_id_block}{supervisor_block}
 NO TENÉS acceso a datos de ventas, HubSpot, ni nada de gerencia. Si el usuario
 pregunta "cuánto vendimos hoy", "cómo va el mes", etc., decile amablemente:
 "Para consultas de ventas, cartera, leads y deals, usá el **Data Bot** (otro
@@ -2977,10 +3501,12 @@ TRACKER_TOOL_NAMES = {
 # Daniel puede asignar actividades a cualquier colaborador desde su chat.
 SUPERVISOR_EXTRA_TOOLS_ACTIVITIES = {
     "list_team_collaborators",
+    "list_team_workload",
     "add_activity_for_collaborator",
     "schedule_reminder_for_collaborator",
     "set_activity_priority_for_collaborator",
     "list_pending_reminders",
+    "create_calendar_meeting_for_collaborator",
 }
 
 # Phase V (2026-06-11): mapa email → nombre humano. Evita que Claude se
@@ -3010,13 +3536,72 @@ DATA_TOOL_NAMES = {
     "get_hubspot_leads_ayer", "get_hubspot_leads_promedio_7d",
     "get_hubspot_deals_ganados_ayer", "get_hubspot_pipeline_abierto",
     "list_team_collaborators",
+    "list_team_workload",
     "add_activity_for_collaborator",
     "schedule_reminder_for_collaborator",
     "set_activity_priority_for_collaborator",
     "list_pending_reminders",
+    "create_calendar_meeting_for_collaborator",
     "forecast_sales_for_month",
     "analyze_product_mix",
 }
+
+
+def _missing_args(args: dict, required: tuple[str, ...]) -> list[str]:
+    """Devuelve los nombres de args requeridos que faltan o vienen vacíos.
+
+    Robustece contra el modelo omitiendo un campo 'required' del schema: en vez
+    de un KeyError críptico, el tool devuelve un error legible y accionable.
+    """
+    out: list[str] = []
+    for k in required:
+        v = args.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            out.append(k)
+    return out
+
+
+def _require_collaborator(
+    tool_name: str, args: dict, *, requested_by: str | None = None
+) -> dict:
+    """Resuelve `args['target_user']` a un colaborador registrado.
+
+    Centraliza la validación de TODOS los tools de delegación: un único lugar
+    para el manejo de 'falta target', 'no encontrado' y 'ambiguo'. Devuelve
+    `{'target': email}` si resolvió, o `{'error': msg}` listo para serializar.
+    Loguea cada intento para facilitar futuras investigaciones.
+    """
+    raw = args.get("target_user")
+    if raw is None or not str(raw).strip():
+        logger.warning("%s: sin target_user (requested_by=%s)",
+                       tool_name, requested_by or "?")
+        return {"error": "No me dijiste a QUIÉN asignar. Decime el nombre del "
+                         "colaborador (ej. 'Gabriela Sánchez', 'Mateo')."}
+
+    detail = _resolve_collaborator_detail(raw)
+    status = detail["status"]
+    if status == "ok":
+        return {"target": detail["email"]}
+
+    if status == "ambiguous":
+        opciones = ", ".join(
+            f"{c['nombre']} ({c['email']})" for c in detail["candidates"]
+        )
+        logger.warning("%s: '%s' ambiguo → %s (requested_by=%s)",
+                       tool_name, raw, opciones, requested_by or "?")
+        return {"error": f"'{raw}' coincide con varios colaboradores: "
+                         f"{opciones}. ¿A cuál te referís?"}
+
+    # not_found
+    disponibles = ", ".join(
+        f"{c['nombre']} ({c['email']})" for c in detail["candidates"]
+    )
+    logger.warning("%s: colaborador no encontrado '%s' (requested_by=%s)",
+                   tool_name, raw, requested_by or "?")
+    return {"error": f"No encontré a '{raw}' entre los colaboradores "
+                     f"registrados. Disponibles: {disponibles or '(ninguno)'}. "
+                     f"Si falta alguien, hay que registrarlo en "
+                     f"KNOWN_COLLABORATORS."}
 
 
 def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
@@ -3093,52 +3678,157 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
 
         # === Gestión de equipo (Phase E — Data Bot) ===
         if name == "list_team_collaborators":
-            return json.dumps(
-                [{"alias": k, "email": v} for k, v in COLLABORATORS.items()],
-                ensure_ascii=False,
-            )
+            seen: dict[str, dict] = {}
+            for alias, email in COLLABORATORS.items():
+                email = email.strip().lower()
+                entry = seen.setdefault(
+                    email,
+                    {"email": email, "nombre": EMAIL_TO_NAME.get(email, email),
+                     "alias": []},
+                )
+                entry["alias"].append(alias)
+            return json.dumps(list(seen.values()), ensure_ascii=False)
 
-        if name == "add_activity_for_collaborator":
-            target = _resolve_collaborator(args["target_user"])
-            if not target:
+        if name == "list_team_workload":
+            filt = args.get("target_user")
+            target = None
+            if filt:
+                detail = _resolve_collaborator_detail(filt)
+                if detail["status"] != "ok":
+                    return json.dumps({
+                        "error": f"No pude resolver '{filt}' a un colaborador. "
+                                 f"Usá list_team_collaborators para ver los nombres.",
+                    }, ensure_ascii=False)
+                target = detail["email"]
+            if target:
+                return json.dumps(_workload_rollup(target), ensure_ascii=False)
+            rollups = [_workload_rollup(e) for e in _team_collaborator_emails()]
+            return json.dumps({"equipo": rollups}, ensure_ascii=False)
+
+        if name == "create_calendar_meeting_for_collaborator":
+            res = _require_collaborator(name, args, requested_by=user_email)
+            if "error" in res:
+                return json.dumps(res, ensure_ascii=False)
+            target = res["target"]
+            if target.lower() not in {e.lower() for e in core_config.CALENDAR_SYNC_USERS}:
                 return json.dumps({
-                    "error": f"Colaborador no encontrado: '{args['target_user']}'. "
-                             f"Llamá list_team_collaborators para ver los disponibles.",
-                })
-            rec = activity_state.add_adhoc(
-                args["activity_id"],
-                args["nombre"],
-                user_email=target,
-                tipo=args.get("tipo", "unica"),
-                meta=args.get("meta"),
-                unidad=args.get("unidad", ""),
-            )
+                    "error": f"El calendario solo está habilitado para Daniel y "
+                             f"Gabriela Sánchez por ahora ({_humano(target)} no).",
+                }, ensure_ascii=False)
+            miss = _missing_args(args, ("subject", "start", "end"))
+            if miss:
+                return json.dumps({
+                    "error": f"Faltan datos para la reunión: {', '.join(miss)}. "
+                             f"Necesito título, inicio y fin con hora (ISO).",
+                }, ensure_ascii=False)
+            try:
+                ev = graph_calendar_app.create_meeting(
+                    target,
+                    subject=args["subject"],
+                    start_iso=args["start"],
+                    end_iso=args["end"],
+                    body_html=args.get("body", ""),
+                    attendees=args.get("attendees"),
+                )
+            except Exception as e:
+                logger.warning("create_calendar_meeting_for_collaborator falló "
+                               "(target=%s): %s", target, e)
+                return json.dumps({
+                    "error": f"No pude crear la reunión: {e}",
+                }, ensure_ascii=False)
+            logger.info("Reunión '%s' creada en calendario de %s por %s",
+                        args["subject"], target, user_email or "?")
             return json.dumps({
                 "ok": True,
                 "target": target,
+                "target_nombre": _humano(target),
+                "subject": args["subject"],
+                "event_id": ev.get("id"),
+                "web_link": ev.get("webLink"),
+            }, ensure_ascii=False)
+
+        if name == "add_activity_for_collaborator":
+            res = _require_collaborator(name, args, requested_by=user_email)
+            if "error" in res:
+                return json.dumps(res, ensure_ascii=False)
+            target = res["target"]
+            miss = _missing_args(args, ("activity_id", "nombre"))
+            if miss:
+                logger.warning("add_activity_for_collaborator: faltan args %s "
+                               "(target=%s)", miss, target)
+                return json.dumps({
+                    "error": f"Faltan datos para crear la actividad: {', '.join(miss)}. "
+                             f"Pedile al usuario que aclare qué actividad asignar.",
+                }, ensure_ascii=False)
+            tipo = args.get("tipo") or "unica"
+            try:
+                rec = activity_state.add_adhoc(
+                    args["activity_id"],
+                    args["nombre"],
+                    user_email=target,
+                    tipo=tipo,
+                    meta=args.get("meta"),
+                    unidad=args.get("unidad", ""),
+                    fecha_limite=args.get("fecha_limite"),
+                )
+            except ValueError as e:
+                # Actividad ya asignada (id duplicado) o tipo inválido.
+                logger.warning("add_activity_for_collaborator rechazada (target=%s, "
+                               "id=%s): %s", target, args.get("activity_id"), e)
+                msg = str(e)
+                if "Ya existe" in msg:
+                    msg = (f"'{args['activity_id']}' ya está asignada a "
+                           f"{_humano(target)} esta semana. Si querés cambiarla, "
+                           f"usá otro id o quitá la anterior primero.")
+                return json.dumps({"error": msg}, ensure_ascii=False)
+            logger.info("Actividad '%s' asignada a %s por %s",
+                        args["activity_id"], target, user_email or "?")
+            return json.dumps({
+                "ok": True,
+                "target": target,
+                "target_nombre": _humano(target),
                 "activity_id": args["activity_id"],
                 "nombre": rec["nombre"],
                 "tipo": rec["tipo"],
             }, ensure_ascii=False)
 
         if name == "schedule_reminder_for_collaborator":
-            target = _resolve_collaborator(args["target_user"])
-            if not target:
+            res = _require_collaborator(name, args, requested_by=user_email)
+            if "error" in res:
+                return json.dumps(res, ensure_ascii=False)
+            target = res["target"]
+            miss = _missing_args(args, ("send_at", "message"))
+            if miss:
+                logger.warning("schedule_reminder_for_collaborator: faltan args %s "
+                               "(target=%s)", miss, target)
                 return json.dumps({
-                    "error": f"Colaborador no encontrado: '{args['target_user']}'. "
-                             f"Llamá list_team_collaborators primero.",
-                })
-            rec = reminders.add_reminder(
-                target,
-                args["send_at"],
-                args["message"],
-                created_by=user_email or "",
-                recurrence=args.get("recurrence", ""),
-            )
+                    "error": f"Faltan datos para programar el recordatorio: "
+                             f"{', '.join(miss)}. Necesito fecha/hora y el mensaje.",
+                }, ensure_ascii=False)
+            try:
+                rec = reminders.add_reminder(
+                    target,
+                    args["send_at"],
+                    args["message"],
+                    created_by=user_email or "",
+                    recurrence=args.get("recurrence", "") or "",
+                )
+            except (ValueError, KeyError) as e:
+                logger.warning("schedule_reminder_for_collaborator rechazado "
+                               "(target=%s, send_at=%s): %s",
+                               target, args.get("send_at"), e)
+                return json.dumps({
+                    "error": f"No pude programar el recordatorio: {e}. "
+                             f"Revisá que la fecha/hora esté en formato "
+                             f"ISO (YYYY-MM-DDTHH:MM).",
+                }, ensure_ascii=False)
+            logger.info("Reminder %s para %s @ %s creado por %s",
+                        rec["id"], target, rec["send_at"], user_email or "?")
             return json.dumps({
                 "ok": True,
                 "reminder_id": rec["id"],
                 "target": target,
+                "target_nombre": _humano(target),
                 "send_at": rec["send_at"],
                 "message": rec["message"],
                 "recurrence": rec.get("recurrence", ""),
@@ -3146,18 +3836,30 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
 
         if name == "list_pending_reminders":
             filt = args.get("target_user")
-            target = _resolve_collaborator(filt) if filt else None
+            target = None
+            if filt:
+                detail = _resolve_collaborator_detail(filt)
+                if detail["status"] != "ok":
+                    # Filtro no resoluble: no rompemos, listamos todos.
+                    logger.info("list_pending_reminders: filtro '%s' no resuelto "
+                                "(%s) — listo todos", filt, detail["status"])
+                else:
+                    target = detail["email"]
             pending = reminders.list_reminders(
                 target_user=target, only_pending=True
             )
             return json.dumps(pending, ensure_ascii=False)
 
         if name == "set_activity_priority_for_collaborator":
-            target = _resolve_collaborator(args["target_user"])
-            if not target:
+            res = _require_collaborator(name, args, requested_by=user_email)
+            if "error" in res:
+                return json.dumps(res, ensure_ascii=False)
+            target = res["target"]
+            miss = _missing_args(args, ("activity_id", "priority"))
+            if miss:
                 return json.dumps({
-                    "error": f"Colaborador no encontrado: '{args['target_user']}'.",
-                })
+                    "error": f"Faltan datos: {', '.join(miss)}.",
+                }, ensure_ascii=False)
             try:
                 rec = activity_state.set_priority(
                     args["activity_id"],
@@ -3167,12 +3869,15 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
                 return json.dumps({
                     "ok": True,
                     "target": target,
+                    "target_nombre": _humano(target),
                     "activity_id": args["activity_id"],
                     "priority": rec.get("priority"),
                     "nombre": rec.get("nombre"),
                 }, ensure_ascii=False)
             except ValueError as e:
-                return json.dumps({"error": str(e)})
+                logger.warning("set_activity_priority_for_collaborator (target=%s, "
+                               "id=%s): %s", target, args.get("activity_id"), e)
+                return json.dumps({"error": str(e)}, ensure_ascii=False)
 
         # === Proyecciones (Phase H — Data Bot) ===
         if name == "forecast_sales_for_month":
@@ -3219,6 +3924,7 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
                 tipo=args.get("tipo", "unica"),
                 meta=args.get("meta"),
                 unidad=args.get("unidad", ""),
+                fecha_limite=args.get("fecha_limite"),
             )
             return json.dumps(
                 {"ok": True, "activity_id": args["activity_id"],

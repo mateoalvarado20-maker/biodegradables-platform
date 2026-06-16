@@ -39,6 +39,16 @@ GABRIELA = os.environ.get(
     "REPORT_LOGISTICA_TO", "gsanchez@biodegradablesecuador.com"
 ).strip()
 
+# ===== Integración de calendario (Feature 2026-06-15) =====
+# Colaboradores cuyos eventos de fecha límite / reuniones el bot crea en su
+# calendario de Outlook/Teams (app-only, ver graph_calendar_app.py). Por ahora
+# SOLO gerencia. Requiere admin consent del permiso Application Calendars.ReadWrite
+# y CALENDAR_SYNC_ENABLED=1 para que el job programado corra (ver azure_setup_checklist.md).
+CALENDAR_SYNC_USERS = _env_list(
+    "CALENDAR_SYNC_USERS",
+    "dsanchez@biodegradablesecuador.com,gsanchez@biodegradablesecuador.com",
+)
+
 
 # ===== Check-in del Activities Bot (hora Ecuador, America/Guayaquil) =====
 # Única fuente de verdad de horarios y destinatarios del check-in card.

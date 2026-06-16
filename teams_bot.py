@@ -54,6 +54,7 @@ import ask_agent
 import activity_state
 import contifico_client
 import core_config
+import graph_calendar_app
 import conversation_history
 import monthly_recap
 import news_brief
@@ -693,6 +694,7 @@ ACTIVITIES_HELP = (
     "**Activities Bot — tu tracker personal:**\n"
     "• `/checkin` — formulario con tus actividades del día\n"
     "• `/status` — progreso de la semana actual\n"
+    "• `/tareas` — tus tareas pendientes / en progreso / vencidas\n"
     "• `/help` — esta ayuda\n\n"
     "**Schedule automático:** te escribo Lun-Vie 4:30 PM y Sáb 12:30 PM.\n\n"
     "Para consultas de ventas/cartera, usá el **Data Bot**."
@@ -748,7 +750,9 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
         },
         {
             "type": "TextBlock",
-            "text": "¿Trabajaste el horario estándar (8:30 AM – 5:30 PM)?",
+            # El horario estándar depende del día: sábados es jornada reducida
+            # 9:00 AM – 1:00 PM (sucursales GYE/UIO), resto 8:30 AM – 5:30 PM.
+            "text": f"¿Trabajaste el horario estándar ({activity_state.horario_estandar_label(hoy.date())})?",
             "wrap": True,
             "spacing": "Small",
         },
@@ -1607,6 +1611,17 @@ async def _on_turn_activities(context: TurnContext) -> None:
             _save_ref_for_user("activities", email, ref)
             await _handle_checkin_submission(context, activity.value, email)
             return
+        if intent == "confirm_task":
+            email = await _resolve_or_reject(context)
+            if not email:
+                return
+            if not _is_allowed_activities(email):
+                await context.send_activity("No tenés acceso a este bot.")
+                return
+            ref = TurnContext.get_conversation_reference(activity)
+            _save_ref_for_user("activities", email, ref)
+            await _handle_task_confirmation(context, activity.value, email)
+            return
         # Phase U: handlers del card de ruta de José
         if isinstance(intent, str) and intent.startswith("jose_"):
             email = await _resolve_or_reject(context)
@@ -1923,6 +1938,29 @@ async def _on_turn_activities(context: TurnContext) -> None:
             return
         await context.send_activity(_build_checkin_card(email))
         return
+    # Resumen de carga de tareas (Feature 2026-06-15). Supervisores (Daniel +
+    # Gabriela Sánchez) ven todo el equipo o un colaborador puntual; el resto
+    # solo su propia carga.
+    if lower.startswith("/tareas") or lower.startswith("/resumen"):
+        partes_cmd = text.split(maxsplit=1)
+        arg = partes_cmd[1].strip() if len(partes_cmd) > 1 else ""
+        if email not in WORKLOAD_SUPERVISORS:
+            txt = await asyncio.to_thread(ask_agent._workload_text_for_chat, email)
+            await context.send_activity(txt)
+            return
+        target = None
+        if arg:
+            target = ask_agent._resolve_collaborator(arg)
+            if not target:
+                await context.send_activity(
+                    f"No reconocí a '{arg}'. Probá con el nombre o email exacto, "
+                    "o `/tareas` sin argumento para ver todo el equipo."
+                )
+                return
+        txt = await asyncio.to_thread(ask_agent._workload_text_for_chat, target)
+        await context.send_activity(txt)
+        return
+
     if lower in ("/status", "/week"):
         if es_supervisor:
             await context.send_activity(_SUPERVISOR_CARD_MSG)
@@ -2021,6 +2059,14 @@ async def send_weekly_summaries() -> None:
             logger.exception("Falló weekly summary para %s: %s", email, e)
             errores += 1
     logger.info("send_weekly_summaries: %d enviados, %d errores", enviados, errores)
+
+    # Roll-up de carga del equipo a supervisores (Feature 2026-06-15): un solo
+    # correo con pendientes/vencidas/próximas fechas de cada colaborador.
+    try:
+        res = await asyncio.to_thread(ask_agent.send_team_workload_summary)
+        logger.info("Team workload roll-up enviado → %s", res.get("to"))
+    except Exception as e:
+        logger.exception("Falló team workload roll-up: %s", e)
 
 
 # ===== Auto-asignación de cobranzas (Phase F) =====
@@ -2185,6 +2231,13 @@ SUPERVISORS_ONLY: set[str] = {
     "dsanchez@biodegradablesecuador.com",  # Daniel — gerente general
 }
 
+# Quienes pueden consultar la carga de TODO el equipo vía /tareas (gerencia).
+# Gabriela Sánchez SÍ trackea actividades propias (no está en SUPERVISORS_ONLY)
+# pero como gerente comercial puede ver la carga del equipo.
+WORKLOAD_SUPERVISORS: set[str] = SUPERVISORS_ONLY | {
+    "gsanchez@biodegradablesecuador.com",
+}
+
 # Phase U: el resumen del día de José va solo a Daniel + Mateo
 # (Gabriela maneja UIO, José es chofer GYE)
 JOSE_SUMMARY_TO = [
@@ -2239,6 +2292,185 @@ async def send_daily_checkin(
             logger.info("Check-in enviado a %s", email)
         except Exception as e:
             logger.exception("Falló check-in a %s: %s", email, e)
+
+
+def _build_task_confirmation_card(
+    user_email: str,
+    activity_id: str,
+    nombre: str,
+    fecha_limite: str | None,
+    status_efectivo: str,
+) -> Activity:
+    """Card proactivo que pregunta si una tarea ya se completó (Feature
+    confirmación de cierre, 2026-06-15).
+
+    SOLO "Sí, completada" finaliza la tarea. Las otras opciones la mantienen
+    viva: sigue en proceso, posponer N días, o actualizar la fecha límite. Así
+    una tarea recurrente o de largo plazo nunca desaparece por error.
+    """
+    hoy_iso = activity_state._today().isoformat()
+    fl_human = ""
+    if fecha_limite:
+        try:
+            fl_human = datetime.fromisoformat(fecha_limite).strftime("%d/%m/%Y")
+        except ValueError:
+            fl_human = fecha_limite
+    venc_txt = " (⚠️ vencida)" if status_efectivo == "vencida" else ""
+    intro = (
+        f"📌 La tarea **{nombre}**"
+        + (f" llegó a su fecha límite **{fl_human}**{venc_txt}" if fl_human else "")
+        + ".\n\n¿La actividad ya fue culminada?"
+    )
+    body: list[dict[str, Any]] = [
+        {"type": "TextBlock", "text": "✅ Confirmación de tarea",
+         "size": "Large", "weight": "Bolder", "color": "Accent"},
+        {"type": "TextBlock", "text": intro, "wrap": True, "spacing": "Small"},
+        {"type": "Input.ChoiceSet", "id": "task_action", "style": "expanded",
+         "value": "si_completada",
+         "choices": [
+             {"title": "✅ Sí, actividad completada", "value": "si_completada"},
+             {"title": "🔄 No, continúa en proceso", "value": "no_proceso"},
+             {"title": "⏰ Posponer (indicá días abajo)", "value": "posponer"},
+             {"title": "📅 Actualizar fecha (indicá abajo)", "value": "actualizar_fecha"},
+         ]},
+        {"type": "Input.Number", "id": "task_snooze_dias",
+         "placeholder": "Días a posponer (default 3)", "value": 3, "min": 1},
+        {"type": "Input.Text", "id": "task_nueva_fecha",
+         "placeholder": "Nueva fecha AAAA-MM-DD (solo si elegís 'Actualizar fecha')"},
+    ]
+    card_json = {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body,
+        "actions": [{
+            "type": "Action.Submit",
+            "title": "Confirmar",
+            "data": {
+                "intent": "confirm_task",
+                "task_aid": activity_id,
+                "ctx_user": user_email.lower(),
+                "ctx_fecha": hoy_iso,
+            },
+        }],
+    }
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card_json,
+    )
+    return Activity(type=ActivityTypes.message, attachments=[attachment])
+
+
+async def _handle_task_confirmation(
+    context: TurnContext, form_data: dict[str, Any], user_email: str
+) -> None:
+    """Procesa la respuesta del card de confirmación de tarea. Reusa el guard
+    ctx_user para que un card viejo no caiga en el usuario equivocado."""
+    ctx_user = (form_data.get("ctx_user") or "").strip().lower()
+    if ctx_user and ctx_user != (user_email or "").strip().lower():
+        await context.send_activity(
+            "❌ Esta confirmación fue generada para otro usuario."
+        )
+        return
+    aid = (form_data.get("task_aid") or "").strip()
+    if not aid:
+        await context.send_activity("No identifiqué la tarea. Reintentá.")
+        return
+    action = (form_data.get("task_action") or "si_completada").strip()
+    try:
+        if action == "si_completada":
+            activity_state.set_task_status(
+                aid, "finalizada", user_email=user_email,
+                by=user_email, note="confirmada por colaborador",
+            )
+            await context.send_activity("✅ Tarea marcada como **completada**. ¡Bien ahí!")
+        elif action == "no_proceso":
+            activity_state.set_task_status(
+                aid, "en_progreso", user_email=user_email,
+                by=user_email, note="sigue en proceso",
+            )
+            await context.send_activity("🔄 Anotado: la tarea **sigue en proceso**.")
+        elif action == "posponer":
+            dias_raw = form_data.get("task_snooze_dias")
+            try:
+                dias = int(float(dias_raw)) if dias_raw not in (None, "") else 3
+            except (TypeError, ValueError):
+                dias = 3
+            dias = max(1, dias)
+            entry = activity_state.snooze_task(
+                aid, dias, user_email=user_email, by=user_email
+            )
+            await context.send_activity(
+                f"⏰ Pospuesta {dias} día(s). Nueva fecha límite: "
+                f"**{entry['fecha_limite']}**."
+            )
+        elif action == "actualizar_fecha":
+            nueva = (form_data.get("task_nueva_fecha") or "").strip()
+            if not nueva:
+                await context.send_activity(
+                    "❌ No indicaste la nueva fecha. Usá AAAA-MM-DD (ej. 2026-07-01)."
+                )
+                return
+            try:
+                activity_state.set_task_fecha_limite(
+                    aid, nueva, user_email=user_email, by=user_email
+                )
+            except ValueError:
+                await context.send_activity(
+                    "❌ Fecha inválida. Usá el formato AAAA-MM-DD (ej. 2026-07-01)."
+                )
+                return
+            await context.send_activity(f"📅 Fecha límite actualizada a **{nueva}**.")
+        else:
+            await context.send_activity("No reconocí la opción. Reintentá.")
+    except ValueError as e:
+        await context.send_activity(f"⚠️ {e}")
+
+
+async def send_task_confirmations_job() -> None:
+    """Lun-Vie 9:00 EC: por cada tarea no-diaria cuya fecha límite ya llegó (o
+    pasó) y no está finalizada, manda al colaborador el card de confirmación.
+
+    Anti-spam: una sola vez por día por tarea (`last_confirmation_asked`).
+    """
+    open_by_user = activity_state.list_open_tasks_all_users()
+    if not open_by_user:
+        return
+    refs = _load_refs().get("activities", {})
+    hoy_iso = activity_state._today().isoformat()
+    enviados = 0
+    for email, tasks in open_by_user.items():
+        if email.startswith("unidentified-"):
+            continue
+        ref_dict = refs.get(email)
+        for aid, entry, eff in tasks:
+            fl = entry.get("fecha_limite")
+            if not fl or fl > hoy_iso:
+                continue  # todavía no llega su fecha límite
+            if entry.get("last_confirmation_asked") == hoy_iso:
+                continue  # ya se preguntó hoy
+            if not ref_dict:
+                logger.warning(
+                    "confirm_task: %s sin ref del activities bot (no saludó)", email
+                )
+                continue
+            try:
+                ref = ConversationReference().deserialize(ref_dict)
+                card = _build_task_confirmation_card(
+                    email, aid, entry.get("nombre", aid), fl, eff
+                )
+
+                async def cb(turn_context: TurnContext, _card: Activity = card) -> None:
+                    await turn_context.send_activity(_card)
+
+                await activities_adapter.continue_conversation(
+                    ref, cb, bot_id=ACTIVITIES_APP_ID
+                )
+                activity_state.mark_task_confirmation_asked(aid, user_email=email)
+                enviados += 1
+            except Exception as e:
+                logger.exception("Falló confirm_task %s a %s: %s", aid, email, e)
+    logger.info("send_task_confirmations_job: %d confirmaciones enviadas", enviados)
 
 
 def _build_confirmacion_cierre_card(
@@ -3964,6 +4196,24 @@ async def send_consolidated_daily_summary_job() -> None:
         logger.exception("Falló consolidated daily summary: %s", e)
 
 
+async def send_saturday_recap_summary_job() -> None:
+    """Recap del sábado (2026-06-15): los LUNES a las 8:00 EC manda UN correo a
+    Daniel+Gabriela con el resumen de las actividades del SÁBADO anterior. Es la
+    única vista consolidada del sábado — el consolidado de 18:30 es Lun-Vie y
+    nunca cubría el sábado. NO duplica nada: usa su propia ledger key
+    `saturday_recap` y solo corre el lunes."""
+    try:
+        from ask_agent import send_saturday_recap_summary
+        result = await asyncio.to_thread(send_saturday_recap_summary)
+        logger.info(
+            "Saturday recap OK → fecha=%s to=%s cc=%s collabs=%s",
+            result.get("target_date"), result.get("to"),
+            result.get("cc"), result.get("collaborators"),
+        )
+    except Exception as e:
+        logger.exception("Falló saturday recap: %s", e)
+
+
 # ===== Scheduler =====
 EC_TZ = pytz.timezone("America/Guayaquil")
 # Fase 3 (auditoría S2): misfire_grace_time era el default de 1 segundo — un
@@ -4030,6 +4280,109 @@ async def _job_consolidated_daily() -> None:
         "consolidated_daily_summary",
         send_consolidated_daily_summary_job,
         ledger_key="consolidated_daily",
+    )
+
+
+async def _job_task_confirmations() -> None:
+    await _reliable_job(
+        "task_confirmations",
+        send_task_confirmations_job,
+        ledger_key="task_confirmations",
+    )
+
+
+async def sync_task_calendar_events_job() -> None:
+    """Lun-Vie 8:45 EC: sincroniza recordatorios de fecha límite de tareas en el
+    calendario de Outlook/Teams de los usuarios en CALENDAR_SYNC_USERS
+    (Daniel + Gabriela). UNIDIRECCIONAL Bot→Calendario, app-only.
+
+    - tarea abierta con fecha_limite y sin evento  → crea evento all-day.
+    - cambió la fecha_limite                       → mueve el evento.
+    - tarea finalizada con evento                  → borra el evento.
+    Idempotente: guarda calendar_event_id/synced_fecha en la tarea.
+    """
+    targets = list(core_config.CALENDAR_SYNC_USERS)
+    if not targets:
+        return
+    creados = patched = borrados = 0
+    for email in targets:
+        try:
+            tasks = await asyncio.to_thread(activity_state.list_tasks, email)
+        except Exception as e:
+            logger.exception("calendar_sync: list_tasks falló para %s: %s", email, e)
+            continue
+        for aid, entry, eff in tasks:
+            ev_id = entry.get("calendar_event_id")
+            try:
+                if eff == "finalizada":
+                    if ev_id:
+                        await asyncio.to_thread(
+                            graph_calendar_app.delete_event, email, ev_id
+                        )
+                        activity_state.set_task_calendar_ref(
+                            aid, None, None, user_email=email
+                        )
+                        borrados += 1
+                    continue
+                fl = entry.get("fecha_limite")
+                if not fl:
+                    continue
+                nombre = entry.get("nombre", aid)
+                subject = f"📌 Tarea: {nombre}"
+                if not ev_id:
+                    ev = await asyncio.to_thread(
+                        lambda: graph_calendar_app.create_task_due_event(
+                            email, subject=subject, due_date_iso=fl,
+                            body_html=(
+                                f"Recordatorio del Activity Bot — tarea «{nombre}» "
+                                f"con fecha límite {fl}."
+                            ),
+                        )
+                    )
+                    activity_state.set_task_calendar_ref(
+                        aid, ev.get("id"), ev.get("webLink"),
+                        user_email=email, synced_fecha=fl,
+                    )
+                    creados += 1
+                elif entry.get("calendar_synced_fecha") != fl:
+                    await asyncio.to_thread(
+                        graph_calendar_app.update_task_due_event,
+                        email, ev_id, due_date_iso=fl,
+                    )
+                    activity_state.set_task_calendar_ref(
+                        aid, ev_id, entry.get("calendar_web_link"),
+                        user_email=email, synced_fecha=fl,
+                    )
+                    patched += 1
+            except Exception as e:
+                logger.exception(
+                    "calendar_sync: tarea %s de %s falló: %s", aid, email, e
+                )
+    logger.info(
+        "sync_task_calendar_events_job: %d creados, %d actualizados, %d borrados",
+        creados, patched, borrados,
+    )
+
+
+async def _job_calendar_sync() -> None:
+    # alert=False: hasta que se otorgue el admin consent de Calendars.ReadWrite
+    # este job falla; no queremos spamear alertas. Se activa con
+    # CALENDAR_SYNC_ENABLED=1 recién después del consent.
+    await _reliable_job(
+        "calendar_sync",
+        sync_task_calendar_events_job,
+        ledger_key="calendar_sync",
+        alert=False,
+    )
+
+
+async def _job_saturday_recap() -> None:
+    # Ledger key propia (`saturday_recap`) → nunca choca con el consolidado de
+    # 18:30 ni se manda dos veces el mismo lunes.
+    await _reliable_job(
+        "saturday_recap",
+        send_saturday_recap_summary_job,
+        ledger_key="saturday_recap",
     )
 
 
@@ -4138,6 +4491,27 @@ def _schedule_jobs() -> None:
         id="weekly_summaries",
         replace_existing=True,
     )
+    # Confirmación de tareas: Lun-Vie 9:00 EC — pregunta por tareas no-diarias
+    # que llegaron a su fecha límite y no están finalizadas (Feature 2026-06-15).
+    scheduler.add_job(
+        _job_task_confirmations,
+        CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=EC_TZ),
+        id="task_confirmations",
+        replace_existing=True,
+    )
+    # Sync de calendario: Lun-Vie 8:45 EC. Detrás de CALENDAR_SYNC_ENABLED=1
+    # porque necesita el admin consent del permiso Application Calendars.ReadWrite
+    # (ver azure_setup_checklist.md). Hasta entonces no se registra para no
+    # fallar/alertar a diario. El endpoint /admin/trigger-calendar-sync queda
+    # disponible para pruebas manuales aunque el flag esté apagado.
+    if os.environ.get("CALENDAR_SYNC_ENABLED", "0").strip() == "1":
+        scheduler.add_job(
+            _job_calendar_sync,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=45, timezone=EC_TZ),
+            id="calendar_sync",
+            replace_existing=True,
+        )
+        logger.info("calendar_sync programado (CALENDAR_SYNC_ENABLED=1)")
     # Daily news brief: 6 AM EC, antes del daily report y de queries de gerencia
     scheduler.add_job(
         generate_daily_news_brief,
@@ -4190,6 +4564,17 @@ def _schedule_jobs() -> None:
         replace_existing=True,
     )
 
+    # Recap del sábado (2026-06-15): LUNES 8:00 EC. Un solo correo con las
+    # actividades del SÁBADO anterior (José + asistente GYE de turno). El job
+    # 18:30 sigue corriendo el lunes con las actividades del propio lunes — son
+    # días distintos, sin duplicación (ledger key `saturday_recap` separada).
+    scheduler.add_job(
+        _job_saturday_recap,
+        CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=EC_TZ),
+        id="saturday_recap",
+        replace_existing=True,
+    )
+
     # Phase U (2026-06-09): José — card on-demand cuando él escribe al bot,
     # NO en horario fijo.
     # Phase V (2026-06-10): el resumen del día de José YA NO se envía como
@@ -4225,7 +4610,7 @@ def _schedule_jobs() -> None:
         "sat 12:30 (domingo NADA), reminders */5min, "
         "cobranzas mon-fri 7:30, weekly_summaries fri 17:00, "
         "news_brief daily 6:00, monthly_recaps day 1 9:00+10:00, "
-        "consolidated_daily mon-fri 18:30, "
+        "consolidated_daily mon-fri 18:30, saturday_recap mon 8:00, "
         "jose_summary mon-sat 18:30 (card on-demand)"
     )
 
@@ -4240,8 +4625,13 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
          lambda now: now.weekday() <= 5 and (now.hour, now.minute) >= (8, 0)),
         ("consolidated_daily", _job_consolidated_daily,
          lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (18, 30)),
+        # Recap del sábado: solo lunes (weekday 0), desde las 8:00.
+        ("saturday_recap", _job_saturday_recap,
+         lambda now: now.weekday() == 0 and (now.hour, now.minute) >= (8, 0)),
         ("weekly_summaries", _job_weekly_summaries,
          lambda now: now.weekday() == 4 and (now.hour, now.minute) >= (17, 0)),
+        ("task_confirmations", _job_task_confirmations,
+         lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (9, 0)),
         ("monthly_sales_recap", _job_monthly_sales_recap,
          lambda now: now.day == 1 and (now.hour, now.minute) >= (9, 0)),
         ("monthly_activities_recap", _job_monthly_activities_recap,
@@ -4272,6 +4662,11 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
         specs.append(
             ("logistics_morning", _job_logistics_morning,
              lambda now: now.weekday() <= 5 and (now.hour, now.minute) >= (8, 0))
+        )
+    if os.environ.get("CALENDAR_SYNC_ENABLED", "0").strip() == "1":
+        specs.append(
+            ("calendar_sync", _job_calendar_sync,
+             lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (8, 45))
         )
     return specs
 
@@ -4465,6 +4860,31 @@ async def trigger_weekly_summaries(request: Request) -> dict[str, Any]:
     """Forzar envío de weekly summaries ahora (testing)."""
     _require_admin(request)
     await send_weekly_summaries()
+    return {"status": "triggered"}
+
+
+@app.post("/admin/trigger-task-confirmations")
+async def trigger_task_confirmations(request: Request) -> dict[str, Any]:
+    """Forzar el envío de cards de confirmación de tareas ahora (testing)."""
+    _require_admin(request)
+    await send_task_confirmations_job()
+    return {"status": "triggered"}
+
+
+@app.post("/admin/trigger-team-workload")
+async def trigger_team_workload(request: Request) -> dict[str, Any]:
+    """Forzar el envío del roll-up de carga del equipo ahora (testing)."""
+    _require_admin(request)
+    result = await asyncio.to_thread(ask_agent.send_team_workload_summary)
+    return {"status": "triggered", **result}
+
+
+@app.post("/admin/trigger-calendar-sync")
+async def trigger_calendar_sync(request: Request) -> dict[str, Any]:
+    """Forzar el sync de eventos de calendario ahora (testing). Funciona aunque
+    CALENDAR_SYNC_ENABLED esté apagado — útil para validar tras el admin consent."""
+    _require_admin(request)
+    await sync_task_calendar_events_job()
     return {"status": "triggered"}
 
 
@@ -5128,6 +5548,26 @@ async def trigger_consolidated_daily(request: Request) -> dict[str, Any]:
     from ask_agent import _send_consolidated_daily_summary
     result = await asyncio.to_thread(
         _send_consolidated_daily_summary, to_override, cc_override
+    )
+    return result
+
+
+@app.post("/admin/trigger-saturday-recap")
+async def trigger_saturday_recap(request: Request) -> dict[str, Any]:
+    """Dispara el recap del sábado ahora (testing). Reporta el sábado anterior.
+
+    Body opcional: {"to_override": ["..."], "cc_override": ["..."]}.
+    """
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    to_override = (body or {}).get("to_override")
+    cc_override = (body or {}).get("cc_override")
+    from ask_agent import send_saturday_recap_summary
+    result = await asyncio.to_thread(
+        send_saturday_recap_summary, to_override, cc_override
     )
     return result
 

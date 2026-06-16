@@ -52,12 +52,38 @@ En la App Registration creada (la que generó el bot):
 2. Buscar y agregar:
    - `Mail.Send` (para mandar correos)
    - `Mail.ReadWrite` (para reply_agent)
-   - `Calendars.ReadWrite` (para recordatorios)
+   - `Calendars.ReadWrite` (**Application** — para que el bot cree eventos/recordatorios
+     de tareas y reuniones en el calendario de Daniel/Gabriela vía `graph_calendar_app.py`)
 3. **Grant admin consent for Biodegradables Ecuador** (botón azul)
 
 *Nota: estos permisos los necesita el bot para integrarse con los otros agentes
 existentes. Power BI Service ya está cubierto por la app `claude-agent`
 existente, no necesita duplicarse acá.*
+
+### Calendar sync (Feature 2026-06-15) — pasos extra
+
+`Calendars.ReadWrite` de tipo **Application** da acceso a los calendarios de
+**TODOS** los buzones del tenant. Para acotar a least-privilege a solo Daniel +
+Gabriela Sánchez, crear una **Application Access Policy** (Exchange Online
+PowerShell):
+
+```powershell
+New-ApplicationAccessPolicy -AppId <MICROSOFT_APP_ID> `
+  -PolicyScopeGroupId <grupo-con-dsanchez-y-gsanchez> `
+  -AccessRight RestrictAccess `
+  -Description "Activity Bot solo calendario de gerencia"
+```
+
+Después del admin consent (y opcionalmente la Application Access Policy):
+
+1. Validar manualmente con el endpoint admin (sin esperar al cron):
+   `POST /admin/trigger-calendar-sync` con header `X-Admin-Token: <MICROSOFT_APP_PASSWORD>`.
+   Revisar que aparezcan los eventos en el calendario de prueba.
+2. Recién entonces, activar el job programado (Lun-Vie 8:45 EC) seteando en el
+   App Service: `CALENDAR_SYNC_ENABLED=1`. Hasta que esté seteado, el job NO se
+   registra (no falla ni alerta a diario).
+3. (Opcional) Ajustar a quién se le crean eventos con la env var
+   `CALENDAR_SYNC_USERS` (CSV de emails; default Daniel + Gabriela).
 
 ## Paso 4 — Crear App Service para hostear el código
 

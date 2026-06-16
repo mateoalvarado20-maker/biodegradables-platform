@@ -35,6 +35,7 @@ Phase D (2026-05-30):
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import functools
@@ -52,6 +53,19 @@ TEMPLATE_DEFAULT = Path(__file__).parent / "activities_template.json"
 
 VALID_TIPOS: tuple[str, ...] = ("diaria", "semanal", "unica")
 VALID_FUENTES: tuple[str, ...] = ("auto", "manual")
+
+# ===== Tareas persistentes (2026-06-15) =====
+# Las actividades NO-diarias (unica/semanal) se vuelven tareas persistentes:
+# sobreviven el cambio de semana ISO (carry-forward en init_week) hasta que se
+# marcan `finalizada` con confirmación explícita. Las `diaria` (métricas
+# recurrentes tipo Apollo 70 correos / cierre de caja) NO se arrastran: siguen
+# reseteando por semana, que es lo correcto.
+#   status guardado:  pendiente | en_progreso | finalizada
+#   status DERIVADO:  vencida (fecha_limite < hoy y status != finalizada) — NO
+#                     se persiste, para que Posponer/Actualizar fecha salgan del
+#                     estado vencido solo moviendo la fecha.
+VALID_TASK_STATUSES: tuple[str, ...] = ("pendiente", "en_progreso", "finalizada")
+TASK_OPEN_STATUSES: tuple[str, ...] = ("pendiente", "en_progreso", "vencida")
 
 DEFAULT_USER = os.environ.get(
     "TRACKER_TARGET_USER", "malvarado@biodegradablesecuador.com"
@@ -144,11 +158,160 @@ def week_range(wk: str) -> tuple[date, date]:
     return monday, monday + timedelta(days=4)
 
 
+# ===== Horario estándar por día (2026-06-15) =====
+# Lun-Vie: 8:30 AM – 5:30 PM. Sábado: jornada reducida 9:00 AM – 1:00 PM.
+# Centralizado acá para que el Activity Bot (check-in card) y los resúmenes
+# derivados muestren EXACTAMENTE la misma jornada según el día.
+HORARIO_ESTANDAR_SEMANA = ("8:30 AM", "5:30 PM")
+HORARIO_ESTANDAR_SABADO = ("9:00 AM", "1:00 PM")
+HORARIO_ESTANDAR_SEMANA_CORTO = "8:30–17:30"
+HORARIO_ESTANDAR_SABADO_CORTO = "9:00–13:00"
+
+
+def _coerce_date(fecha: "str | date | None") -> date:
+    if fecha is None:
+        return _today()
+    if isinstance(fecha, date):
+        return fecha
+    return date.fromisoformat(fecha)
+
+
+def es_sabado(fecha: "str | date | None" = None) -> bool:
+    """True si la fecha (default hoy EC) cae en sábado."""
+    return _coerce_date(fecha).weekday() == 5
+
+
+def horario_estandar(fecha: "str | date | None" = None) -> tuple[str, str]:
+    """(desde, hasta) del horario estándar según el día.
+
+    Sábado → 9:00 AM – 1:00 PM (jornada reducida GYE/sucursales).
+    Resto  → 8:30 AM – 5:30 PM.
+    """
+    if es_sabado(fecha):
+        return HORARIO_ESTANDAR_SABADO
+    return HORARIO_ESTANDAR_SEMANA
+
+
+def horario_estandar_label(fecha: "str | date | None" = None) -> str:
+    """Etiqueta larga: "9:00 AM – 1:00 PM" (sáb) o "8:30 AM – 5:30 PM"."""
+    desde, hasta = horario_estandar(fecha)
+    return f"{desde} – {hasta}"
+
+
+def horario_estandar_corto(fecha: "str | date | None" = None) -> str:
+    """Etiqueta compacta: "9:00–13:00" (sáb) o "8:30–17:30"."""
+    if es_sabado(fecha):
+        return HORARIO_ESTANDAR_SABADO_CORTO
+    return HORARIO_ESTANDAR_SEMANA_CORTO
+
+
 def _get_user_state(state: dict, user_email: str) -> dict[str, Any]:
     email = _normalize_email(user_email)
     if email not in state["users"]:
         state["users"][email] = {"weeks": {}}
     return state["users"][email]
+
+
+# ============ Tareas persistentes: helpers (no mutan el state file) ============
+def _is_task(entry: dict[str, Any] | None) -> bool:
+    """True si el entry es una tarea no-diaria (unica/semanal) — persistente."""
+    return bool(entry) and entry.get("tipo") in ("semanal", "unica")
+
+
+def _parse_week_key(wk: str) -> tuple[int, int]:
+    """`2026-W22` → (2026, 22). Lanza ValueError si el formato no calza."""
+    year_s, w_s = wk.split("-W")
+    return int(year_s), int(w_s)
+
+
+def _prev_week_key_with_data(user: dict[str, Any], wk: str) -> str | None:
+    """Clave de la semana con datos más reciente estrictamente anterior a `wk`.
+
+    Parsea a (año, semana) para manejar el borde W52→W01 — NO confiar en el
+    orden lexicográfico de los strings (`2025-W52` < `2026-W01` calza por
+    casualidad, pero conviene ser explícito y robusto).
+    """
+    try:
+        target = _parse_week_key(wk)
+    except (ValueError, IndexError):
+        return None
+    best_key: str | None = None
+    best_tuple: tuple[int, int] | None = None
+    for k in user.get("weeks", {}):
+        try:
+            t = _parse_week_key(k)
+        except (ValueError, IndexError):
+            continue
+        if t < target and (best_tuple is None or t > best_tuple):
+            best_tuple, best_key = t, k
+    return best_key
+
+
+def _ensure_task_fields(entry: dict[str, Any], wk: str) -> dict[str, Any]:
+    """Rellena (in-place) los campos de tarea persistente faltantes.
+
+    Idempotente y de migración lazy: entries creados antes de esta feature no
+    tienen status/history/fecha_limite — al tocarlos (carry-forward, add_adhoc,
+    set_weekly_progress, mutadores de tarea) quedan bien formados sin reescribir
+    semanas históricas enteras. Solo aplica a tareas no-diarias.
+    """
+    if not _is_task(entry):
+        return entry
+    if "status" not in entry:
+        avance = entry.get("avance") or 0
+        entry["status"] = "finalizada" if avance >= 100 else "pendiente"
+    entry.setdefault("fecha_limite", None)
+    created = (
+        entry.get("created_at")
+        or entry.get("ultima_actualizacion")
+        or _now_iso()
+    )
+    entry.setdefault("created_at", created)
+    entry.setdefault("updated_at", entry.get("ultima_actualizacion") or created)
+    entry.setdefault("history", [])
+    entry.setdefault("origen_wk", wk)
+    entry.setdefault("calendar_event_id", None)
+    entry.setdefault("calendar_web_link", None)
+    entry.setdefault("calendar_synced_fecha", None)
+    entry.setdefault("last_confirmation_asked", None)
+    return entry
+
+
+def task_effective_status(
+    entry: dict[str, Any] | None, today: date | None = None
+) -> str:
+    """Status efectivo de una tarea no-diaria. '' si el entry no es tarea.
+
+    'vencida' se DERIVA (fecha_limite < hoy y no finalizada); nunca se persiste,
+    así Posponer/Actualizar fecha la sacan del estado vencido solo moviendo la
+    fecha límite.
+    """
+    if not _is_task(entry):
+        return ""
+    status = entry.get("status") or "pendiente"
+    if status == "finalizada":
+        return "finalizada"
+    fl = entry.get("fecha_limite")
+    if fl:
+        today = today or _today()
+        try:
+            if date.fromisoformat(fl) < today:
+                return "vencida"
+        except (ValueError, TypeError):
+            pass
+    return status
+
+
+def _append_history(
+    entry: dict[str, Any], frm: Any, to: Any, *, by: str, note: str
+) -> None:
+    entry.setdefault("history", []).append({
+        "at": _now_iso(),
+        "from": frm,
+        "to": to,
+        "by": by or "system",
+        "note": note,
+    })
 
 
 # ============ Funciones principales (per-user) ============
@@ -183,7 +346,31 @@ def init_week(
             entry["avance"] = 0
             entry["notas"] = ""
             entry["ultima_actualizacion"] = None
+            entry["fecha_limite"] = a.get("fecha_limite")
+            _ensure_task_fields(entry, wk)
         activities[a["id"]] = entry
+
+    # Carry-forward (2026-06-15): arrastra las tareas no-diarias NO finalizadas
+    # de la semana con datos más reciente. Así las tareas ad-hoc/asignadas y los
+    # proyectos sobreviven el cambio de semana en vez de desaparecer. La versión
+    # arrastrada GANA sobre la del template (preserva estado/avance/historial);
+    # las diarias nunca se arrastran (no colisionan).
+    prev_wk = _prev_week_key_with_data(user, wk)
+    if prev_wk:
+        prev_acts = user["weeks"][prev_wk].get("activities", {}) or {}
+        for aid, prev_entry in prev_acts.items():
+            if not _is_task(prev_entry):
+                continue
+            _ensure_task_fields(prev_entry, prev_wk)
+            if task_effective_status(prev_entry) == "finalizada":
+                continue
+            carried = copy.deepcopy(prev_entry)
+            carried["updated_at"] = _now_iso()
+            _append_history(
+                carried, carried.get("status"), carried.get("status"),
+                by="system", note=f"carry-forward {prev_wk}→{wk}",
+            )
+            activities[aid] = carried
 
     user["weeks"][wk] = {
         "started_at": _now_iso(),
@@ -273,10 +460,18 @@ def set_weekly_progress(
     if entry["tipo"] == "diaria":
         raise ValueError(f"'{activity_id}' es diaria — usá mark_daily.")
 
+    _ensure_task_fields(entry, wk)
     entry["avance"] = avance
     if notas:
         entry["notas"] = notas
     entry["ultima_actualizacion"] = _now_iso()
+    entry["updated_at"] = entry["ultima_actualizacion"]
+    # Avanzar no FINALIZA — eso requiere confirmación explícita (Feature 2).
+    # Solo movemos pendiente→en_progreso cuando hay algún avance.
+    if entry.get("status") == "pendiente" and avance > 0:
+        prev = entry["status"]
+        entry["status"] = "en_progreso"
+        _append_history(entry, prev, "en_progreso", by="system", note="avance registrado")
     save(state)
     return entry
 
@@ -291,12 +486,15 @@ def add_adhoc(
     meta: float | int | None = None,
     unidad: str = "",
     fuente: str = "manual",
+    fecha_limite: str | None = None,
     wk: str | None = None,
 ) -> dict[str, Any]:
     if tipo not in VALID_TIPOS:
         raise ValueError(f"tipo inválido: {tipo}")
     if fuente not in VALID_FUENTES:
         raise ValueError(f"fuente inválida: {fuente}")
+    if fecha_limite:
+        date.fromisoformat(fecha_limite)  # valida formato ISO (lanza si no)
 
     email = _normalize_email(user_email)
     state = load()
@@ -325,6 +523,9 @@ def add_adhoc(
         entry["avance"] = 0
         entry["notas"] = ""
         entry["ultima_actualizacion"] = None
+        entry["fecha_limite"] = fecha_limite
+        _ensure_task_fields(entry, wk)
+        _append_history(entry, None, "pendiente", by="system", note="creada")
 
     activities[activity_id] = entry
     save(state)
@@ -437,6 +638,217 @@ def sort_activities_by_priority_then_carryover(
         return (0 if co else 1, prio_rank)
 
     return sorted(activities, key=_sort_key)
+
+
+# ============ Tareas persistentes: mutadores y lecturas (2026-06-15) ============
+def _task_entry_for_mutation(
+    state: dict, email: str, wk: str, activity_id: str
+) -> tuple[dict, dict, dict]:
+    """Devuelve (user, activities, entry) asegurando la semana y validando que
+    el activity_id existe y es una tarea no-diaria. Lanza ValueError si no.
+    """
+    user = _get_user_state(state, email)
+    if wk not in user["weeks"]:
+        init_week(email, wk)  # re-entrante (RLock); materializa carry-forward
+        state.clear()
+        state.update(load())
+        user = _get_user_state(state, email)
+    activities = user["weeks"][wk]["activities"]
+    if activity_id not in activities:
+        raise ValueError(
+            f"Tarea '{activity_id}' no existe en la semana {wk} de {email}."
+        )
+    entry = activities[activity_id]
+    if not _is_task(entry):
+        raise ValueError(
+            f"'{activity_id}' es tipo '{entry.get('tipo')}' — status/fecha solo "
+            f"aplican a tareas (unica/semanal)."
+        )
+    _ensure_task_fields(entry, wk)
+    return user, activities, entry
+
+
+@_locked
+def set_task_status(
+    activity_id: str,
+    status: str,
+    *,
+    user_email: str | None = None,
+    wk: str | None = None,
+    by: str = "",
+    note: str = "",
+) -> dict[str, Any]:
+    """Cambia el status de una tarea (pendiente/en_progreso/finalizada).
+
+    'finalizada' es el ÚNICO estado terminal y solo debe setearse tras
+    confirmación explícita (Feature 2). Registra la transición en `history`.
+    """
+    if status not in VALID_TASK_STATUSES:
+        raise ValueError(f"status inválido: {status} (válidos: {VALID_TASK_STATUSES})")
+    email = _normalize_email(user_email)
+    wk = wk or week_key()
+    state = load()
+    _, _, entry = _task_entry_for_mutation(state, email, wk, activity_id)
+    prev = entry.get("status")
+    entry["status"] = status
+    entry["updated_at"] = _now_iso()
+    if status == "finalizada":
+        entry["avance"] = 100
+    _append_history(entry, prev, status, by=by, note=note)
+    save(state)
+    return entry
+
+
+@_locked
+def set_task_fecha_limite(
+    activity_id: str,
+    fecha_limite: str | None,
+    *,
+    user_email: str | None = None,
+    wk: str | None = None,
+    by: str = "",
+) -> dict[str, Any]:
+    """Fija/limpia la fecha límite (ISO YYYY-MM-DD o None). Valida el formato."""
+    if fecha_limite:
+        date.fromisoformat(fecha_limite)  # lanza ValueError si malformado
+    email = _normalize_email(user_email)
+    wk = wk or week_key()
+    state = load()
+    _, _, entry = _task_entry_for_mutation(state, email, wk, activity_id)
+    prev = entry.get("fecha_limite")
+    entry["fecha_limite"] = fecha_limite or None
+    entry["updated_at"] = _now_iso()
+    _append_history(entry, prev, fecha_limite, by=by, note="fecha_limite actualizada")
+    save(state)
+    return entry
+
+
+@_locked
+def snooze_task(
+    activity_id: str,
+    days: int,
+    *,
+    user_email: str | None = None,
+    wk: str | None = None,
+    by: str = "",
+) -> dict[str, Any]:
+    """Posterga la fecha límite N días desde max(hoy, fecha_limite actual).
+
+    Si está vencida (fecha en el pasado) cuenta desde hoy; si es futura, desde
+    la fecha existente. Sale del estado 'vencida' derivado al mover la fecha.
+    """
+    days = int(days)
+    email = _normalize_email(user_email)
+    wk = wk or week_key()
+    state = load()
+    _, _, entry = _task_entry_for_mutation(state, email, wk, activity_id)
+    base = _today()
+    fl = entry.get("fecha_limite")
+    if fl:
+        try:
+            base = max(base, date.fromisoformat(fl))
+        except (ValueError, TypeError):
+            base = _today()
+    nueva = (base + timedelta(days=days)).isoformat()
+    prev = entry.get("fecha_limite")
+    entry["fecha_limite"] = nueva
+    entry["updated_at"] = _now_iso()
+    _append_history(entry, prev, nueva, by=by, note=f"pospuesta {days}d")
+    save(state)
+    return entry
+
+
+@_locked
+def set_task_calendar_ref(
+    activity_id: str,
+    event_id: str | None,
+    web_link: str | None,
+    *,
+    user_email: str | None = None,
+    wk: str | None = None,
+    synced_fecha: str | None = None,
+) -> dict[str, Any] | None:
+    """Guarda (o limpia) la referencia al evento de calendario de una tarea.
+
+    Lo usa el job de sync de calendario (Feature 4) para evitar duplicados:
+    si la tarea ya tiene event_id, se patchea/borra en vez de re-crear.
+    `synced_fecha` = la fecha_limite con la que se creó/actualizó el evento, para
+    detectar cuándo hay que mover el evento (la fecha cambió).
+    """
+    email = _normalize_email(user_email)
+    wk = wk or week_key()
+    state = load()
+    user = state.get("users", {}).get(email, {})
+    entry = (user.get("weeks", {}).get(wk, {}).get("activities", {}) or {}).get(activity_id)
+    if entry is None:
+        return None
+    entry["calendar_event_id"] = event_id
+    entry["calendar_web_link"] = web_link
+    entry["calendar_synced_fecha"] = synced_fecha
+    entry["updated_at"] = _now_iso()
+    save(state)
+    return entry
+
+
+@_locked
+def mark_task_confirmation_asked(
+    activity_id: str,
+    *,
+    user_email: str | None = None,
+    wk: str | None = None,
+    fecha: str | None = None,
+) -> dict[str, Any] | None:
+    """Marca que hoy ya se pidió confirmación de cierre de esta tarea (anti-spam:
+    el job de confirmaciones pregunta máximo una vez por día)."""
+    email = _normalize_email(user_email)
+    wk = wk or week_key()
+    state = load()
+    user = state.get("users", {}).get(email, {})
+    entry = (user.get("weeks", {}).get(wk, {}).get("activities", {}) or {}).get(activity_id)
+    if entry is None:
+        return None
+    entry["last_confirmation_asked"] = fecha or _today().isoformat()
+    save(state)
+    return entry
+
+
+def list_tasks(
+    user_email: str | None, wk: str | None = None
+) -> list[tuple[str, dict[str, Any], str]]:
+    """TODAS las tareas no-diarias de la semana (incluye finalizadas).
+
+    Asegura la semana (init_week → materializa carry-forward). Cada item:
+    (activity_id, entry, status_efectivo).
+    """
+    email = _normalize_email(user_email)
+    wk = wk or week_key()
+    week = init_week(email, wk)
+    out: list[tuple[str, dict[str, Any], str]] = []
+    for aid, entry in (week.get("activities") or {}).items():
+        if not _is_task(entry):
+            continue
+        out.append((aid, entry, task_effective_status(entry)))
+    return out
+
+
+def list_open_tasks(
+    user_email: str | None, wk: str | None = None
+) -> list[tuple[str, dict[str, Any], str]]:
+    """Tareas no-diarias abiertas (pendiente/en_progreso/vencida) de la semana."""
+    return [t for t in list_tasks(user_email, wk) if t[2] in TASK_OPEN_STATUSES]
+
+
+def list_open_tasks_all_users(
+    wk: str | None = None,
+) -> dict[str, list[tuple[str, dict[str, Any], str]]]:
+    """{email: [(aid, entry, status_efectivo), ...]} de todos los users con
+    tareas abiertas. Para el job de confirmaciones y el resumen de carga."""
+    out: dict[str, list[tuple[str, dict[str, Any], str]]] = {}
+    for email in list_known_users():
+        tasks = list_open_tasks(email, wk)
+        if tasks:
+            out[email] = tasks
+    return out
 
 
 def get_user_months_summary(
@@ -1525,6 +1937,13 @@ def get_entregas_consolidadas_dia(
                 ) or cur.get("razon_no_entrega")
             if entr.get("direccion_real"):
                 cur["direccion_real"] = entr["direccion_real"]
+            # 2026-06-15: propagar la observación y el pago que José ingresó al
+            # marcar la entrega. Antes se perdían acá (quedaban solo en la
+            # salida), así que ni el card ni el resumen del equipo las mostraban.
+            if entr.get("observacion"):
+                cur["observacion"] = entr["observacion"]
+            if entr.get("pago_envio"):
+                cur["pago_envio"] = entr["pago_envio"]
     return consolidado
 
 
