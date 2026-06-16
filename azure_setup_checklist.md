@@ -54,6 +54,10 @@ En la App Registration creada (la que generó el bot):
    - `Mail.ReadWrite` (para reply_agent)
    - `Calendars.ReadWrite` (**Application** — para que el bot cree eventos/recordatorios
      de tareas y reuniones en el calendario de Daniel/Gabriela vía `graph_calendar_app.py`)
+   - `User.Read.All` (**Application** — para que el bot resuelva el email de cada
+     colaborador por su AAD object id cuando Teams no lo manda en el mensaje;
+     ver `graph_mail.lookup_user_email` / `teams_bot._user_email`. Sin esto, hay
+     que mapear cada usuario a mano en la env var `AAD_ID_TO_EMAIL`.)
 3. **Grant admin consent for Biodegradables Ecuador** (botón azul)
 
 *Nota: estos permisos los necesita el bot para integrarse con los otros agentes
