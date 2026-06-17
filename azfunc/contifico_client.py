@@ -40,6 +40,7 @@ import httpx
 API_BASE = "https://api.contifico.com/sistema"
 DEFAULT_TIMEOUT = 60
 PAGE_SIZE = 200
+MAX_RETRIES = 3  # intentos por página ante timeouts/errores de transporte transitorios
 
 # Cache process-scoped de respuestas de /documento/.
 # El daily_report invoca varias funciones que comparten el mismo rango (ej.
@@ -116,14 +117,32 @@ def get_documentos(
         "fecha_final": _fmt_date(fecha_final),
         "result_size": PAGE_SIZE,
     }
-    with httpx.Client(timeout=DEFAULT_TIMEOUT) as client:
+    # Fix 2026-06-16: timeouts transitorios de Contifico (ReadTimeout) tumbaban
+    # toda la consulta de cartera → tarjetas en blanco en el correo. Ahora cada
+    # página se reintenta con backoff antes de fallar, y el read timeout es más
+    # holgado (las páginas de un año de facturas pueden tardar).
+    timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=60.0)
+    with httpx.Client(timeout=timeout) as client:
         while True:
             params = {**base_params, "result_page": page}
-            r = client.get(
-                f"{API_BASE}/api/v1/documento/",
-                params=params,
-                headers={"Authorization": token},
-            )
+            r = None
+            for intento in range(1, MAX_RETRIES + 1):
+                try:
+                    r = client.get(
+                        f"{API_BASE}/api/v1/documento/",
+                        params=params,
+                        headers={"Authorization": token},
+                    )
+                    break
+                except (httpx.TimeoutException, httpx.TransportError) as e:
+                    if intento >= MAX_RETRIES:
+                        raise
+                    print(
+                        f"[contifico_client] reintento {intento}/{MAX_RETRIES - 1} "
+                        f"(página {page}) tras {type(e).__name__}: {e}",
+                        file=sys.stderr,
+                    )
+                    time.sleep(2 * intento)
             if r.status_code >= 400:
                 raise RuntimeError(
                     f"Contifico GET /documento/ → {r.status_code}: {r.text[:500]}"
@@ -499,18 +518,18 @@ def cartera_vencida_por_ciudad(
 ) -> list[dict[str, Any]]:
     """Top N clientes con cartera VENCIDA en una ciudad (UIO o GYE).
 
-    Phase V (2026-06-11): Solo Contifico, sin Excel.
-      - Usa `fecha_vencimiento` de cada factura (la calcula Contifico desde
-        el plazo configurado en cada cliente del POS).
-      - Si la factura tiene saldo > $1 y `fecha_vencimiento < hoy`, cuenta
-        como cartera vencida.
-      - Excluye saldos ≤ $1 (suelen ser centavos de redondeo, no cobranza real).
-      - El plazo se infiere del documento: `fecha_vencimiento - fecha_emision`.
+    Vencimiento (fix 2026-06-16): `fecha_vencimiento = fecha_emision + plazo_dias`
+    del cliente (condiciones_credito.json), MISMO criterio que `cartera_kpis`.
+      - Cliente sin plazo en el JSON = sin crédito (contado) → no entra a cartera.
+      - Cuenta como vencida si saldo > $1 y `fecha_emision + plazo < hoy`.
+      - Excluye saldos ≤ $1 (centavos de redondeo, no cobranza real).
+      - Por cliente se reporta la factura MÁS atrasada (emisión/plazo/venc de esa).
 
     Devuelve lista de dicts:
         [{"cliente": "X SA", "saldo_vencido": 1234.56, "facturas_vencidas": 3,
           "factura_mas_antigua": "001-002-...", "dias_atraso_max": 45,
-          "plazo_dias": 30}, ...]
+          "plazo_dias": 30, "fecha_emision": "02/05/2026",
+          "fecha_vencimiento": "01/06/2026"}, ...]
     """
     today = fecha_referencia or date.today()
     fecha_inicial = today - timedelta(days=meses_atras * 30)
@@ -525,6 +544,8 @@ def cartera_vencida_por_ciudad(
             "factura_mas_antigua": "",
             "dias_atraso_max": 0,
             "plazo_dias": 0,
+            "fecha_emision": None,
+            "fecha_vencimiento": None,
         }
     )
     for d in docs:
@@ -533,29 +554,36 @@ def cartera_vencida_por_ciudad(
         saldo = _doc_saldo(d)
         if saldo <= CARTERA_SALDO_MIN:
             continue  # excluye centavos / saldos triviales
-        # Phase V: solo Contifico — la propia factura dice cuándo vence.
-        # Si no hay fecha_vencimiento, lo tratamos como SIN crédito (cuenta
-        # de contado) y NO lo metemos a cartera.
-        venc = _parse_fecha_vencimiento(d.get("fecha_vencimiento"))
-        if venc is None:
-            continue
-        if venc >= today:
-            continue  # no vencida todavía
-        atraso = (today - venc).days
-        # Plazo se infiere: días entre fecha_emision y fecha_vencimiento
-        emis = _parse_fecha_emision(d.get("fecha_emision"))
-        plazo = (venc - emis).days if emis else 0
-
         cli = _doc_cliente_nombre(d)
+        # Fix 2026-06-16: vencimiento = fecha_emision + plazo del cliente
+        # (condiciones_credito.json), MISMO criterio que cartera_kpis. Antes se
+        # usaba el campo fecha_vencimiento de Contifico, que viene = fecha de
+        # emisión -> las facturas aparecían vencidas desde el día 1 y los días
+        # de atraso eran erróneos. Cliente sin plazo en el JSON = sin crédito
+        # (contado) y NO entra a cartera.
+        plazo = _get_plazo_cliente(cli)
+        if plazo is None:
+            continue
+        emis = _parse_fecha_emision(d.get("fecha_emision"))
+        if emis is None:
+            continue
+        venc = emis + timedelta(days=plazo)
+        if venc >= today:
+            continue  # aún dentro del plazo de crédito (no vencida)
+        atraso = (today - venc).days
+
         entry = by_cli[cli]
         entry["cliente"] = cli
         entry["saldo_vencido"] += saldo
         entry["facturas_vencidas"] += 1
-        if plazo > entry["plazo_dias"]:
-            entry["plazo_dias"] = plazo
+        # La factura "representativa" del cliente es la más atrasada: de ella
+        # tomamos emisión, plazo y vencimiento para mostrar en la tabla.
         if atraso > entry["dias_atraso_max"]:
             entry["dias_atraso_max"] = atraso
+            entry["plazo_dias"] = plazo
             entry["factura_mas_antigua"] = d.get("documento", "")
+            entry["fecha_emision"] = emis.strftime("%d/%m/%Y")
+            entry["fecha_vencimiento"] = venc.strftime("%d/%m/%Y")
 
     rows = sorted(by_cli.values(), key=lambda r: r["saldo_vencido"], reverse=True)
     for r in rows:

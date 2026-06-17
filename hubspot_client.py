@@ -142,29 +142,30 @@ def _count_contacts_rango(start_dt: datetime, end_dt: datetime) -> int:
     return int(data.get("total", 0))
 
 
-def leads_semana_wow() -> dict:
-    """Leads de la semana actual (lunes 00:00 EC → ahora) y comparación WoW.
+def leads_30d() -> dict:
+    """Leads de los últimos 30 días + comparación vs los 30 días previos.
 
-    La comparación es JUSTA: 'misma altura' = del lunes pasado hasta el mismo
-    tiempo transcurrido de la semana en curso (parcial vs parcial, nunca contra
-    un total histórico). Incluye la fuente top de la semana para "¿de dónde
-    vinieron?".
+    Cambio 2026-06-16: ventana de análisis de 30 días (antes era semanal). Da
+    una visión comercial del último mes sin contaminar con histórico antiguo.
+    La comparación es JUSTA: últimos 30 días vs los 30 días inmediatamente
+    anteriores (mismo tamaño de ventana). Incluye la fuente top del período para
+    "¿de dónde vinieron?".
+
+    NOTA: `total` es exacto (viene de data.total). El desglose de fuente se
+    calcula sobre los primeros 100 contactos del período (suficiente para
+    identificar la fuente principal).
     """
     ec = timezone(timedelta(hours=-5))
     ahora = datetime.now(ec)
-    lunes = (ahora - timedelta(days=ahora.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    transcurrido = ahora - lunes
-    lunes_pasado = lunes - timedelta(days=7)
-    fin_pasado = lunes_pasado + transcurrido
+    hace_30 = ahora - timedelta(days=30)
+    hace_60 = ahora - timedelta(days=60)
 
-    # Semana actual: total + fuente top (traemos hasta 100 para el desglose)
+    # Últimos 30 días: total + fuente top (traemos hasta 100 para el desglose)
     data = search_objects(
         "contacts",
         properties=["createdate", "hs_analytics_source"],
         filters=[
-            {"propertyName": "createdate", "operator": "GTE", "value": _iso_utc(lunes)},
+            {"propertyName": "createdate", "operator": "GTE", "value": _iso_utc(hace_30)},
             {"propertyName": "createdate", "operator": "LT", "value": _iso_utc(ahora)},
         ],
         limit=100,
@@ -176,7 +177,7 @@ def leads_semana_wow() -> dict:
         by_source[src] = by_source.get(src, 0) + 1
     top_source = max(by_source.items(), key=lambda x: x[1]) if by_source else (None, 0)
 
-    anterior = _count_contacts_rango(lunes_pasado, fin_pasado)
+    anterior = _count_contacts_rango(hace_60, hace_30)
     delta_pct = ((total - anterior) / anterior * 100) if anterior > 0 else None
     return {
         "total": total,
