@@ -450,47 +450,96 @@ def _parse_fecha_vencimiento(s: str | None) -> date | None:
         return None
 
 
-# ============ Phase R (2026-06-06): plazos custom por cliente ============
-# Carga el JSON una vez por proceso. Si un cliente NO está en el JSON,
-# NO tiene crédito (venta de contado) y NO debe aparecer como cobranza.
+# ============ Plazos de crédito por cliente ============
+# Fuente de verdad (2026-06-17): Excel compartido en SharePoint, leído vía
+# credito_excel.fetch_desde_sharepoint(). Si falla (sin permiso/red), cae al
+# último JSON bueno (condiciones_credito.json). Cliente que NO está en la lista
+# = sin crédito (contado) y NO aparece como cobranza.
+# Match por nombre normalizado SIN acentos (ver credito_excel.normaliza_nombre).
 _CONDICIONES_CACHE: dict[str, Any] | None = None
+_CONDICIONES_CACHE_AT: float = 0.0
+CONDICIONES_TTL = int(os.environ.get("CONDICIONES_TTL", "600"))  # 10 min
+
+
+def _condiciones_json_path():
+    from pathlib import Path as _Path
+    return _Path(__file__).parent / "condiciones_credito.json"
+
+
+def _persistir_condiciones(entradas: list[dict[str, Any]]) -> None:
+    """Guarda el último Excel bueno como JSON (fallback ante fallo de SharePoint)."""
+    import json as _json
+    data = {
+        "_fuente": "sharepoint:CondicionesCredito.xlsx",
+        "_actualizado": datetime.now().isoformat(timespec="seconds"),
+        "clientes": {
+            e["nombre"]: {"plazo_dias": e["plazo_dias"], "ciudad": e.get("ciudad", "")}
+            for e in entradas
+        },
+    }
+    try:
+        _condiciones_json_path().write_text(
+            _json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def _leer_condiciones_json() -> list[dict[str, Any]]:
+    import json as _json
+    path = _condiciones_json_path()
+    if not path.exists():
+        return []
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        return [
+            {"nombre": k, "plazo_dias": v.get("plazo_dias", 0), "ciudad": v.get("ciudad", "")}
+            for k, v in data.get("clientes", {}).items()
+        ]
+    except (OSError, _json.JSONDecodeError):
+        return []
 
 
 def _cargar_condiciones_credito() -> dict[str, Any]:
-    """Carga condiciones_credito.json del directorio del proyecto.
+    """Dict {nombre_normalizado: {plazo_dias, ciudad}}.
 
-    Retorna un dict {cliente_upper: {plazo_dias, ciudad, ...}}.
-    Si el archivo no existe, retorna dict vacío (= todos los clientes son
-    sin crédito y NO aparecen como cobranza — comportamiento conservador).
+    SharePoint-first (Excel del equipo) con fallback al último JSON bueno.
+    Cache en proceso con TTL para no leer SharePoint en cada función de cartera.
     """
-    global _CONDICIONES_CACHE
-    if _CONDICIONES_CACHE is not None:
+    global _CONDICIONES_CACHE, _CONDICIONES_CACHE_AT
+    if _CONDICIONES_CACHE is not None and (time.time() - _CONDICIONES_CACHE_AT) < CONDICIONES_TTL:
         return _CONDICIONES_CACHE
 
-    import json as _json
-    from pathlib import Path as _Path
-
-    path = _Path(__file__).parent / "condiciones_credito.json"
-    if not path.exists():
-        _CONDICIONES_CACHE = {}
-        return _CONDICIONES_CACHE
-
+    entradas: list[dict[str, Any]] | None = None
     try:
-        data = _json.loads(path.read_text(encoding="utf-8"))
-        clientes = data.get("clientes", {})
-        # Normalizar keys a UPPER para matching case-insensitive
-        _CONDICIONES_CACHE = {k.upper().strip(): v for k, v in clientes.items()}
-    except (OSError, _json.JSONDecodeError):
-        _CONDICIONES_CACHE = {}
-    return _CONDICIONES_CACHE
+        import credito_excel
+        entradas = credito_excel.fetch_desde_sharepoint()
+        if entradas:
+            _persistir_condiciones(entradas)  # refresca el fallback
+    except Exception:
+        entradas = None
+    if not entradas:
+        entradas = _leer_condiciones_json()  # último bueno
+
+    import credito_excel as _ce
+    cond: dict[str, Any] = {}
+    for e in entradas:
+        cond[_ce.normaliza_nombre(e["nombre"])] = {
+            "plazo_dias": int(e.get("plazo_dias", 0)),
+            "ciudad": e.get("ciudad", ""),
+        }
+    _CONDICIONES_CACHE = cond
+    _CONDICIONES_CACHE_AT = time.time()
+    return cond
 
 
 def _get_plazo_cliente(nombre_cliente: str) -> int | None:
     """Devuelve plazo en días para un cliente, o None si NO tiene crédito."""
     if not nombre_cliente:
         return None
+    import credito_excel as _ce
     cond = _cargar_condiciones_credito()
-    entry = cond.get(nombre_cliente.upper().strip())
+    entry = cond.get(_ce.normaliza_nombre(nombre_cliente))
     if not entry:
         return None
     return int(entry.get("plazo_dias", 0))
@@ -609,7 +658,8 @@ def _cartera_facturas_iter(
         if saldo <= 0:
             continue
         cli = _doc_cliente_nombre(d)
-        entry_cond = condiciones.get(cli.upper().strip())
+        import credito_excel as _ce
+        entry_cond = condiciones.get(_ce.normaliza_nombre(cli))
         if not entry_cond:
             continue
         plazo = int(entry_cond.get("plazo_dias", 0))

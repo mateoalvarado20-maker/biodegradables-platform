@@ -40,6 +40,7 @@ BOT_FILES = [
     "reply_state.py",
     # clientes
     "contifico_client.py",
+    "credito_excel.py",
     "hubspot_client.py",
     "graph_mail.py",
     "graph_calendar_app.py",
