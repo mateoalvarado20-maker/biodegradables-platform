@@ -311,17 +311,17 @@ def _brecha_kpi(brecha: Any) -> str:
     - Si brecha < 0  → 'SUPERASTE LA META POR' (style ok, verde) con valor absoluto
     """
     if brecha is None:
-        return _kpi("Falta para meta", "—")
+        return _kpi("Margen de venta pendiente", "—")
     try:
         b = float(brecha)
     except (TypeError, ValueError):
-        return _kpi("Falta para meta", "—")
+        return _kpi("Margen de venta pendiente", "—")
     if b > 0:
-        return _kpi("Falta para meta", fmt_money(b))
+        return _kpi("Margen de venta pendiente", fmt_money(b))
     if b == 0:
-        return _kpi("Meta cumplida", "$0", "ok")
+        return _kpi("Objetivo mensual cumplido", "$0", "ok")
     # b < 0 → ya superaste
-    return _kpi("✓ Superaste la meta por", fmt_money(abs(b)), "ok")
+    return _kpi("✓ Objetivo superado por", fmt_money(abs(b)), "ok")
 
 
 def _brecha_texto(brecha: Any) -> str:
@@ -453,7 +453,10 @@ def q_top_deudores_ciudad(ciudad: str, n: int = 7) -> list[dict]:
     )
     return [
         {"[Cliente]": r["cliente"], "[Deuda]": r["saldo_vencido"],
-         "[DiasAtraso]": r.get("dias_atraso_max", 0)}
+         "[DiasAtraso]": r.get("dias_atraso_max", 0),
+         "[FechaEmision]": r.get("fecha_emision") or "—",
+         "[PlazoDias]": r.get("plazo_dias", 0),
+         "[FechaVenc]": r.get("fecha_vencimiento") or "—"}
         for r in rows
     ]
 
@@ -779,13 +782,13 @@ def _hubspot_data() -> dict | None:
         leads = hubspot_client.leads_ayer()
         promedio = hubspot_client.leads_promedio_7d()
         serie_7d = hubspot_client.leads_por_dia_ultimos_7d()
-        semana = hubspot_client.leads_semana_wow()
-        sin_responder = hubspot_client.leads_sin_responder(horas_min=24, dias_ventana=7)
+        mes = hubspot_client.leads_30d()
+        sin_responder = hubspot_client.leads_sin_responder(horas_min=24, dias_ventana=30)
         return {
             "leads": leads,
             "promedio_7d": promedio,
             "serie_7d": serie_7d,
-            "semana": semana,
+            "mes": mes,
             "sin_responder": sin_responder,
         }
     except Exception as e:
@@ -814,7 +817,7 @@ def _generate_marketing_summary(hs: dict) -> dict:
         leads_total = hs["leads"]["total"]
         prom = hs.get("promedio_7d") or 0
         deltas_lead = ((leads_total - prom) / prom * 100) if prom > 0 else None
-        semana = hs.get("semana") or {}
+        mes = hs.get("mes") or {}
         sin_resp = hs.get("sin_responder") or {}
 
         prompt_data = {
@@ -822,13 +825,13 @@ def _generate_marketing_summary(hs: dict) -> dict:
             "leads_promedio_7d": round(prom, 1),
             "delta_leads_pct": round(deltas_lead, 1) if deltas_lead is not None else None,
             "top_fuente": hs["leads"].get("top_source"),
-            "leads_esta_semana": semana.get("total"),
-            "leads_semana_pasada_misma_altura": semana.get("anterior"),
-            "delta_semanal_pct": (
-                round(semana["delta_pct"], 1)
-                if semana.get("delta_pct") is not None else None
+            "leads_ultimos_30d": mes.get("total"),
+            "leads_30d_previos": mes.get("anterior"),
+            "delta_30d_pct": (
+                round(mes["delta_pct"], 1)
+                if mes.get("delta_pct") is not None else None
             ),
-            "leads_sin_responder_ultimos_7d": sin_resp.get("count", 0),
+            "leads_sin_responder_ultimos_30d": sin_resp.get("count", 0),
         }
 
         system = """Eres un asistente que ayuda a Daniel Sánchez, gerente general de
@@ -839,8 +842,8 @@ hables de ventas cerradas, pipeline ni tasa de cierre: eso va en otra sección.
 
 Tu tarea: en base a los datos de leads, escribir:
 1. Un resumen ejecutivo de 2-3 oraciones EN ESPAÑOL, claro, sin jerga, que le
-   diga a Daniel cómo viene la captación de leads (ayer y la semana) y qué
-   destacaría. Habla en segunda persona (vos / te).
+   diga a Daniel cómo viene la captación de leads (ayer y los últimos 30 días)
+   y qué destacaría. Habla en segunda persona (vos / te).
 2. Una lista de 1 a 3 acciones concretas recomendadas para HOY. Específicas, no
    genéricas. Si los datos están sanos, decílo y propone mantener el ritmo.
 
@@ -852,8 +855,8 @@ Devuelve EXACTAMENTE este JSON, sin texto antes ni después:
 
 Reglas:
 - Si los leads de ayer están muy por debajo del promedio (>30%): mencionalo
-- Si los leads de la semana caen vs la semana pasada (misma altura): alertálo
-- Si hay leads sin responder de los últimos 7 días: priorizá contactarlos
+- Si los leads de los últimos 30 días caen vs los 30 días previos: alertálo
+- Si hay leads sin responder de los últimos 30 días: priorizá contactarlos
 - Si los números están bien: felicitálo y propone consolidar
 - No uses emojis en el resumen
 - No menciones números que no estén en los datos
@@ -911,29 +914,29 @@ def _marketing_summary_fallback(hs: dict) -> dict:
     else:
         tendencia = f"{leads_total} leads nuevos"
 
-    semana = hs.get("semana") or {}
-    sem_total = semana.get("total")
-    sem_delta = semana.get("delta_pct")
-    if sem_total is not None:
-        lead_w = "lead" if sem_total == 1 else "leads"
-        if sem_delta is None:
-            semana_msg = f" En la semana van {sem_total} {lead_w}."
-        elif sem_delta >= 0:
-            semana_msg = (f" En la semana van {sem_total} {lead_w}, "
-                          f"{sem_delta:.0f}% más que a esta altura de la semana pasada.")
+    mes = hs.get("mes") or {}
+    mes_total = mes.get("total")
+    mes_delta = mes.get("delta_pct")
+    if mes_total is not None:
+        lead_w = "lead" if mes_total == 1 else "leads"
+        if mes_delta is None:
+            mes_msg = f" En los últimos 30 días van {mes_total} {lead_w}."
+        elif mes_delta >= 0:
+            mes_msg = (f" En los últimos 30 días van {mes_total} {lead_w}, "
+                       f"{mes_delta:.0f}% más que en los 30 días previos.")
         else:
-            semana_msg = (f" En la semana van {sem_total} {lead_w}, "
-                          f"{abs(sem_delta):.0f}% menos que a esta altura de la semana pasada.")
+            mes_msg = (f" En los últimos 30 días van {mes_total} {lead_w}, "
+                       f"{abs(mes_delta):.0f}% menos que en los 30 días previos.")
     else:
-        semana_msg = ""
-    resumen = f"Ayer fue {tendencia}.{semana_msg}"
+        mes_msg = ""
+    resumen = f"Ayer fue {tendencia}.{mes_msg}"
 
     acciones = []
     sin_resp = hs.get("sin_responder") or {"count": 0}
     if sin_resp["count"] > 0:
         acciones.append(
             f"Contactar a {sin_resp['count']} lead{'s' if sin_resp['count']>1 else ''} "
-            "de los últimos 7 días que siguen sin respuesta."
+            "de los últimos 30 días que siguen sin respuesta."
         )
     if not acciones:
         acciones.append("Mantener el ritmo de captación de leads.")
@@ -1020,14 +1023,22 @@ def html_morning() -> str:
     )
     def _top_rows(rows: list[dict]) -> str:
         if not rows:
-            return '<tr><td colspan="3" class="muted-text">Sin clientes con cartera vencida.</td></tr>'
-        return "".join(
-            f'<tr><td>{r.get("[Cliente]","—")}</td>'
-            f'<td class="right" style="color:#c62828;font-weight:600">'
-            f'{fmt_money(r.get("[Deuda]"))}</td>'
-            f'<td class="right">{r.get("[DiasAtraso]", 0)} días</td></tr>'
-            for r in rows
-        )
+            return '<tr><td colspan="6" class="muted-text">Sin clientes con cartera vencida.</td></tr>'
+        out = []
+        for r in rows:
+            dias = r.get("[DiasAtraso]", 0)
+            estado = (f'<span style="color:#c62828;font-weight:600">'
+                      f'Vencida hace {dias} día{"s" if dias != 1 else ""}</span>')
+            out.append(
+                f'<tr><td>{r.get("[Cliente]","—")}</td>'
+                f'<td class="right" style="color:#c62828;font-weight:600">'
+                f'{fmt_money(r.get("[Deuda]"))}</td>'
+                f'<td class="right">{r.get("[FechaEmision]","—")}</td>'
+                f'<td class="right">{r.get("[PlazoDias]",0)}</td>'
+                f'<td class="right">{r.get("[FechaVenc]","—")}</td>'
+                f'<td class="right">{estado}</td></tr>'
+            )
+        return "".join(out)
 
     top_uio_rows = _top_rows(top_uio)
     top_gye_rows = _top_rows(top_gye)
@@ -1035,12 +1046,11 @@ def html_morning() -> str:
     # KPIs de ventas ayer por ciudad
     ciudad_kpis = []
     for r in ayer_ciudad:
-        ciudad = r.get("[Ciudad]")
-        nombre = _ciudad_nombre(ciudad)
+        ciudad = (r.get("[Ciudad]") or "").upper()
         valor = r.get("[Ventas]")
         if valor is None:
             continue
-        ciudad_kpis.append(_kpi(f"Ayer {nombre}", fmt_money(valor), "muted"))
+        ciudad_kpis.append(_kpi(f"Ventas {ciudad}", fmt_money(valor), "muted"))
 
     # Exportación: solo si hubo ventas a clientes extranjeros ayer
     expo = _ventas_exportacion_ayer()
@@ -1049,7 +1059,7 @@ def html_morning() -> str:
         if len(expo["clientes"]) > 2:
             clientes_txt += f" +{len(expo['clientes'])-2}"
         ciudad_kpis.append(_kpi(
-            "Ayer Exportación",
+            "Ventas Exportación",
             f"{fmt_money(expo['total'])}<br>"
             f"<span style='font-size:11px;font-weight:400;'>{expo['count']} factura{'s' if expo['count']>1 else ''} · {clientes_txt}</span>",
             "ok",
@@ -1076,26 +1086,26 @@ def html_morning() -> str:
             leads_cls = "bad"
             tendencia_leads = f"↓ {(ratio_leads-1)*100:.0f}% vs promedio diario"
 
-        # ----- Leads de la semana + comparación WoW (misma altura) -----
-        sem = hs.get("semana") or {}
-        sem_total = sem.get("total") or 0
-        sem_delta = sem.get("delta_pct")
-        if sem_delta is None:
-            sem_cls = ""
-            tendencia_sem = "Sin comparación disponible"
-        elif sem_delta >= 0:
-            sem_cls = "ok"
-            tendencia_sem = f"↑ +{sem_delta:.0f}% vs semana pasada (misma altura)"
+        # ----- Leads de los últimos 30 días + comparación vs 30 días previos -----
+        mes = hs.get("mes") or {}
+        mes_total = mes.get("total") or 0
+        mes_delta = mes.get("delta_pct")
+        if mes_delta is None:
+            mes_cls = ""
+            tendencia_mes = "Sin comparación disponible"
+        elif mes_delta >= 0:
+            mes_cls = "ok"
+            tendencia_mes = f"↑ +{mes_delta:.0f}% vs 30 días previos"
         else:
-            sem_cls = "bad" if sem_delta < -15 else "warn"
-            tendencia_sem = f"↓ {sem_delta:.0f}% vs semana pasada (misma altura)"
+            mes_cls = "bad" if mes_delta < -15 else "warn"
+            tendencia_mes = f"↓ {mes_delta:.0f}% vs 30 días previos"
 
-        # Fuente top de la semana (cae a la fuente de ayer si la semana no tiene)
-        top_src_raw = sem.get("top_source") or hs["leads"]["top_source"] or "UNKNOWN"
+        # Fuente top del período (cae a la fuente de ayer si el mes no tiene)
+        top_src_raw = mes.get("top_source") or hs["leads"]["top_source"] or "UNKNOWN"
         top_src = SOURCE_NOMBRE.get(top_src_raw, top_src_raw.title())
-        top_src_count = sem.get("top_source_count") or 0
+        top_src_count = mes.get("top_source_count") or 0
 
-        # ----- Leads sin responder (ventana móvil 7 días) -----
+        # ----- Leads sin responder (ventana móvil 30 días) -----
         sin_resp = hs.get("sin_responder") or {"count": 0, "leads": []}
         sin_count = sin_resp["count"]
         if sin_count == 0:
@@ -1120,14 +1130,14 @@ def html_morning() -> str:
                 dias_txt = (f", hace {dias} día{'s' if dias != 1 else ''}"
                             if dias is not None else "")
                 atencion_items.append(
-                    f"<b>{sin_count} lead{plural} sin responder (últimos 7 días).</b> "
+                    f"<b>{sin_count} lead{plural} sin responder (últimos 30 días).</b> "
                     f"El más antiguo: <i>{top_lead['nombre']}</i>"
                     + (f" ({top_lead['email']})" if top_lead.get('email') else "")
                     + dias_txt
                 )
             else:
                 atencion_items.append(
-                    f"<b>{sin_count} lead{plural} sin responder (últimos 7 días)</b>"
+                    f"<b>{sin_count} lead{plural} sin responder (últimos 30 días)</b>"
                 )
         # Sumar las acciones que sugiere Claude (que no estén ya cubiertas)
         for a in acciones:
@@ -1160,7 +1170,7 @@ def html_morning() -> str:
 </div>"""
 
         # ----- Veredicto semáforo (encabezado de una línea) -----
-        veredicto = _marketing_verdict(ratio_leads, len(atencion_items), sem_delta)
+        veredicto = _marketing_verdict(ratio_leads, len(atencion_items), mes_delta)
         resumen_txt = resumen_html or "Sin novedades de captación de leads para destacar."
         veredicto_block = f"""
 <div style="background:{veredicto['fondo']};border-left:4px solid {veredicto['borde']};padding:12px 16px;margin:12px 0;border-radius:4px;">
@@ -1172,23 +1182,23 @@ def html_morning() -> str:
 
         # ----- Colores de cada tarjeta -----
         leads_color = _MKT_COLOR.get(leads_cls, "#6b7280")
-        sem_color = _MKT_COLOR.get(sem_cls, "#6b7280")
+        mes_color = _MKT_COLOR.get(mes_cls, "#6b7280")
         sin_color = _MKT_COLOR.get(sin_cls, "#6b7280")
 
-        # ----- ¿De dónde vinieron los leads? (de la semana) -----
+        # ----- ¿De dónde vinieron los leads? (últimos 30 días) -----
         fuente_block = ""
-        if sem_total > 0 and top_src_count:
+        if mes_total > 0 and top_src_count:
             fuente_block = f"""
 <p style="margin:14px 0 0 0;color:#374151;font-size:13px;">
   <b>¿De dónde vinieron?</b> La mayoría llegó por <b>{top_src}</b>
-  ({top_src_count} de {sem_total} {"lead" if sem_total == 1 else "leads"} esta semana).
+  ({top_src_count} de {mes_total} {"lead" if mes_total == 1 else "leads"} en los últimos 30 días).
 </p>"""
 
         hubspot_section = f"""
 <h3>📣 Marketing</h3>
 {veredicto_block}
 
-<p style="margin:14px 0 6px 0;font-weight:600;color:#374151;">📊 Generación de leads</p>
+<p style="margin:14px 0 6px 0;font-weight:600;color:#374151;">📊 Generación de leads (últimos 30 días)</p>
 <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:6px 0 0 0;">
   <tr>
     <td style="padding:10px 12px;background:#f9fafb;border-left:3px solid {leads_color};">
@@ -1202,19 +1212,19 @@ def html_morning() -> str:
   </tr>
   <tr><td style="height:6px;"></td></tr>
   <tr>
-    <td style="padding:10px 12px;background:#f9fafb;border-left:3px solid {sem_color};">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Leads esta semana</div>
-      <div style="font-size:22px;font-weight:700;color:#111827;margin-top:2px;">{sem_total}</div>
-      <div style="font-size:12px;color:{sem_color};font-weight:600;margin-top:2px;">{tendencia_sem}</div>
+    <td style="padding:10px 12px;background:#f9fafb;border-left:3px solid {mes_color};">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Leads últimos 30 días</div>
+      <div style="font-size:22px;font-weight:700;color:#111827;margin-top:2px;">{mes_total}</div>
+      <div style="font-size:12px;color:{mes_color};font-weight:600;margin-top:2px;">{tendencia_mes}</div>
       <div style="font-size:11px;color:#9ca3af;margin-top:3px;font-style:italic;">
-        Acumulado de lunes a hoy.
+        Total generado en los últimos 30 días.
       </div>
     </td>
   </tr>
   <tr><td style="height:6px;"></td></tr>
   <tr>
     <td style="padding:10px 12px;background:#f9fafb;border-left:3px solid {sin_color};">
-      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Sin responder (últimos 7 días)</div>
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;">Sin responder (últimos 30 días)</div>
       <div style="font-size:22px;font-weight:700;color:#111827;margin-top:2px;">{sin_count}</div>
       <div style="font-size:12px;color:{sin_color};font-weight:600;margin-top:2px;">{sin_sub}</div>
       <div style="font-size:11px;color:#9ca3af;margin-top:3px;font-style:italic;">
@@ -1242,31 +1252,31 @@ def html_morning() -> str:
 te comparto el estado de la operación al inicio del día.<br>
 <span class="muted-text">{fecha_humana()}</span></p>
 
-<h3>📅 Cómo nos fue ayer</h3>
+<h3>📅 Resultado de cierre diario</h3>
 {_kpi_row(
-    _kpi("Vendimos ayer", fmt_money(ayer.get("[VentasAyer]")), cumpl_ayer_cls),
-    _kpi("Meta diaria base", fmt_money(ayer.get("[MetaDiariaBase]")), "muted"),
-    _kpi("Cumplimiento de ayer", fmt_pct_ratio(cumpl_ayer_ratio), cumpl_ayer_cls),
+    _kpi("Ingreso por ventas", fmt_money(ayer.get("[VentasAyer]")), cumpl_ayer_cls),
+    _kpi("Objetivo de venta diario", fmt_money(ayer.get("[MetaDiariaBase]")), "muted"),
+    _kpi("Cumplimiento meta diario", fmt_pct_ratio(cumpl_ayer_ratio), cumpl_ayer_cls),
 )}
 {ciudad_row_html}
 <p class="muted-text">
-  Meta diaria base = (ventas mismo mes año anterior × 1.20) ÷ días del mes.
+  Objetivo de venta diario = (ventas mismo mes año anterior × 1.20) ÷ días del mes.
 </p>
 
 <!-- Sección "Lo que toca hoy" removida 2026-05-31 (request de Mateo) — los KPIs
      "Días hábiles restantes" y "Cumplimiento vs día" se mostraban acá pero
-     son redundantes con la sección de Avance del mes que viene después. -->
+     son redundantes con la sección de Progreso mensual que viene después. -->
 
 
-<h3>📈 Avance del mes</h3>
+<h3>📈 Progreso mensual acumulado a la fecha</h3>
 {_kpi_row(
-    _kpi("Vendido en el mes", fmt_money(ventas.get("[MTD]"))),
-    _kpi("Meta del mes", fmt_money(ventas.get("[Meta]")), "muted"),
+    _kpi("Venta mensual acumulada", fmt_money(ventas.get("[MTD]"))),
+    _kpi("Objetivo mensual de venta", fmt_money(ventas.get("[Meta]")), "muted"),
     _brecha_kpi(ventas.get("[Brecha]")),
 )}
 {_kpi_row(
     _kpi(
-        "% cumplimiento al día",
+        "Cumplimiento meta mensual acumulada",
         (fmt_pct_ratio(ventas.get("[CumplHoy]"))
          if ventas.get("[CumplHoy]") is not None else "—"),
         ("ok" if (ventas.get("[CumplHoy]") or 0) >= CUMPL_VERDE
@@ -1274,28 +1284,28 @@ te comparto el estado de la operación al inicio del día.<br>
                else "bad")) if ventas.get("[CumplHoy]") is not None else "muted",
     ),
     _kpi(
-        "Días laborales restantes",
+        "Días de operación pendientes",
         f"{workdays_remaining(date.today())} días",
         "muted",
     ),
 )}
 <p class="muted-text">
-  % cumplimiento al día = vendido en el mes ÷ (meta diaria × días laborales transcurridos).
-  100% = vamos en línea con la meta; menos de 100% = hay que vender más por día para alcanzarla.
-  Meta mensual calculada como +20% sobre el mismo mes del año anterior
+  Cumplimiento meta mensual acumulada = venta mensual acumulada ÷ (objetivo diario × días laborales transcurridos).
+  100% = vamos en línea con el objetivo; menos de 100% = hay que vender más por día para alcanzarlo.
+  Objetivo mensual calculado como +20% sobre el mismo mes del año anterior
   ({fmt_money(ventas.get("[VentasMesLY]"))}). Días laborales = Lun-Sáb sin feriados Ecuador.
 </p>
 {hubspot_section}
 <h3>📋 Cartera de clientes</h3>
 {_kpi_row(
-    _kpi("Total nos deben", fmt_money(kpis.get("[CarteraTotal]"))),
-    _kpi("Dentro del Plazo", fmt_money(kpis.get("[CarteraNoVencida]")), "ok"),
-    _kpi("Vencida", fmt_money(kpis.get("[CarteraVencida]")), mora_cls),
+    _kpi("Cartera por cobrar", fmt_money(kpis.get("[CarteraTotal]"))),
+    _kpi("Cartera por vencer", fmt_money(kpis.get("[CarteraNoVencida]")), "ok"),
+    _kpi("Cartera vencida", fmt_money(kpis.get("[CarteraVencida]")), mora_cls),
 )}
 {_kpi_row(
-    _kpi("% Mora", fmt_pct(mora_ratio), mora_cls),
-    _kpi("Días promedio atraso", fmt_int(kpis.get("[DiasAtraso]")), "muted"),
-    _kpi("Efectividad cobranza", fmt_pct(kpis.get("[Efectividad]")), "muted"),
+    _kpi("Índice de morosidad", fmt_pct(mora_ratio), mora_cls),
+    _kpi("Días de atraso promedio", fmt_int(kpis.get("[DiasAtraso]")), "muted"),
+    _kpi("Índice de recuperación de cartera", fmt_pct(kpis.get("[Efectividad]")), "muted"),
 )}
 
 <h4 style="margin-top:18px;margin-bottom:6px;color:#444">Cartera vencida por antigüedad</h4>
@@ -1306,13 +1316,13 @@ te comparto el estado de la operación al inicio del día.<br>
 
 <h3>⚠️ Top 10 deudores — Quito (UIO)</h3>
 <table>
-<tr><th>Cliente</th><th class="right">Deuda vencida</th><th class="right">Días de retraso</th></tr>
+<tr><th>Cliente</th><th class="right">Deuda</th><th class="right">F. emisión</th><th class="right">Días créd.</th><th class="right">F. vencimiento</th><th class="right">Estado</th></tr>
 {top_uio_rows}
 </table>
 
 <h3>⚠️ Top 10 deudores — Guayaquil (GYE)</h3>
 <table>
-<tr><th>Cliente</th><th class="right">Deuda vencida</th><th class="right">Días de retraso</th></tr>
+<tr><th>Cliente</th><th class="right">Deuda</th><th class="right">F. emisión</th><th class="right">Días créd.</th><th class="right">F. vencimiento</th><th class="right">Estado</th></tr>
 {top_gye_rows}
 </table>
 

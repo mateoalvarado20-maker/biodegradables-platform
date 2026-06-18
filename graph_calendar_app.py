@@ -19,7 +19,7 @@ Sincronización: UNIDIRECCIONAL Bot→Calendario. No lee cambios del calendario.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -117,6 +117,41 @@ def create_meeting(
     if is_online:
         event["isOnlineMeeting"] = True
         event["onlineMeetingProvider"] = "teamsForBusiness"
+    return _graph("POST", f"/users/{user_email}/calendar/events", json_body=event)
+
+
+def create_reminder_event(
+    user_email: str,
+    *,
+    subject: str,
+    when_iso: str,
+    body_html: str = "",
+    reminder_minutes_before: int = 0,
+    duration_minutes: int = 15,
+    timezone: str = DEFAULT_TZ,
+) -> dict:
+    """Crea un evento corto con ALERTA en el calendario, que funciona como
+    recordatorio (2026-06-18). `when_iso` = 'YYYY-MM-DDTHH:MM(:SS)' en hora local
+    (sin offset). Lo usa el bot para que un recordatorio aparezca en el calendario
+    de Outlook/Teams, además del mensaje de chat.
+    """
+    start_iso = when_iso
+    try:
+        end_iso = (
+            datetime.fromisoformat(when_iso) + timedelta(minutes=duration_minutes)
+        ).isoformat()
+    except ValueError:
+        end_iso = when_iso
+    event: dict[str, Any] = {
+        "subject": subject,
+        "body": {"contentType": "HTML", "content": body_html},
+        "start": {"dateTime": start_iso, "timeZone": timezone},
+        "end": {"dateTime": end_iso, "timeZone": timezone},
+        "isReminderOn": True,
+        "reminderMinutesBeforeStart": reminder_minutes_before,
+        "showAs": "free",
+        "categories": ["Recordatorio Activity Bot"],
+    }
     return _graph("POST", f"/users/{user_email}/calendar/events", json_body=event)
 
 

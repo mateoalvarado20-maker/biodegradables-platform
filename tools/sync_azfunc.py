@@ -35,6 +35,7 @@ SHARED = [
     "condiciones_credito.json",
     "contifico_client.py",
     "core_config.py",
+    "credito_excel.py",
     "daily_logistics_report.py",
     "daily_report.py",
     "dispatch_state.py",

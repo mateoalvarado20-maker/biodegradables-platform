@@ -3509,6 +3509,17 @@ SUPERVISOR_EXTRA_TOOLS_ACTIVITIES = {
     "create_calendar_meeting_for_collaborator",
 }
 
+# Tools de AGENDA (reuniones + recordatorios al calendario) — disponibles para la
+# gerencia con calendario habilitado = CALENDAR_SYNC_USERS (Daniel + Gabriela
+# Sánchez). Gabriela NO está en SUPERVISORS_ONLY (sí trackea actividades propias),
+# por eso se le habilita este subset aparte (2026-06-18).
+SCHEDULING_TOOLS = {
+    "list_team_collaborators",
+    "create_calendar_meeting_for_collaborator",
+    "schedule_reminder_for_collaborator",
+    "list_pending_reminders",
+}
+
 # Phase V (2026-06-11): mapa email → nombre humano. Evita que Claude se
 # invente nombres cuando solo recibe el email crudo en el system prompt.
 EMAIL_TO_NAME = {
@@ -3824,6 +3835,25 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
                 }, ensure_ascii=False)
             logger.info("Reminder %s para %s @ %s creado por %s",
                         rec["id"], target, rec["send_at"], user_email or "?")
+            # Además del recordatorio por CHAT, si el target tiene calendario
+            # habilitado (Daniel/Gabriela), crear también un evento con alerta en
+            # su calendario de Outlook/Teams (2026-06-18).
+            calendario = None
+            if target.lower() in {e.lower() for e in core_config.CALENDAR_SYNC_USERS}:
+                try:
+                    cuando = (args["send_at"] or "")[:19]  # 'YYYY-MM-DDTHH:MM:SS' sin offset
+                    ev = graph_calendar_app.create_reminder_event(
+                        target,
+                        subject=f"⏰ Recordatorio: {args['message'][:80]}",
+                        when_iso=cuando,
+                        body_html=args["message"],
+                    )
+                    calendario = ev.get("webLink") or "creado"
+                    logger.info("Reminder %s también agendado en calendario de %s",
+                                rec["id"], target)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("No se pudo crear evento de calendario para "
+                                   "reminder %s (target=%s): %s", rec["id"], target, e)
             return json.dumps({
                 "ok": True,
                 "reminder_id": rec["id"],
@@ -3832,6 +3862,7 @@ def _call_tool(name: str, args: dict, *, user_email: str | None = None) -> str:
                 "send_at": rec["send_at"],
                 "message": rec["message"],
                 "recurrence": rec.get("recurrence", ""),
+                "calendario": calendario,
             }, ensure_ascii=False)
 
         if name == "list_pending_reminders":
@@ -3985,8 +4016,13 @@ def _tools_for_mode(mode: str, user_email: str | None = None) -> list:
         return base
     if mode == "activities":
         allowed = set(TRACKER_TOOL_NAMES)
-        if user_email and user_email.lower() in SUPERVISORS_ONLY_EMAILS:
+        email_l = (user_email or "").lower()
+        if email_l in SUPERVISORS_ONLY_EMAILS:
             allowed |= SUPERVISOR_EXTRA_TOOLS_ACTIVITIES
+        # Gerencia con calendario habilitado (Daniel + Gabriela Sánchez) puede
+        # agendar reuniones y recordatorios aunque no sea "supervisor puro".
+        if email_l in {e.lower() for e in core_config.CALENDAR_SYNC_USERS}:
+            allowed |= SCHEDULING_TOOLS
         return [t for t in TOOLS if t["name"] in allowed]
     return TOOLS  # full (CLI debug)
 

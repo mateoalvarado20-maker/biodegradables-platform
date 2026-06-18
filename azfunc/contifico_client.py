@@ -40,6 +40,7 @@ import httpx
 API_BASE = "https://api.contifico.com/sistema"
 DEFAULT_TIMEOUT = 60
 PAGE_SIZE = 200
+MAX_RETRIES = 3  # intentos por página ante timeouts/errores de transporte transitorios
 
 # Cache process-scoped de respuestas de /documento/.
 # El daily_report invoca varias funciones que comparten el mismo rango (ej.
@@ -116,14 +117,32 @@ def get_documentos(
         "fecha_final": _fmt_date(fecha_final),
         "result_size": PAGE_SIZE,
     }
-    with httpx.Client(timeout=DEFAULT_TIMEOUT) as client:
+    # Fix 2026-06-16: timeouts transitorios de Contifico (ReadTimeout) tumbaban
+    # toda la consulta de cartera → tarjetas en blanco en el correo. Ahora cada
+    # página se reintenta con backoff antes de fallar, y el read timeout es más
+    # holgado (las páginas de un año de facturas pueden tardar).
+    timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=60.0)
+    with httpx.Client(timeout=timeout) as client:
         while True:
             params = {**base_params, "result_page": page}
-            r = client.get(
-                f"{API_BASE}/api/v1/documento/",
-                params=params,
-                headers={"Authorization": token},
-            )
+            r = None
+            for intento in range(1, MAX_RETRIES + 1):
+                try:
+                    r = client.get(
+                        f"{API_BASE}/api/v1/documento/",
+                        params=params,
+                        headers={"Authorization": token},
+                    )
+                    break
+                except (httpx.TimeoutException, httpx.TransportError) as e:
+                    if intento >= MAX_RETRIES:
+                        raise
+                    print(
+                        f"[contifico_client] reintento {intento}/{MAX_RETRIES - 1} "
+                        f"(página {page}) tras {type(e).__name__}: {e}",
+                        file=sys.stderr,
+                    )
+                    time.sleep(2 * intento)
             if r.status_code >= 400:
                 raise RuntimeError(
                     f"Contifico GET /documento/ → {r.status_code}: {r.text[:500]}"
@@ -431,47 +450,96 @@ def _parse_fecha_vencimiento(s: str | None) -> date | None:
         return None
 
 
-# ============ Phase R (2026-06-06): plazos custom por cliente ============
-# Carga el JSON una vez por proceso. Si un cliente NO está en el JSON,
-# NO tiene crédito (venta de contado) y NO debe aparecer como cobranza.
+# ============ Plazos de crédito por cliente ============
+# Fuente de verdad (2026-06-17): Excel compartido en SharePoint, leído vía
+# credito_excel.fetch_desde_sharepoint(). Si falla (sin permiso/red), cae al
+# último JSON bueno (condiciones_credito.json). Cliente que NO está en la lista
+# = sin crédito (contado) y NO aparece como cobranza.
+# Match por nombre normalizado SIN acentos (ver credito_excel.normaliza_nombre).
 _CONDICIONES_CACHE: dict[str, Any] | None = None
+_CONDICIONES_CACHE_AT: float = 0.0
+CONDICIONES_TTL = int(os.environ.get("CONDICIONES_TTL", "600"))  # 10 min
+
+
+def _condiciones_json_path():
+    from pathlib import Path as _Path
+    return _Path(__file__).parent / "condiciones_credito.json"
+
+
+def _persistir_condiciones(entradas: list[dict[str, Any]]) -> None:
+    """Guarda el último Excel bueno como JSON (fallback ante fallo de SharePoint)."""
+    import json as _json
+    data = {
+        "_fuente": "sharepoint:CondicionesCredito.xlsx",
+        "_actualizado": datetime.now().isoformat(timespec="seconds"),
+        "clientes": {
+            e["nombre"]: {"plazo_dias": e["plazo_dias"], "ciudad": e.get("ciudad", "")}
+            for e in entradas
+        },
+    }
+    try:
+        _condiciones_json_path().write_text(
+            _json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def _leer_condiciones_json() -> list[dict[str, Any]]:
+    import json as _json
+    path = _condiciones_json_path()
+    if not path.exists():
+        return []
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        return [
+            {"nombre": k, "plazo_dias": v.get("plazo_dias", 0), "ciudad": v.get("ciudad", "")}
+            for k, v in data.get("clientes", {}).items()
+        ]
+    except (OSError, _json.JSONDecodeError):
+        return []
 
 
 def _cargar_condiciones_credito() -> dict[str, Any]:
-    """Carga condiciones_credito.json del directorio del proyecto.
+    """Dict {nombre_normalizado: {plazo_dias, ciudad}}.
 
-    Retorna un dict {cliente_upper: {plazo_dias, ciudad, ...}}.
-    Si el archivo no existe, retorna dict vacío (= todos los clientes son
-    sin crédito y NO aparecen como cobranza — comportamiento conservador).
+    SharePoint-first (Excel del equipo) con fallback al último JSON bueno.
+    Cache en proceso con TTL para no leer SharePoint en cada función de cartera.
     """
-    global _CONDICIONES_CACHE
-    if _CONDICIONES_CACHE is not None:
+    global _CONDICIONES_CACHE, _CONDICIONES_CACHE_AT
+    if _CONDICIONES_CACHE is not None and (time.time() - _CONDICIONES_CACHE_AT) < CONDICIONES_TTL:
         return _CONDICIONES_CACHE
 
-    import json as _json
-    from pathlib import Path as _Path
-
-    path = _Path(__file__).parent / "condiciones_credito.json"
-    if not path.exists():
-        _CONDICIONES_CACHE = {}
-        return _CONDICIONES_CACHE
-
+    entradas: list[dict[str, Any]] | None = None
     try:
-        data = _json.loads(path.read_text(encoding="utf-8"))
-        clientes = data.get("clientes", {})
-        # Normalizar keys a UPPER para matching case-insensitive
-        _CONDICIONES_CACHE = {k.upper().strip(): v for k, v in clientes.items()}
-    except (OSError, _json.JSONDecodeError):
-        _CONDICIONES_CACHE = {}
-    return _CONDICIONES_CACHE
+        import credito_excel
+        entradas = credito_excel.fetch_desde_sharepoint()
+        if entradas:
+            _persistir_condiciones(entradas)  # refresca el fallback
+    except Exception:
+        entradas = None
+    if not entradas:
+        entradas = _leer_condiciones_json()  # último bueno
+
+    import credito_excel as _ce
+    cond: dict[str, Any] = {}
+    for e in entradas:
+        cond[_ce.normaliza_nombre(e["nombre"])] = {
+            "plazo_dias": int(e.get("plazo_dias", 0)),
+            "ciudad": e.get("ciudad", ""),
+        }
+    _CONDICIONES_CACHE = cond
+    _CONDICIONES_CACHE_AT = time.time()
+    return cond
 
 
 def _get_plazo_cliente(nombre_cliente: str) -> int | None:
     """Devuelve plazo en días para un cliente, o None si NO tiene crédito."""
     if not nombre_cliente:
         return None
+    import credito_excel as _ce
     cond = _cargar_condiciones_credito()
-    entry = cond.get(nombre_cliente.upper().strip())
+    entry = cond.get(_ce.normaliza_nombre(nombre_cliente))
     if not entry:
         return None
     return int(entry.get("plazo_dias", 0))
@@ -499,18 +567,18 @@ def cartera_vencida_por_ciudad(
 ) -> list[dict[str, Any]]:
     """Top N clientes con cartera VENCIDA en una ciudad (UIO o GYE).
 
-    Phase V (2026-06-11): Solo Contifico, sin Excel.
-      - Usa `fecha_vencimiento` de cada factura (la calcula Contifico desde
-        el plazo configurado en cada cliente del POS).
-      - Si la factura tiene saldo > $1 y `fecha_vencimiento < hoy`, cuenta
-        como cartera vencida.
-      - Excluye saldos ≤ $1 (suelen ser centavos de redondeo, no cobranza real).
-      - El plazo se infiere del documento: `fecha_vencimiento - fecha_emision`.
+    Vencimiento (fix 2026-06-16): `fecha_vencimiento = fecha_emision + plazo_dias`
+    del cliente (condiciones_credito.json), MISMO criterio que `cartera_kpis`.
+      - Cliente sin plazo en el JSON = sin crédito (contado) → no entra a cartera.
+      - Cuenta como vencida si saldo > $1 y `fecha_emision + plazo < hoy`.
+      - Excluye saldos ≤ $1 (centavos de redondeo, no cobranza real).
+      - Por cliente se reporta la factura MÁS atrasada (emisión/plazo/venc de esa).
 
     Devuelve lista de dicts:
         [{"cliente": "X SA", "saldo_vencido": 1234.56, "facturas_vencidas": 3,
           "factura_mas_antigua": "001-002-...", "dias_atraso_max": 45,
-          "plazo_dias": 30}, ...]
+          "plazo_dias": 30, "fecha_emision": "02/05/2026",
+          "fecha_vencimiento": "01/06/2026"}, ...]
     """
     today = fecha_referencia or date.today()
     fecha_inicial = today - timedelta(days=meses_atras * 30)
@@ -525,6 +593,8 @@ def cartera_vencida_por_ciudad(
             "factura_mas_antigua": "",
             "dias_atraso_max": 0,
             "plazo_dias": 0,
+            "fecha_emision": None,
+            "fecha_vencimiento": None,
         }
     )
     for d in docs:
@@ -533,29 +603,36 @@ def cartera_vencida_por_ciudad(
         saldo = _doc_saldo(d)
         if saldo <= CARTERA_SALDO_MIN:
             continue  # excluye centavos / saldos triviales
-        # Phase V: solo Contifico — la propia factura dice cuándo vence.
-        # Si no hay fecha_vencimiento, lo tratamos como SIN crédito (cuenta
-        # de contado) y NO lo metemos a cartera.
-        venc = _parse_fecha_vencimiento(d.get("fecha_vencimiento"))
-        if venc is None:
-            continue
-        if venc >= today:
-            continue  # no vencida todavía
-        atraso = (today - venc).days
-        # Plazo se infiere: días entre fecha_emision y fecha_vencimiento
-        emis = _parse_fecha_emision(d.get("fecha_emision"))
-        plazo = (venc - emis).days if emis else 0
-
         cli = _doc_cliente_nombre(d)
+        # Fix 2026-06-16: vencimiento = fecha_emision + plazo del cliente
+        # (condiciones_credito.json), MISMO criterio que cartera_kpis. Antes se
+        # usaba el campo fecha_vencimiento de Contifico, que viene = fecha de
+        # emisión -> las facturas aparecían vencidas desde el día 1 y los días
+        # de atraso eran erróneos. Cliente sin plazo en el JSON = sin crédito
+        # (contado) y NO entra a cartera.
+        plazo = _get_plazo_cliente(cli)
+        if plazo is None:
+            continue
+        emis = _parse_fecha_emision(d.get("fecha_emision"))
+        if emis is None:
+            continue
+        venc = emis + timedelta(days=plazo)
+        if venc >= today:
+            continue  # aún dentro del plazo de crédito (no vencida)
+        atraso = (today - venc).days
+
         entry = by_cli[cli]
         entry["cliente"] = cli
         entry["saldo_vencido"] += saldo
         entry["facturas_vencidas"] += 1
-        if plazo > entry["plazo_dias"]:
-            entry["plazo_dias"] = plazo
+        # La factura "representativa" del cliente es la más atrasada: de ella
+        # tomamos emisión, plazo y vencimiento para mostrar en la tabla.
         if atraso > entry["dias_atraso_max"]:
             entry["dias_atraso_max"] = atraso
+            entry["plazo_dias"] = plazo
             entry["factura_mas_antigua"] = d.get("documento", "")
+            entry["fecha_emision"] = emis.strftime("%d/%m/%Y")
+            entry["fecha_vencimiento"] = venc.strftime("%d/%m/%Y")
 
     rows = sorted(by_cli.values(), key=lambda r: r["saldo_vencido"], reverse=True)
     for r in rows:
@@ -581,7 +658,8 @@ def _cartera_facturas_iter(
         if saldo <= 0:
             continue
         cli = _doc_cliente_nombre(d)
-        entry_cond = condiciones.get(cli.upper().strip())
+        import credito_excel as _ce
+        entry_cond = condiciones.get(_ce.normaliza_nombre(cli))
         if not entry_cond:
             continue
         plazo = int(entry_cond.get("plazo_dias", 0))
@@ -713,19 +791,24 @@ def saldos_pendientes_clientes(
 
 
 def _tiene_transporte_item(d: dict[str, Any]) -> bool:
-    """True si alguno de los detalles del documento es un producto de
-    transporte/envío.
+    """True si alguno de los detalles es un producto de transporte/envío REAL.
 
-    Match flexible:
-    - producto_codigo empieza con 'TRANSP' (raro: viene vacío en muchos docs)
-    - producto_nombre contiene 'TRANSP' (cubre 'TRANSP. EXT.-CB. 12%',
-      'TRANSP. B.E.', 'TRANSPORTE', 'Transporte', etc.)
+    OJO — fix 2026-06-18: antes buscaba `"TRANSP" in nombre`, y eso matcheaba
+    **"TRANSPARENTE"** ("Vaso 12 oz transparente", "Funda doypack transparente",
+    "Tazón + tapa transparente"). Resultado: a José le aparecían clientes que
+    solo compraron producto, sin envío. Los ítems de envío reales se llaman
+    `TRANSP. EXT.-CB. 12%`, `TRANSP. EXT. 12%`, `TRANSP. B.E.` (abreviatura con
+    PUNTO) o `TRANSPORTE` (palabra completa) — ninguno de los dos matchea
+    "TRANSPARENTE". El código de producto de transporte, cuando viene, empieza
+    con 'TRANSP' (los productos normales no).
     """
     detalles = d.get("detalles") or []
     for det in detalles:
         nombre = (det.get("producto_nombre") or "").upper()
         codigo = (det.get("producto_codigo") or "").upper()
-        if codigo.startswith("TRANSP") or "TRANSP" in nombre:
+        if codigo.startswith("TRANSP"):
+            return True
+        if "TRANSP." in nombre or "TRANSPORTE" in nombre:
             return True
     return False
 
