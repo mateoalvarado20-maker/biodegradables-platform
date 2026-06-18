@@ -791,19 +791,24 @@ def saldos_pendientes_clientes(
 
 
 def _tiene_transporte_item(d: dict[str, Any]) -> bool:
-    """True si alguno de los detalles del documento es un producto de
-    transporte/envío.
+    """True si alguno de los detalles es un producto de transporte/envío REAL.
 
-    Match flexible:
-    - producto_codigo empieza con 'TRANSP' (raro: viene vacío en muchos docs)
-    - producto_nombre contiene 'TRANSP' (cubre 'TRANSP. EXT.-CB. 12%',
-      'TRANSP. B.E.', 'TRANSPORTE', 'Transporte', etc.)
+    OJO — fix 2026-06-18: antes buscaba `"TRANSP" in nombre`, y eso matcheaba
+    **"TRANSPARENTE"** ("Vaso 12 oz transparente", "Funda doypack transparente",
+    "Tazón + tapa transparente"). Resultado: a José le aparecían clientes que
+    solo compraron producto, sin envío. Los ítems de envío reales se llaman
+    `TRANSP. EXT.-CB. 12%`, `TRANSP. EXT. 12%`, `TRANSP. B.E.` (abreviatura con
+    PUNTO) o `TRANSPORTE` (palabra completa) — ninguno de los dos matchea
+    "TRANSPARENTE". El código de producto de transporte, cuando viene, empieza
+    con 'TRANSP' (los productos normales no).
     """
     detalles = d.get("detalles") or []
     for det in detalles:
         nombre = (det.get("producto_nombre") or "").upper()
         codigo = (det.get("producto_codigo") or "").upper()
-        if codigo.startswith("TRANSP") or "TRANSP" in nombre:
+        if codigo.startswith("TRANSP"):
+            return True
+        if "TRANSP." in nombre or "TRANSPORTE" in nombre:
             return True
     return False
 
