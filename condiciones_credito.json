@@ -1,6 +1,6 @@
 {
   "_fuente": "sharepoint:CondicionesCredito.xlsx",
-  "_actualizado": "2026-06-18T13:44:58",
+  "_actualizado": "2026-06-19T10:23:27",
   "clientes": {
     "BOTICA HERMOGENES BARCIA S.A.": {
       "plazo_dias": 40,
@@ -59,10 +59,18 @@
       "ciudad": "GYE"
     },
     "DISPROLIMP S.A.S": {
-      "plazo_dias": 15,
+      "plazo_dias": 21,
       "ciudad": "GYE"
     },
     "MECPETS S.A.": {
+      "plazo_dias": 15,
+      "ciudad": "GYE"
+    },
+    "DISPROVET": {
+      "plazo_dias": 15,
+      "ciudad": "GYE"
+    },
+    "GALAPAGOS SUNSET": {
       "plazo_dias": 15,
       "ciudad": "GYE"
     },
@@ -75,11 +83,11 @@
       "ciudad": "UIO"
     },
     "CORPORACION HVQ SA": {
-      "plazo_dias": 30,
+      "plazo_dias": 45,
       "ciudad": "UIO"
     },
     "SOCIEDAD INDUSTRIAL RELI S.A.": {
-      "plazo_dias": 7,
+      "plazo_dias": 15,
       "ciudad": "UIO"
     },
     "FIDEICOMISO HIT": {
@@ -106,10 +114,6 @@
       "plazo_dias": 8,
       "ciudad": "UIO"
     },
-    "HOTELES DECAMERON ECUADOR S.A.": {
-      "plazo_dias": 30,
-      "ciudad": "UIO"
-    },
     "MENESES CRUZ EDISON GIOVANNY": {
       "plazo_dias": 30,
       "ciudad": "UIO"
@@ -127,7 +131,7 @@
       "ciudad": "UIO"
     },
     "CASSOLETTE CIA. LTDA.": {
-      "plazo_dias": 7,
+      "plazo_dias": 30,
       "ciudad": "UIO"
     },
     "COMPANIA ECUATORIANA DEL TE CA CETCA": {
@@ -135,7 +139,27 @@
       "ciudad": "UIO"
     },
     "UNILIMPIO S.A.": {
+      "plazo_dias": 15,
+      "ciudad": "UIO"
+    },
+    "OLIVERO GOMEZ DEBORAH CORANDRYS": {
+      "plazo_dias": 15,
+      "ciudad": "UIO"
+    },
+    "AQUA IMAGEN": {
+      "plazo_dias": 30,
+      "ciudad": "UIO"
+    },
+    "TECNOLOGIA EN AGUAS AQUAQUIMICATEC CIA. LTDA.": {
+      "plazo_dias": 20,
+      "ciudad": "UIO"
+    },
+    "ETICA EMPRESA TURISTICA INTERNACIONAL C.A.": {
       "plazo_dias": 7,
+      "ciudad": "UIO/GYE"
+    },
+    "MINDO CHOCOLATEMAKERS S. A. S.": {
+      "plazo_dias": 15,
       "ciudad": "UIO"
     }
   }
