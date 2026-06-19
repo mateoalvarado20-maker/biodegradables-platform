@@ -716,46 +716,10 @@ ACTIVITIES_HELP = (
 )
 
 
-def _build_checkin_card(user_email: str | None = None) -> Activity:
-    """Construye una Adaptive Card con casillas/inputs para el check-in."""
-    wk = activity_state.get_week(user_email)
-    diarias = [
-        (aid, a) for aid, a in wk["activities"].items() if a["tipo"] == "diaria"
-    ]
-    # Phase L: ordenar carry-overs primero, después por priority alta→media→baja
-    from datetime import date as _date_cls2, timedelta as _td2
-    _today_iso = activity_state._today().isoformat()  # TZ Ecuador (A9)
-    _yest_iso = (activity_state._today() - _td2(days=1)).isoformat()
-    diarias = activity_state.sort_activities_by_priority_then_carryover(
-        diarias, _today_iso, _yest_iso
-    )
-    semanales = [
-        (aid, a) for aid, a in wk["activities"].items() if a["tipo"] != "diaria"
-    ]
-
-    hoy = datetime.now(activity_state.LOCAL_TZ)
-    fecha_str = f"{DIAS_ES[hoy.weekday()]} {hoy.day:02d}/{hoy.month:02d}"
-
-    # Phase S+ (2026-06-09): cada sección envuelta en Container con
-    # style="emphasis" para que se vean visualmente separadas como cuadros.
-    body: list[dict[str, Any]] = [
-        {
-            "type": "TextBlock",
-            "text": "📋 Cierre del día",
-            "size": "ExtraLarge",
-            "weight": "Bolder",
-            "color": "Accent",
-        },
-        {
-            "type": "TextBlock",
-            "text": fecha_str.capitalize(),
-            "spacing": "None",
-            "isSubtle": True,
-        },
-    ]
-
-    # ===== CONTAINER 1: Horario de hoy =====
-    horario_items: list[dict[str, Any]] = [
+def _horario_card_items(fecha_date) -> list[dict[str, Any]]:
+    """Items del Adaptive Card para la asistencia/horario del día. Compartido
+    por el check-in normal y el card de ruta de José (2026-06-19)."""
+    return [
         {
             "type": "TextBlock",
             "text": "⏰ Horario de hoy",
@@ -765,9 +729,7 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
         },
         {
             "type": "TextBlock",
-            # El horario estándar depende del día: sábados es jornada reducida
-            # 9:00 AM – 1:00 PM (sucursales GYE/UIO), resto 8:30 AM – 5:30 PM.
-            "text": f"¿Trabajaste el horario estándar ({activity_state.horario_estandar_label(hoy.date())})?",
+            "text": f"¿Trabajaste el horario estándar ({activity_state.horario_estandar_label(fecha_date)})?",
             "wrap": True,
             "spacing": "Small",
         },
@@ -781,8 +743,6 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
                 {"title": "⏱️ No, falté o salí antes", "value": "no"},
             ],
         },
-        # Sección que SOLO aplica si dijo NO. Adaptive Card 1.4 no soporta
-        # condicional visual nativo, mostramos siempre con label "Solo si NO:"
         {
             "type": "TextBlock",
             "text": "📝 Si fue NO, completá lo siguiente:",
@@ -841,6 +801,89 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
             "spacing": "Small",
         },
     ]
+
+
+def _save_horario_from_form(form_data: dict[str, Any], user_email: str) -> None:
+    """Persiste la asistencia/horario del día desde los campos horario_* del
+    form. Compartido por el check-in y el card de ruta de José (2026-06-19)."""
+    today_iso = activity_state._today().isoformat()
+    horario_estandar = (form_data.get("horario_estandar") or "si").strip().lower()
+    if horario_estandar != "no":
+        activity_state.set_day_schedule(user_email, today_iso, estandar=True)
+        return
+    notifico = (form_data.get("horario_notifico") or "no_aplica").strip()
+    horas = (form_data.get("horario_horas_permiso") or "").strip()
+    franja = (form_data.get("horario_franja") or "").strip()
+    motivo = (form_data.get("horario_motivo") or "").strip()
+    por_que_no = (form_data.get("horario_porque_no_notifico") or "").strip()
+    notifico_label = {
+        "si_correo": "✅ Sí notificó por correo (formal)",
+        "no_notifico": "❌ NO notificó antes",
+        "no_aplica": "(n/a)",
+    }.get(notifico, notifico)
+    partes = []
+    if motivo:
+        partes.append(f"Motivo: {motivo}")
+    if horas:
+        partes.append(f"{horas}h de permiso")
+    if franja:
+        partes.append(f"({franja})")
+    partes.append(f"Notificación: {notifico_label}")
+    if notifico == "no_notifico" and por_que_no:
+        partes.append(f"No notificó porque: {por_que_no}")
+    razon_compuesta = " · ".join(partes) or "Sin detalles"
+    if "–" in franja:
+        desde, hasta = (franja.split("–") + [""])[:2]
+    elif "-" in franja:
+        desde, hasta = (franja.split("-") + [""])[:2]
+    else:
+        desde, hasta = "", ""
+    activity_state.set_day_schedule(
+        user_email, today_iso, estandar=False,
+        desde=desde.strip(), hasta=hasta.strip(), razon=razon_compuesta,
+    )
+
+
+def _build_checkin_card(user_email: str | None = None) -> Activity:
+    """Construye una Adaptive Card con casillas/inputs para el check-in."""
+    wk = activity_state.get_week(user_email)
+    diarias = [
+        (aid, a) for aid, a in wk["activities"].items() if a["tipo"] == "diaria"
+    ]
+    # Phase L: ordenar carry-overs primero, después por priority alta→media→baja
+    from datetime import date as _date_cls2, timedelta as _td2
+    _today_iso = activity_state._today().isoformat()  # TZ Ecuador (A9)
+    _yest_iso = (activity_state._today() - _td2(days=1)).isoformat()
+    diarias = activity_state.sort_activities_by_priority_then_carryover(
+        diarias, _today_iso, _yest_iso
+    )
+    semanales = [
+        (aid, a) for aid, a in wk["activities"].items() if a["tipo"] != "diaria"
+    ]
+
+    hoy = datetime.now(activity_state.LOCAL_TZ)
+    fecha_str = f"{DIAS_ES[hoy.weekday()]} {hoy.day:02d}/{hoy.month:02d}"
+
+    # Phase S+ (2026-06-09): cada sección envuelta en Container con
+    # style="emphasis" para que se vean visualmente separadas como cuadros.
+    body: list[dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": "📋 Cierre del día",
+            "size": "ExtraLarge",
+            "weight": "Bolder",
+            "color": "Accent",
+        },
+        {
+            "type": "TextBlock",
+            "text": fecha_str.capitalize(),
+            "spacing": "None",
+            "isSubtle": True,
+        },
+    ]
+
+    # ===== CONTAINER 1: Horario de hoy (helper compartido con José) =====
+    horario_items = _horario_card_items(hoy.date())
     body.append({
         "type": "Container",
         "style": "emphasis",
@@ -1338,46 +1381,9 @@ async def _handle_checkin_submission(
         except (TypeError, ValueError):
             pass
 
-    # Phase K (rev R) — horario con notificación + permiso detallado
-    today_iso = activity_state._today().isoformat()
-    horario_estandar = (form_data.get("horario_estandar") or "si").strip().lower()
-    if horario_estandar == "no":
-        # Construir razón compuesta a partir de los campos nuevos
-        notifico = (form_data.get("horario_notifico") or "no_aplica").strip()
-        horas = (form_data.get("horario_horas_permiso") or "").strip()
-        franja = (form_data.get("horario_franja") or "").strip()
-        motivo = (form_data.get("horario_motivo") or "").strip()
-        por_que_no = (form_data.get("horario_porque_no_notifico") or "").strip()
-
-        notifico_label = {
-            "si_correo": "✅ Sí notificó por correo (formal)",
-            "no_notifico": "❌ NO notificó antes",
-            "no_aplica": "(n/a)",
-        }.get(notifico, notifico)
-
-        partes = []
-        if motivo:
-            partes.append(f"Motivo: {motivo}")
-        if horas:
-            partes.append(f"{horas}h de permiso")
-        if franja:
-            partes.append(f"({franja})")
-        partes.append(f"Notificación: {notifico_label}")
-        if notifico == "no_notifico" and por_que_no:
-            partes.append(f"No notificó porque: {por_que_no}")
-        razon_compuesta = " · ".join(partes) or "Sin detalles"
-
-        activity_state.set_day_schedule(
-            user_email, today_iso,
-            estandar=False,
-            desde=franja.split("–")[0].strip() if "–" in franja else franja.split("-")[0].strip() if "-" in franja else "",
-            hasta=franja.split("–")[1].strip() if "–" in franja else franja.split("-")[1].strip() if "-" in franja and len(franja.split("-")) > 1 else "",
-            razon=razon_compuesta,
-        )
-    else:
-        activity_state.set_day_schedule(
-            user_email, today_iso, estandar=True
-        )
+    # Phase K (rev R) — horario/asistencia (helper compartido con José 2026-06-19)
+    today_iso = activity_state._today().isoformat()  # se usa más abajo (caja, choco)
+    _save_horario_from_form(form_data, user_email)
 
     wk = activity_state.get_week(user_email)
     for aid, a in wk["activities"].items():
@@ -3404,7 +3410,18 @@ def _build_jose_ruta_card(
         "items": cc_items,
     })
 
-    # Acciones principales del card: ACTUALIZAR + SALIDA/LLEGADA
+    # Asistencia / horario del día — mismo bloque que el check-in del resto del
+    # equipo, para que José también registre su jornada (2026-06-19).
+    body.append({
+        "type": "Container",
+        "style": "emphasis",
+        "spacing": "ExtraLarge",
+        "separator": True,
+        "bleed": True,
+        "items": _horario_card_items(hoy),
+    })
+
+    # Acciones principales del card: ACTUALIZAR + SALIDA/LLEGADA + asistencia
     actions: list[dict[str, Any]] = [
         {
             "type": "Action.Submit",
@@ -3426,6 +3443,11 @@ def _build_jose_ruta_card(
             "style": "positive",
             "data": {"intent": "jose_start_ruta"},
         })
+    actions.append({
+        "type": "Action.Submit",
+        "title": "💾 Guardar asistencia",
+        "data": {"intent": "jose_asistencia"},
+    })
 
     card = {
         "type": "AdaptiveCard",
@@ -3453,6 +3475,16 @@ async def _handle_jose_intent(
 ) -> None:
     """Maneja todos los intents jose_* del card de ruta."""
     hoy_str = activity_state._today().isoformat()
+
+    if intent == "jose_asistencia":
+        _save_horario_from_form(value, email)
+        est = (value.get("horario_estandar") or "si").strip().lower()
+        msg = ("✅ Asistencia registrada (con novedad de horario). ¡Gracias, José!"
+               if est == "no"
+               else "✅ Asistencia registrada: horario estándar. ¡Gracias, José!")
+        await context.send_activity(msg)
+        await context.send_activity(_build_jose_ruta_card(email, skip_refresh=True))
+        return
 
     if intent == "jose_start_ruta":
         res = activity_state.start_ruta(email, hoy_str)
