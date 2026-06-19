@@ -70,8 +70,18 @@ def _parse_contifico_date(s: Any) -> date | None:
         return None
 
 # Productos de transporte (códigos vistos en inventario)
-# Las líneas se filtran por nombre que empieza con "TRANSP"
 TRANSP_PREFIX = "TRANSP"
+
+
+def _es_linea_transporte(nombre_upper: str) -> bool:
+    """True si el nombre (YA en mayúsculas) es una línea de transporte real.
+
+    Fix 2026-06-19: antes se usaba `startswith("TRANSP")`, que podía matchear
+    un producto que empiece con "TRANSPARENTE". Igual que en contifico_client,
+    exigimos `TRANSP.` (abreviatura con punto) o `TRANSPORTE` (palabra completa,
+    el nombre nuevo en Contifico) — nunca "TRANSPARENTE".
+    """
+    return "TRANSP." in nombre_upper or "TRANSPORTE" in nombre_upper
 
 # Tipo de transporte: B.E. = propio (intra-ciudad), EXT. = externo (provincia)
 def _tipo_transporte(nombre: str) -> str:
@@ -252,7 +262,7 @@ class Envio:
         transp_tipo = "?"
         for det in (doc.get("detalles") or []):
             nombre = (det.get("producto_nombre") or "").upper()
-            if nombre.startswith(TRANSP_PREFIX):
+            if _es_linea_transporte(nombre):
                 cantidad = float(det.get("cantidad") or 0)
                 precio = float(det.get("precio") or 0)
                 transp_total += cantidad * precio
@@ -306,7 +316,7 @@ def _tiene_transporte(doc: dict[str, Any]) -> bool:
         return False
     for det in (doc.get("detalles") or []):
         nombre = (det.get("producto_nombre") or "").upper()
-        if nombre.startswith(TRANSP_PREFIX):
+        if _es_linea_transporte(nombre):
             return True
     return False
 

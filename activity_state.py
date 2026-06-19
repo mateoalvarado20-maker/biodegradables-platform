@@ -1630,6 +1630,50 @@ def set_envios_snapshot(
 
 
 @_locked
+def reconcile_envios_snapshot(
+    user_email: str | None,
+    fresh_ids,
+    fecha: str | None = None,
+) -> dict[str, Any]:
+    """Quita del snapshot del día las facturas que YA NO califican como envío
+    según el filtro actual (no están en `fresh_ids`), EXCEPTO:
+      - las ad-hoc (agregadas a mano), y
+      - las que ya tienen una entrega marcada en alguna salida del día.
+
+    Limpia los falsos positivos VIEJOS (compras en oficina sin transporte) que
+    quedaron en el snapshot por el merge histórico de set_envios_snapshot +
+    carry-forward, una vez que el filtro de transporte se corrigió. Idempotente.
+    Fix 2026-06-19. `set_envios_snapshot` solo agrega; ESTA es la que poda.
+    """
+    email = _normalize_email(user_email)
+    fecha = fecha or _today_str()
+    fresh = set(fresh_ids or [])
+    state = load()
+    user = state.get("users", {}).get(email, {})
+    rec = (user.get("rutas") or {}).get(fecha)
+    if not rec:
+        return {"removed": 0, "kept": 0}
+    snap = rec.get("envios_snapshot", {}) or {}
+    # Facturas con entrega marcada (cualquier salida) — preservar el trabajo hecho.
+    marcadas: set[str] = set()
+    for s in (rec.get("salidas") or []):
+        for fid, entr in (s.get("entregas") or {}).items():
+            if entr.get("status"):
+                marcadas.add(fid)
+    removed = 0
+    for fid in list(snap.keys()):
+        item = snap[fid] or {}
+        if item.get("adhoc") or fid in fresh or fid in marcadas:
+            continue
+        del snap[fid]
+        removed += 1
+    if removed:
+        rec["envios_snapshot"] = snap
+        save(state)
+    return {"removed": removed, "kept": len(snap)}
+
+
+@_locked
 def start_ruta(
     user_email: str | None, fecha: str | None = None
 ) -> dict[str, Any]:

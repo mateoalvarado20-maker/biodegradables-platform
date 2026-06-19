@@ -55,6 +55,7 @@ import activity_state
 import contifico_client
 import core_config
 import graph_calendar_app
+import graph_mail
 import conversation_history
 import monthly_recap
 import news_brief
@@ -2131,10 +2132,16 @@ async def auto_assign_cobranzas() -> None:
                 f"({c['dias_atraso_max']}d atraso)"
             )
             try:
+                # tipo="diaria" (NO "unica"): el check-in renderiza el UI de
+                # cobranza (Contactado/No contactado + observación) SOLO para
+                # activities diarias (ver _build_checkin_card, loop `diarias`),
+                # y el submit usa mark_daily (que exige tipo diaria). Con "unica"
+                # caían en `semanales` y nunca mostraban el UI → asistentes no
+                # veían las cobranzas. (fix 2026-06-19)
                 activity_state.add_adhoc(
                     activity_id, nombre,
                     user_email=target_user,
-                    tipo="unica",
+                    tipo="diaria",
                     meta=1,
                     unidad="cliente contactado",
                 )
@@ -2743,6 +2750,23 @@ def _refresh_envios_jose(fecha: date | None = None) -> dict[str, Any]:
     res = activity_state.set_envios_snapshot(
         JOSE_EMAIL, envios_dict, fecha=fecha_str
     )
+    # 3) Reconciliar: quitar falsos positivos viejos (compras en oficina sin
+    # transporte) que quedaron por el merge histórico + carry-forward. La base
+    # "fresca" usa una ventana de 7 días para NO podar envíos reales recientes
+    # aún no entregados — solo se quitan facturas que el filtro actual ya no
+    # considera envío (y que no son ad-hoc ni tienen entrega marcada). Fix 2026-06-19.
+    try:
+        fresh_ids = {e["factura_id"] for e in envios_dia_gye(fecha, dias_atras=7)}
+        rec = activity_state.reconcile_envios_snapshot(
+            JOSE_EMAIL, fresh_ids, fecha=fecha_str
+        )
+        if rec.get("removed"):
+            logger.info(
+                "reconcile envios José: %d falsos positivos removidos del snapshot",
+                rec["removed"],
+            )
+    except Exception as e:
+        logger.exception("reconcile envios José falló: %s", e)
     res["ok"] = True
     return res
 
