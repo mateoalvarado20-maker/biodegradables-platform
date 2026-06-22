@@ -1,0 +1,92 @@
+# Configuración del tenant: Biodegradables Ecuador (tenant 0 / piloto).
+#
+# Estos valores ESPEJAN los de core_config.py. El test
+# tests/test_tenant_config_biodegradables.py verifica que sean idénticos, así que
+# este archivo todavía NO es la fuente de verdad en producción — es la red de
+# seguridad para el switch futuro (cuando core_config lea desde aquí).
+# Cambiar un valor aquí NO afecta a los bots hoy; primero hay que cablear el switch.
+
+slug: biodegradables
+display_name: "Biodegradables Ecuador"
+locale: es-EC
+timezone: America/Guayaquil
+
+recipients:
+  commercial_report:                       # core_config.JEFE
+    - dsanchez@biodegradablesecuador.com
+    - gsanchez@biodegradablesecuador.com
+  commercial_report_cc:                    # core_config.MIO
+    - malvarado@biodegradablesecuador.com
+  logistics_report:                        # core_config.GABRIELA
+    - gsanchez@biodegradablesecuador.com
+  calendar_sync_users:                     # core_config.CALENDAR_SYNC_USERS
+    - dsanchez@biodegradablesecuador.com
+    - gsanchez@biodegradablesecuador.com
+
+branding:
+  brand_color: "#2E7D32"                   # verde corporativo (generate_bot_icons.py)
+  logo_url: null
+
+commercial:
+  meta_factor: 1.20                        # core_config.META_FACTOR (meta = PY x 1.20)
+  py_override:                             # core_config.PY_OVERRIDE, keyed "YYYY-MM"
+    "2026-05": 38000.0
+  thresholds:                              # core_config umbrales del semáforo
+    cumpl_verde: 1.00
+    cumpl_amarillo: 0.85
+    ayer_verde: 1.00
+    ayer_amarillo: 0.80
+    mora_verde: 0.05
+    mora_amarillo: 0.10
+
+checkin:                                   # core_config CHECKIN_* (hora local del tenant)
+  oficina:
+    users:
+      - malvarado@biodegradablesecuador.com
+      - gsanchez@biodegradablesecuador.com
+    weekday_time: "16:30"                  # CHECKIN_WEEKDAY_OFICINA
+  sucursales:
+    users:
+      - info@biodegradablesecuador.com
+      - quito@biodegradablesecuador.com
+    weekday_time: "17:10"                  # CHECKIN_WEEKDAY_SUCURSALES
+    saturday_time: "12:30"                 # CHECKIN_SATURDAY_SUCURSALES
+
+# Feriados Ecuador (core_config.EC_HOLIDAYS). YAML parsea las fechas sin comillas
+# como date nativo. Mantener al menos el año actual + el siguiente.
+holidays:
+  2025:
+    - 2025-01-01   # Año Nuevo
+    - 2025-03-03   # Carnaval (lunes)
+    - 2025-03-04   # Carnaval (martes)
+    - 2025-04-18   # Viernes Santo
+    - 2025-05-01   # Día del Trabajo
+    - 2025-05-23   # Batalla de Pichincha (T)
+    - 2025-08-10   # Primer Grito de Independencia
+    - 2025-10-10   # Independencia de Guayaquil (T)
+    - 2025-11-03   # Difuntos / Independencia de Cuenca
+    - 2025-12-25   # Navidad
+  2026:
+    - 2026-01-01   # Año Nuevo
+    - 2026-02-16   # Carnaval (lunes)
+    - 2026-02-17   # Carnaval (martes)
+    - 2026-04-03   # Viernes Santo
+    - 2026-05-01   # Día del Trabajo
+    - 2026-05-25   # Batalla de Pichincha (T, lunes)
+    - 2026-08-10   # Primer Grito de Independencia
+    - 2026-10-09   # Independencia de Guayaquil
+    - 2026-11-02   # Día de los Difuntos
+    - 2026-11-03   # Independencia de Cuenca
+    - 2026-12-25   # Navidad
+  2027:
+    - 2027-01-01   # Año Nuevo (nominal — verificar traslados oficiales)
+    - 2027-02-08   # Carnaval (lunes)
+    - 2027-02-09   # Carnaval (martes)
+    - 2027-03-26   # Viernes Santo
+    - 2027-05-01   # Día del Trabajo
+    - 2027-05-24   # Batalla de Pichincha
+    - 2027-08-10   # Primer Grito
+    - 2027-10-09   # Independencia de Guayaquil
+    - 2027-11-02   # Difuntos
+    - 2027-11-03   # Independencia de Cuenca
+    - 2027-12-25   # Navidad

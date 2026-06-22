@@ -1,0 +1,45 @@
+# PLANTILLA de onboarding de un cliente nuevo. Copiar a tenants/<slug>/config.yaml
+# y reemplazar los TODO. Luego: python ops/validate_tenant.py <slug>
+#
+# Los nombres que empiezan con "_" (como _template) NO se validan ni despliegan.
+# Los SECRETOS (tokens de ERP/CRM/correo) NO van aquí — van a Key Vault y se
+# referencian desde integrations.yaml (fase posterior). Aquí solo config de negocio.
+
+slug: TODO-slug-corto                 # ej. "acme" (minúsculas, sin espacios)
+display_name: "TODO Nombre de la empresa"
+locale: es-EC                         # idioma-país (afecta formato y textos)
+timezone: America/Guayaquil           # zona horaria IANA del cliente
+
+recipients:
+  commercial_report: []               # correos que reciben el reporte comercial
+  commercial_report_cc: []
+  logistics_report: []                # vacío si el cliente no usa logística
+  calendar_sync_users: []
+
+branding:
+  brand_color: "#2E7D32"              # color corporativo del cliente
+  logo_url: null
+
+commercial:
+  meta_factor: 1.20                   # crecimiento sobre el mismo mes del año anterior
+  py_override: {}                     # overrides "YYYY-MM": monto (si el ERP difiere)
+  thresholds:
+    cumpl_verde: 1.00
+    cumpl_amarillo: 0.85
+    ayer_verde: 1.00
+    ayer_amarillo: 0.80
+    mora_verde: 0.05
+    mora_amarillo: 0.10
+
+checkin:
+  oficina:
+    users: []
+    weekday_time: "16:30"
+  sucursales:
+    users: []
+    weekday_time: "17:10"
+    saturday_time: "12:30"
+
+holidays:                             # feriados del PAÍS del cliente (no de Ecuador)
+  2026: []
+  2027: []

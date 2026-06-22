@@ -32,6 +32,12 @@ jobs:
       - name: Verificar que azfunc/ no tiene drift (fuente única)
         run: python tools/sync_azfunc.py --check
 
+      - name: Pureza del núcleo (core/ no nombra clientes — warning por ahora)
+        run: python tools/check_core_purity.py
+
+      - name: Validar paquetes de tenant (gate)
+        run: python ops/validate_tenant.py --all
+
       - name: Tests
         run: python -m pytest tests/ -q
 
