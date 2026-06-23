@@ -982,6 +982,61 @@ def _ciudad_nombre(codigo: str) -> str:
     return CIUDAD_NOMBRE.get((codigo or "").upper(), codigo or "—")
 
 
+# ===== Gestión de cobranza de los asistentes (2026-06-23) =====
+# Observaciones que info@ (GYE) / quito@ (UIO) marcan en el check-in
+# (Contactado / No contactado + nota) sobre los clientes con cartera vencida.
+# Se muestran junto a cada deudor en la sección de Cartera del reporte comercial.
+_COBRANZA_CIUDAD_USER = {
+    "UIO": "quito@biodegradablesecuador.com",
+    "GYE": "info@biodegradablesecuador.com",
+}
+
+
+def _norm_cliente(s: str) -> str:
+    """UPPER + sin acentos + espacios colapsados (match insensible)."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    return " ".join(s.upper().split())
+
+
+def _cobranza_gestiones_por_ciudad(dias_recientes: int = 4) -> dict:
+    """{ciudad: {cliente_norm: {contactado, nota, fecha}}} con la gestión MÁS
+    reciente (últimos `dias_recientes` días) que el asistente marcó por cliente.
+    Import lazy de activity_state para no romper entornos sin él (azfunc)."""
+    out: dict = {"UIO": {}, "GYE": {}}
+    try:
+        import datetime as _dt
+        import activity_state
+        state = activity_state.load()
+    except Exception:
+        return out
+    limite = (_dt.date.today() - _dt.timedelta(days=dias_recientes)).isoformat()
+    for ciudad, email in _COBRANZA_CIUDAD_USER.items():
+        user = state.get("users", {}).get(email, {})
+        latest: dict = {}  # cliente_norm -> (fecha, valor, nota)
+        for wk_data in (user.get("weeks") or {}).values():
+            for aid, a in (wk_data.get("activities") or {}).items():
+                if not aid.startswith("cobranza-"):
+                    continue
+                nombre = a.get("nombre", "")
+                after = nombre.split("Cobranza:", 1)[1] if "Cobranza:" in nombre else nombre
+                cliente = after.split("—")[0].strip()
+                cn = _norm_cliente(cliente)
+                if not cn:
+                    continue
+                for fecha, rec in (a.get("log") or {}).items():
+                    if fecha < limite:
+                        continue
+                    prev = latest.get(cn)
+                    if prev is None or fecha > prev[0]:
+                        latest[cn] = (fecha, rec.get("valor"), rec.get("notas") or "")
+        out[ciudad] = {
+            cn: {"contactado": (v or 0) > 0, "nota": nota, "fecha": f}
+            for cn, (f, v, nota) in latest.items()
+        }
+    return out
+
+
 def html_morning() -> str:
     ayer = q_ventas_ayer()
     ayer_ciudad = q_ventas_ayer_ciudad()
@@ -1021,9 +1076,23 @@ def html_morning() -> str:
         f'<td class="right">{fmt_money(r.get("[Saldo]"))}</td></tr>'
         for r in ant
     )
-    def _top_rows(rows: list[dict]) -> str:
+    def _gestion_cell(cliente: str, gestiones: dict) -> str:
+        """Celda 'Gestión de cobranza' = lo que marcó el asistente (Contactado /
+        No contactado + observación) para ese cliente, o '—' si no hubo gestión."""
+        g = gestiones.get(_norm_cliente(cliente))
+        if not g:
+            return '<span class="muted-text">— sin gestión —</span>'
+        nota = g.get("nota") or "(sin detalle)"
+        if g.get("contactado"):
+            return (f'<span style="color:#0e7c39;font-weight:600">✅ Contactado</span> '
+                    f'— {nota}')
+        return (f'<span style="color:#c62828;font-weight:600">❌ No contactado</span> '
+                f'— {nota}')
+
+    def _top_rows(rows: list[dict], gestiones: dict | None = None) -> str:
+        gestiones = gestiones or {}
         if not rows:
-            return '<tr><td colspan="6" class="muted-text">Sin clientes con cartera vencida.</td></tr>'
+            return '<tr><td colspan="7" class="muted-text">Sin clientes con cartera vencida.</td></tr>'
         out = []
         for r in rows:
             dias = r.get("[DiasAtraso]", 0)
@@ -1036,12 +1105,14 @@ def html_morning() -> str:
                 f'<td class="right">{r.get("[FechaEmision]","—")}</td>'
                 f'<td class="right">{r.get("[PlazoDias]",0)}</td>'
                 f'<td class="right">{r.get("[FechaVenc]","—")}</td>'
-                f'<td class="right">{estado}</td></tr>'
+                f'<td class="right">{estado}</td>'
+                f'<td>{_gestion_cell(r.get("[Cliente]",""), gestiones)}</td></tr>'
             )
         return "".join(out)
 
-    top_uio_rows = _top_rows(top_uio)
-    top_gye_rows = _top_rows(top_gye)
+    _gestiones = _cobranza_gestiones_por_ciudad()
+    top_uio_rows = _top_rows(top_uio, _gestiones.get("UIO"))
+    top_gye_rows = _top_rows(top_gye, _gestiones.get("GYE"))
 
     # KPIs de ventas ayer por ciudad
     ciudad_kpis = []
@@ -1316,13 +1387,13 @@ te comparto el estado de la operación al inicio del día.<br>
 
 <h3>⚠️ Top 10 deudores — Quito (UIO)</h3>
 <table>
-<tr><th>Cliente</th><th class="right">Deuda</th><th class="right">F. emisión</th><th class="right">Días créd.</th><th class="right">F. vencimiento</th><th class="right">Estado</th></tr>
+<tr><th>Cliente</th><th class="right">Deuda</th><th class="right">F. emisión</th><th class="right">Días créd.</th><th class="right">F. vencimiento</th><th class="right">Estado</th><th>Gestión de cobranza</th></tr>
 {top_uio_rows}
 </table>
 
 <h3>⚠️ Top 10 deudores — Guayaquil (GYE)</h3>
 <table>
-<tr><th>Cliente</th><th class="right">Deuda</th><th class="right">F. emisión</th><th class="right">Días créd.</th><th class="right">F. vencimiento</th><th class="right">Estado</th></tr>
+<tr><th>Cliente</th><th class="right">Deuda</th><th class="right">F. emisión</th><th class="right">Días créd.</th><th class="right">F. vencimiento</th><th class="right">Estado</th><th>Gestión de cobranza</th></tr>
 {top_gye_rows}
 </table>
 
