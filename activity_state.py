@@ -343,6 +343,11 @@ def init_week(
             "nombre": a["nombre"],
             "tipo": a["tipo"],
             "meta": a.get("meta"),
+            # meta_semanal (2026-06-19): meta acumulada de la semana (ej.
+            # video-tiktok 5/semana). Antes no se copiaba del template, así que
+            # el resumen no podía mostrar el avance semanal. Solo se setea si el
+            # template la define, para no ensuciar las demás activities.
+            **({"meta_semanal": a["meta_semanal"]} if a.get("meta_semanal") else {}),
             "unidad": a.get("unidad", ""),
             "fuente": a.get("fuente", "manual"),
             "adhoc": False,

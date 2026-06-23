@@ -114,14 +114,19 @@ def test_observaciones_de_jose_aparecen_en_resumen(state_env):
     consol = a.get_entregas_consolidadas_dia(jose, fecha)
     assert consol["F-1"]["observacion"] == "Cliente pidió factura física"
 
-    # 2) el bloque de José la muestra en su sección dedicada
+    # 2) el bloque de José la muestra inline en la columna "Estado" de la tabla
+    #    de envíos. Ya NO existe la sección dedicada "Observaciones de José"
+    #    (se eliminó 2026-06-19 por duplicar la misma info — ver _jose_consolidated_block_html).
     html = ask._jose_consolidated_block_html(fecha)
-    assert "Observaciones de José" in html
+    assert "Observaciones de José" not in html
     assert "Cliente pidió factura física" in html
     assert "ACME S.A." in html
 
 
-def test_jose_sin_observaciones_muestra_seccion_vacia(state_env):
+def test_jose_sin_seccion_observaciones_dedicada(state_env):
+    # La sección dedicada de observaciones fue eliminada: ni con data ni sin
+    # data debe renderizarse un encabezado/placeholder separado de observaciones.
     ask = _reload_ask_agent()
     html = ask._jose_consolidated_block_html("2026-06-12")  # viernes, sin data
-    assert "sin observaciones registradas" in html
+    assert "Observaciones de José" not in html
+    assert "sin observaciones registradas" not in html

@@ -2119,7 +2119,14 @@ async def auto_assign_cobranzas() -> None:
 
     for ciudad, target_user in COBRANZA_COLABORADORES.items():
         try:
-            top = contifico_client.cartera_vencida_por_ciudad(ciudad, n=5)
+            # to_thread (fix 2026-06-23): la consulta a Contifico es síncrona y
+            # tarda ~2 min; llamarla directo bloqueaba el event loop más allá del
+            # --timeout 120 de gunicorn → el worker se reiniciaba y NUNCA se
+            # asignaban las cobranzas (count=0 en producción). Offload a un thread
+            # para no bloquear el loop, igual que el resto de jobs pesados.
+            top = await asyncio.to_thread(
+                contifico_client.cartera_vencida_por_ciudad, ciudad, n=5
+            )
         except Exception as e:
             logger.exception("Cobranza pull falló para %s: %s", ciudad, e)
             errores += 1
@@ -4919,10 +4926,15 @@ async def trigger_reminders(request: Request) -> dict[str, Any]:
 
 @app.post("/admin/trigger-cobranzas")
 async def trigger_cobranzas(request: Request) -> dict[str, Any]:
-    """Forzar auto-asignación de cobranzas ahora (testing)."""
+    """Forzar auto-asignación de cobranzas ahora (testing).
+
+    Fire-and-forget: el pull de Contifico tarda ~2 min y bloquearía la request
+    más allá del timeout del gateway (502). Se lanza en background y se responde
+    al toque; el resultado se ve en el Log stream ('auto_assign_cobranzas: N
+    asignadas') y en el check-in del colaborador. Fix 2026-06-23."""
     _require_admin(request)
-    await auto_assign_cobranzas()
-    return {"status": "triggered"}
+    asyncio.create_task(auto_assign_cobranzas())
+    return {"status": "started", "nota": "corre en background ~1-2 min"}
 
 
 @app.post("/admin/trigger-weekly-summaries")

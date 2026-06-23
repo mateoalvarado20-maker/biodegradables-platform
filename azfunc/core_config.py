@@ -167,3 +167,66 @@ def holidays_for(year: int) -> set[date]:
             print(f"[core_config] {msg}", file=sys.stderr)
         return set()
     return set(days)
+
+
+# ===== Switch multiempresa (opt-in, default LEGACY) ====================
+# Fase F0/F1 del plan multiempresa (ver PROPUESTA_ARQUITECTURA_MULTIEMPRESA.md).
+#
+# Por defecto NO cambia NADA: todos los valores de arriba son la fuente. Si y solo
+# si la env var TENANT_CONFIG_SOURCE=yaml, los valores se REEMPLAZAN por los del
+# paquete del tenant (tenants/<slug>/config.yaml, slug = TENANT_SLUG o
+# "biodegradables"). La equivalencia legacy == yaml está fijada por
+# tests/test_tenant_config_biodegradables.py y tests/test_core_config_switch.py.
+#
+# El import de `core/` es PEREZOSO (solo dentro de la rama yaml), así que el camino
+# legacy no depende de pydantic/pyyaml ni del paquete core/ — clave para que
+# azfunc/ (que no incluye core/) siga funcionando con el flag ausente.
+def _maybe_load_from_tenant() -> None:
+    if os.environ.get("TENANT_CONFIG_SOURCE", "legacy").strip().lower() != "yaml":
+        return
+    global JEFE, MIO, GABRIELA, CALENDAR_SYNC_USERS
+    global CHECKIN_OFICINA, CHECKIN_SUCURSALES
+    global CHECKIN_WEEKDAY_OFICINA, CHECKIN_WEEKDAY_SUCURSALES, CHECKIN_SATURDAY_SUCURSALES
+    global META_FACTOR, PY_OVERRIDE, EC_HOLIDAYS
+    global CUMPL_VERDE, CUMPL_AMARILLO, AYER_VERDE, AYER_AMARILLO, MORA_VERDE, MORA_AMARILLO
+
+    from core.config.loader import load_tenant_config
+    from core.config.schema import parse_hhmm
+
+    slug = os.environ.get("TENANT_SLUG", "biodegradables")
+    cfg = load_tenant_config(slug)
+
+    r = cfg.recipients
+    JEFE = list(r.commercial_report)
+    if r.commercial_report_cc:
+        MIO = r.commercial_report_cc[0]
+    if r.logistics_report:
+        GABRIELA = r.logistics_report[0]
+    CALENDAR_SYNC_USERS = list(r.calendar_sync_users)
+
+    CHECKIN_OFICINA = list(cfg.checkin.oficina.users)
+    CHECKIN_SUCURSALES = list(cfg.checkin.sucursales.users)
+    CHECKIN_WEEKDAY_OFICINA = parse_hhmm(cfg.checkin.oficina.weekday_time) or CHECKIN_WEEKDAY_OFICINA
+    CHECKIN_WEEKDAY_SUCURSALES = (
+        parse_hhmm(cfg.checkin.sucursales.weekday_time) or CHECKIN_WEEKDAY_SUCURSALES
+    )
+    CHECKIN_SATURDAY_SUCURSALES = (
+        parse_hhmm(cfg.checkin.sucursales.saturday_time) or CHECKIN_SATURDAY_SUCURSALES
+    )
+
+    META_FACTOR = cfg.commercial.meta_factor
+    PY_OVERRIDE = cfg.py_override_map()
+
+    t = cfg.commercial.thresholds
+    CUMPL_VERDE = t.cumpl_verde
+    CUMPL_AMARILLO = t.cumpl_amarillo
+    AYER_VERDE = t.ayer_verde
+    AYER_AMARILLO = t.ayer_amarillo
+    MORA_VERDE = t.mora_verde
+    MORA_AMARILLO = t.mora_amarillo
+
+    EC_HOLIDAYS = {year: list(days) for year, days in cfg.holidays.items()}
+    logger.info("core_config: valores cargados desde tenants/%s/config.yaml", slug)
+
+
+_maybe_load_from_tenant()

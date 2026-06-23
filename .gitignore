@@ -6,6 +6,8 @@
 !/.gitignore
 !/CLAUDE.md
 !/AUDITORIA_TECNICA_2026-06-12.md
+!/AUTOMATIZACIONES_EMPRESA.md
+!/PROPUESTA_ARQUITECTURA_MULTIEMPRESA.md
 !/azure_setup_checklist.md
 !/company_context.md
 !/*.py
@@ -30,6 +32,11 @@
 !/docs/
 !/archive/
 !/.github/
+# --- Plataforma multiempresa (andamiaje aditivo, F0/F1/F2) ---
+!/core/
+!/ops/
+!/tenants/
+!/connectors/
 
 # --- Exclusiones dentro de directorios incluidos ---
 # Staging viejo del bot (artefacto de deploy, no fuente; rollback = bot_deploy.zip)

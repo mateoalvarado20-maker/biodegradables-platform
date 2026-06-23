@@ -23,10 +23,14 @@ testean), `docs/onboarding.md`, `docs/runbook-operativo.md` (incidentes).
 - Suite de tests: `python -m pytest tests/ -q` (50 tests: aislamiento entre usuarios, concurrencia, corrupción, anti-duplicado, horarios, identidad). Correrla antes de cualquier deploy.
 - Código retirado vive en `archive/` con justificación en `archive/README.md`. NO restaurar sin leerla. Retirados: `weekly_report.py` (roto y huérfano — reemplazado por `weekly_summaries` del bot), `agent.py`, `apollo_orchestrator.*`, `run_reply_agent.bat`, `run_weekly_report.bat`.
 
+> **Auditoría 2026-06-22:** ver `AUTOMATIZACIONES_EMPRESA.md` (inventario maestro de
+> bots, agentes y automatizaciones + plan de migración). Esa auditoría actualizó los
+> pendientes de abajo y agregó la sección "Módulos adicionales" más abajo.
+
 **Pendientes operativos del refactor (acción humana, ver runbook):**
-1. Conectar el repo a GitHub y proteger `master` (comandos en CONTRIBUTING §CI/CD).
+1. ✅ **HECHO (2026-06-22):** repo conectado a GitHub (`mateoalvarado20-maker/biodegradables-platform`), 6 PRs mergeados. Falta solo confirmar branch protection en `master`.
 2. Deploy del bot (`tools/build_bot_package.py` → `az webapp deploy`) y del azfunc sincronizado.
-3. Setear `ADMIN_API_TOKEN` en el App Service (separa admin del secret OAuth).
+3. ⚠️ **PENDIENTE (confirmado 2026-06-22):** setear `ADMIN_API_TOKEN` en el App Service (separa admin del secret OAuth). En el backup 2026-06-12 NO está seteado → los endpoints `/admin/*` usan `MICROSOFT_APP_PASSWORD`.
 4. Cutover de logística al bot (`LOGISTICS_IN_BOT=1` + disable del timer azfunc, en la misma ventana — runbook §Cutover).
 5. (Opcional) `DISPATCH_TABLE_CONN` en la PC para que `dispatch.py` escriba a la tabla de producción.
 
@@ -36,7 +40,7 @@ testean), `docs/onboarding.md`, `docs/runbook-operativo.md` (incidentes).
 | Reporte comercial 8 AM | Job APScheduler `morning_sales_report` en teams_bot (App Service). Timer azfunc ELIMINADO del código en Fase 0. Schtask local DESHABILITADA (run_morning.bat queda para runs manuales). |
 | Reporte logística 8 AM | Timer azfunc `logistics_morning`. Schtask local DESHABILITADA. |
 | Reply agent cada 15 min | Timer azfunc `reply_agent_tick` (state en Azure Table). Schtask local DESHABILITADA y wrapper archivado — re-habilitarla duplicaría borradores. |
-| Apollo notifier cada 2 h | Schtask local `BiodegradablesEcuador-ApolloNotifier-2hrs` (única tarea local activa). |
+| Apollo notifier cada 2 h | Schtask local `BiodegradablesEcuador-ApolloNotifier-2hrs` (única tarea local activa). ⚠️ SPOF: depende de que la PC de Mateo esté encendida; cuando la PC se suspende a la hora del trigger, Task Scheduler reporta `LastTaskResult 0xC000013A` (proceso abortado) aunque el script en sí termina en exit 0. Candidato a migrar a un timer de Azure Functions. |
 | Weekly report de Mateo | Job `weekly_summaries` del bot (Vie 17:00). El `weekly_report.py` viejo está archivado — NO crear su schtask. |
 
 ---
@@ -98,6 +102,26 @@ testean), `docs/onboarding.md`, `docs/runbook-operativo.md` (incidentes).
 | `activities_template_gsanchez.json` | Template de Gabriela (vacío inicial — agrega ad-hoc por chat). |
 | `activities_template_info.json` | Template del colaborador GYE (info@). Pre-cargado con `cobranzas-gye`. |
 | `activities_template_quito.json` | Template del colaborador UIO (quito@). Pre-cargado con `cobranzas-uio`. |
+
+### Módulos adicionales (documentados en auditoría 2026-06-22)
+
+Estos estaban en producción pero faltaban en la tabla de arriba:
+
+| Archivo | Función | Estado |
+|---|---|---|
+| `monthly_recap.py` | Genera 2 correos mensuales (recap de ventas + recap de actividades) a gerencia el día 1 (jobs `monthly_*_recap_day1`). Usa Contifico + `forecasting` + `news_brief` + `graph_mail`. CLI: `send-sales`/`send-activities [YYYY MM]` | ✅ Activo |
+| `news_brief.py` | Brief diario de noticias (economía EC, supply chain, sector empaques) con Claude `sonnet-4-6` + web_search nativo. Job `daily_news_brief` 6 AM. Se inyecta al system prompt del Data Bot. Escribe `~/.claude-agent/daily_news_brief.json` | ✅ Activo |
+| `forecasting.py` | Proyecciones de ventas (pesimista/probable/optimista) sobre histórico Contifico (same-month-last-year × YoY ±15%). Sin IA. Lo usan `monthly_recap` y `ask_agent` (`forecast_sales_for_month`, `analyze_product_mix`) | ✅ Activo |
+| `conversation_history.py` | Persistencia multi-turn del chat por usuario (TTL 30 min, separado por bot). Usado por `teams_bot`. State `~/.claude-agent/conversation_history.json` (safe_json) | ✅ Activo |
+| `graph_calendar_app.py` | Cliente Graph **app-only** para calendario: crea/actualiza/borra eventos de fecha límite y reuniones en calendarios de gerencia. Usado por `teams_bot` y `ask_agent`. Requiere admin consent `Calendars.ReadWrite` | ✅ Activo |
+| `credito_excel.py` | Lee condiciones de crédito (días por cliente) desde Excel en SharePoint (Graph workbook). Fallback a `condiciones_credito.json`. Vive sincronizado en `azfunc/` | ✅ Activo (azfunc) |
+| `apollo_stats.py` | Métricas de prospección Apollo (enviados/respuestas). **HUÉRFANO**: ningún módulo lo importa | ⚠️ Sin uso |
+| `wp_client.py` | Cliente REST de WordPress (Basic Auth + Application Password). Solo lectura habilitada. Base de los `wp_*` | ✅ Activo |
+| `wp_audit.py` / `wp_check.py` / `wp_drafts.py` | Auditoría/smoke-test/inspección del WordPress. CLIs manuales, no automatizados | 🔧 Manual |
+| `wp_apply.py` | Aplicación controlada de cambios al WordPress. Dry-run por defecto; exige `--apply --approve <id>`; guarda backups | 🔧 Manual |
+| `graph_mail.py` | Envío de correo vía Service Principal (app-only, client_credentials). NO usa MSAL. Usado por todos los reportes del bot/azfunc | ✅ Activo |
+| `core_config.py` | **Fuente única** de config de negocio: destinatarios, feriados EC (2025-2027), `META_FACTOR`, `PY_OVERRIDE` (keyed por (año,mes)), umbrales, horarios de check-in | ✅ Activo |
+| `safe_json.py` / `send_ledger.py` | Infraestructura: escritura atómica + backup + cuarentena + locks; ledger anti-duplicado de envíos | ✅ Activo |
 
 ## Phase E+F+G: Gestión de equipo, cobranzas, recurrencias (2026-05-30 / 31)
 

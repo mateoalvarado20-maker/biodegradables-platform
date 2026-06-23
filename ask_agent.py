@@ -1329,6 +1329,29 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
                 f'</div>'
             )
 
+    # === Videos TikTok de la semana (meta 5/semana, users con video-tiktok) ===
+    # Métrica de seguimiento pedida por gerencia (2026-06-19): muestra cuántos
+    # videos lleva subidos en la semana contra la meta semanal. El conteo sale
+    # de sumar las marcas diarias de la activity "video-tiktok" (cada video = 1).
+    tiktok_videos_section = ""
+    tt_video_act = week.get("activities", {}).get("video-tiktok")
+    if tt_video_act:
+        meta_videos = int(tt_video_act.get("meta_semanal") or 5)
+        videos_hechos = 0
+        for log_entry in (tt_video_act.get("log") or {}).values():
+            videos_hechos += int(float(log_entry.get("valor") or 0))
+        completo = videos_hechos >= meta_videos
+        vid_color = "#2e7d32" if completo else "#ef6c00"
+        check = " ✅" if completo else ""
+        tiktok_videos_section = (
+            f'<div style="margin:10px 0;padding:8px 12px;background:#fff;border-left:4px solid #ff0050;'
+            f'font-size:13px;">'
+            f'🎬 <b>Meta TikTok:</b> {meta_videos} videos · '
+            f'<span style="color:{vid_color};font-weight:700;">'
+            f'TikTok: {videos_hechos}/{meta_videos} completados{check}</span>'
+            f'</div>'
+        )
+
     # === Chocolates (solo asistentes) ===
     choco_section = ""
     if es_asistente:
@@ -1348,13 +1371,13 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
             )
 
     # === Bloque completo ===
-    if not daily_section and not sem_section and not cierre_section and not choco_section and not tiktok_section:
+    if not daily_section and not sem_section and not cierre_section and not choco_section and not tiktok_section and not tiktok_videos_section:
         body_block = (
             '<p style="color:#999;font-style:italic;font-size:13px;">'
             '(Sin actividad registrada hoy)</p>'
         )
     else:
-        body_block = horario_html + daily_section + sem_section + cierre_section + tiktok_section + choco_section
+        body_block = horario_html + daily_section + sem_section + cierre_section + tiktok_videos_section + tiktok_section + choco_section
 
     # Header color por rol
     if es_asistente:
@@ -1372,7 +1395,7 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
         f'</div>'
         f'<div style="padding:14px 18px;background:{header_bg};">'
         f'<div style="margin-bottom:8px;font-size:13px;">{horario_html}</div>'
-        f'{daily_section}{sem_section}{cierre_section}{tiktok_section}{choco_section}'
+        f'{daily_section}{sem_section}{cierre_section}{tiktok_videos_section}{tiktok_section}{choco_section}'
         f'</div>'
         f'</div>'
     )
@@ -1590,38 +1613,11 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
             'Sin envíos cargados hoy.</p>'
         )
 
-    # Observaciones de José (2026-06-15): sección dedicada que junta TODAS las
-    # observaciones que José ingresó por entrega (más las razones de no entrega)
-    # en un solo lugar claramente identificado, para que el gerente no tenga que
-    # cazarlas dentro de la tabla de envíos.
-    obs_items = []
-    for fid, e in sorted(entregas.items(), key=lambda kv: kv[1].get("fecha_emision", "")):
-        cliente_o = escape(e.get("cliente", "?"))
-        obs_txt = (e.get("observacion") or "").strip()
-        razon_txt = (e.get("razon_no_entrega") or "").strip()
-        partes = []
-        if obs_txt:
-            partes.append(escape(obs_txt))
-        if razon_txt and e.get("status") == "no_entregado":
-            partes.append(f'<i>No entregado: {escape(razon_txt)}</i>')
-        if partes:
-            obs_items.append(
-                f'<li style="margin:3px 0;"><b>{cliente_o}:</b> '
-                f'{" · ".join(partes)}</li>'
-            )
-    if obs_items:
-        observaciones_html = (
-            '<p style="margin:10px 0 4px;font-weight:600;color:#444">'
-            '📝 Observaciones de José</p>'
-            '<ul style="margin:4px 0 10px;padding-left:20px;font-size:13px;color:#333;">'
-            + "".join(obs_items) +
-            '</ul>'
-        )
-    else:
-        observaciones_html = (
-            '<p style="margin:10px 0;font-size:12px;color:#999;">'
-            '📝 Observaciones de José: sin observaciones registradas hoy.</p>'
-        )
+    # NOTA (2026-06-19): se eliminó la sección dedicada "📝 Observaciones de
+    # José" que se renderizaba aparte debajo de la tabla. Las observaciones (y
+    # las razones de no entrega) ya se muestran inline en la columna "Estado"
+    # de la tabla de envíos — esa es la ÚNICA fuente. No reintroducir una
+    # sección de observaciones separada: duplicaba la misma información.
 
     # Caja chica
     saldo = float(cc.get("saldo") or 0)
@@ -1661,7 +1657,6 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'{fecha_fmt}  ·  {summary_chips}</p>'
         f'{salidas_html}'
         f'{entregas_html}'
-        f'{observaciones_html}'
         f'{caja_html}'
         f'</div>'
         f'</div>'
