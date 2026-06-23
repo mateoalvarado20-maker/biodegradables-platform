@@ -36,9 +36,12 @@ def test_tiktok_videos_parcial(state_env):
     a = state_env.activity_state
     ask = _reload_ask_agent()
     mateo = _mateo(a)
-    a.init_week(mateo, wk=a.week_key(_WED))
+    wk = a.week_key(_WED)
+    a.init_week(mateo, wk=wk)
     for f in _DIAS[:3]:  # 3 videos
-        a.mark_daily("video-tiktok", 1, user_email=mateo, fecha=f)
+        # wk explícito: si no, mark_daily usa la semana de HOY (week_key()) y las
+        # marcas caen en otra semana cuando el test corre fuera de la semana de _WED.
+        a.mark_daily("video-tiktok", 1, user_email=mateo, fecha=f, wk=wk)
 
     html = ask._collaborator_block_html_v2(mateo, target_date=_WED)
     assert "Meta TikTok:" in html
@@ -52,9 +55,10 @@ def test_tiktok_videos_completo(state_env):
     a = state_env.activity_state
     ask = _reload_ask_agent()
     mateo = _mateo(a)
-    a.init_week(mateo, wk=a.week_key(_WED))
+    wk = a.week_key(_WED)
+    a.init_week(mateo, wk=wk)
     for f in _DIAS:  # 5 videos = meta cumplida
-        a.mark_daily("video-tiktok", 1, user_email=mateo, fecha=f)
+        a.mark_daily("video-tiktok", 1, user_email=mateo, fecha=f, wk=wk)
 
     html = ask._collaborator_block_html_v2(mateo, target_date=_WED)
     assert "5/5 completados ✅" in html
