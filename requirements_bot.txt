@@ -33,3 +33,7 @@ Pillow>=10.0
 
 # matplotlib para chart del daily_report (Phase U+ — migrado al bot)
 matplotlib>=3.8
+
+# Config multiempresa: core_config lee tenants/<slug>/config.yaml si
+# TENANT_CONFIG_SOURCE=yaml (con el flag ausente/legacy no se importa).
+pyyaml>=6.0

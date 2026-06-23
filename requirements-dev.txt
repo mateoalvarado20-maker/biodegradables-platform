@@ -2,7 +2,5 @@
 # Instalar con: pip install -r requirements-dev.txt -r requirements_bot.txt
 pytest>=9.0
 ruff>=0.15
-# PyYAML: usado por core/config/loader.py (carga de tenants/<slug>/config.yaml).
-# Vive en dev/CI porque el núcleo multiempresa aún NO está cableado al deploy del
-# bot; cuando se cablee, mover a requirements.txt / requirements_bot.txt.
-pyyaml>=6.0
+# pyyaml también está en los requirements de deploy (core_config puede leer
+# tenants/<slug>/config.yaml si TENANT_CONFIG_SOURCE=yaml).

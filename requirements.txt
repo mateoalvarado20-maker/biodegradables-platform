@@ -31,3 +31,7 @@ matplotlib>=3.8
 
 # === Azure Table Storage (dispatch_state / reply_state backend Table) ===
 azure-data-tables>=12.4
+
+# === Config multiempresa (core_config lee tenants/<slug>/config.yaml si
+#     TENANT_CONFIG_SOURCE=yaml; con el flag en legacy/ausente no se usa) ===
+pyyaml>=6.0
