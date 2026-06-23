@@ -1333,6 +1333,36 @@ def set_chocolates_stock_inicial(
 
 
 @_locked
+def corregir_chocolates_stock(
+    user_email: str | None,
+    cantidad: int,
+    wk: str | None = None,
+) -> dict[str, Any]:
+    """Corrige (override) el stock de chocolates de la semana.
+
+    A diferencia de set_chocolates_stock_inicial (inmutable, first-write wins),
+    esta fija un stock LIMPIO: stock_inicial=cantidad, entregas/recargas vacías,
+    de modo que stock_actual == cantidad. Para corregir confusiones de conteo.
+    """
+    email = _normalize_email(user_email)
+    state = load()
+    user = _get_user_state(state, email)
+    wk = wk or week_key()
+    if "chocolates" not in user:
+        user["chocolates"] = {}
+    user["chocolates"][wk] = {
+        "stock_inicial": int(cantidad),
+        "entregas": {},
+        "recargas": {},
+        "alerta_5_enviada": False,
+        "creado_at": _now_iso(),
+        "corregido_at": _now_iso(),
+    }
+    save(state)
+    return user["chocolates"][wk]
+
+
+@_locked
 def add_chocolates_entrega(
     user_email: str | None,
     fecha: str,
