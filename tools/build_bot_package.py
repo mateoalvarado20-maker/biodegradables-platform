@@ -62,6 +62,18 @@ BOT_FILES = [
     "activities_template_quito.json",
 ]
 
+# Directorios del paquete multiempresa. Solo se USAN si TENANT_CONFIG_SOURCE=yaml,
+# pero deben viajar en el zip para que el flag se pueda prender en producción sin
+# que el import perezoso de core_config falle (ModuleNotFoundError: core).
+BOT_DIRS = ["core", "connectors", "tenants"]
+
+
+def _iter_dir_files(base: Path):
+    """Todos los archivos de `base`, recursivo, salvo caches de Python."""
+    for p in sorted(base.rglob("*")):
+        if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc":
+            yield p
+
 
 def main() -> int:
     try:
@@ -73,16 +85,23 @@ def main() -> int:
     args = parser.parse_args()
 
     missing = [f for f in BOT_FILES if not (ROOT / f).exists()]
+    missing += [d for d in BOT_DIRS if not (ROOT / d).is_dir()]
     if missing:
-        print(f"ERROR: faltan archivos: {missing}", file=sys.stderr)
+        print(f"ERROR: faltan archivos/directorios: {missing}", file=sys.stderr)
         return 1
 
     out = ROOT / args.out
+    count = 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
         for name in BOT_FILES:
             zf.write(ROOT / name, arcname=name)
+            count += 1
+        for d in BOT_DIRS:
+            for p in _iter_dir_files(ROOT / d):
+                zf.write(p, arcname=p.relative_to(ROOT).as_posix())
+                count += 1
 
-    print(f"OK: {out.name} generado con {len(BOT_FILES)} archivos.")
+    print(f"OK: {out.name} generado con {count} archivos.")
     print("Deploy: az webapp deploy -g rg-biodegradables-prod "
           "-n biodegradables-bot-app --src-path " + args.out + " --type zip")
     return 0
