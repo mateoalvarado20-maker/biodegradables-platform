@@ -4059,6 +4059,25 @@ def _run_daily_report_morning() -> None:
         _sys.argv = _orig
 
 
+def _run_daily_report_test() -> None:
+    """Corre daily_report.main() en modo test-morning (envía SOLO a Mateo).
+
+    Para validar cómo llega el correo comercial sin molestar a Daniel/Gabriela.
+    """
+    import sys as _sys
+    _orig = _sys.argv
+    _sys.argv = ["teams_bot", "test-morning"]
+    try:
+        import importlib
+        import daily_report
+        importlib.reload(daily_report)  # state más fresco
+        result = daily_report.main()
+        if result != 0:
+            raise RuntimeError(f"daily_report.main retornó exit_code={result}")
+    finally:
+        _sys.argv = _orig
+
+
 async def send_morning_sales_report_job() -> None:
     """Reporte comercial Lun-Sáb 8:00 EC — vía _reliable_job + ledger."""
     await _reliable_job(
@@ -5256,6 +5275,44 @@ async def trigger_morning_sales_job_admin(request: Request) -> dict[str, Any]:
     except Exception as e:
         logger.exception("trigger morning_sales failed: %s", e)
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/admin/trigger-sales-report-test")
+async def trigger_sales_report_test_admin(request: Request) -> dict[str, Any]:
+    """Dispara el reporte comercial en modo TEST (envía SOLO a Mateo) para
+    validar cómo llega el correo — incluida la nueva columna de gestión de
+    cobranza en la sección de cartera. Fire-and-forget (daily_report consulta
+    Contifico ~2 min; si se esperara, gunicorn daría 502)."""
+    _require_admin(request)
+    asyncio.create_task(asyncio.to_thread(_run_daily_report_test))
+    return {
+        "status": "started",
+        "nota": "reporte de prueba a Mateo (malvarado@) en ~2 min",
+    }
+
+
+@app.post("/admin/set-chocolates")
+async def set_chocolates_admin(request: Request) -> dict[str, Any]:
+    """Corrige el stock de chocolates de un colaborador para la semana actual.
+
+    Body: {"user_email": "info@...", "cantidad": 8}
+    Override limpio (stock_actual == cantidad), para corregir confusiones.
+    """
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    email = (body or {}).get("user_email", "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="falta user_email")
+    try:
+        cantidad = int((body or {}).get("cantidad"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="cantidad inválida")
+    activity_state.corregir_chocolates_stock(email, cantidad)
+    rec = activity_state.get_chocolates_semana(email)
+    return {"ok": True, "user": email, "chocolates": rec}
 
 
 @app.post("/admin/preview-jose-route")
