@@ -1494,11 +1494,12 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
     entregas = activity_state.get_entregas_consolidadas_dia(JOSE_EMAIL_CONS, today_iso) or {}
     cc = activity_state.get_caja_chica(JOSE_EMAIL_CONS) or {"inicial": None, "saldo": 0.0, "movimientos": []}
     movs_hoy = activity_state.caja_chica_movimientos_dia(JOSE_EMAIL_CONS, today_iso) or []
+    horario = activity_state.get_day_schedule(JOSE_EMAIL_CONS, today_iso)
 
     # Rotación GYE de sábados: si José (Asistente 2 GYE) no registró ruta,
     # envíos ni movimientos un sábado, es ausencia esperada por el turno
     # rotativo — no un reporte pendiente.
-    if fecha_d.weekday() == 5 and not salidas and not entregas and not movs_hoy:
+    if fecha_d.weekday() == 5 and not salidas and not entregas and not movs_hoy and not horario:
         return _ausencia_rotativa_block_html(
             "📦 ASISTENTE 2 GYE — José Solórzano", fecha_fmt
         )
@@ -1641,6 +1642,32 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'Saldo actual: ${saldo:,.2f}</span>{alerta_extra}</p>'
     )
 
+    # Asistencia / horario (2026-06-23): José la marca con "💾 Guardar
+    # asistencia" en su card de ruta (intent jose_asistencia → set_day_schedule).
+    # Antes no se mostraba en el consolidado; ahora aparece como los demás.
+    if horario is None:
+        asistencia_html = (
+            '<p style="margin:8px 0 4px;font-weight:600;color:#444">⏰ Asistencia</p>'
+            '<p style="margin:4px 0;font-size:13px;color:#999;font-style:italic">'
+            'Sin reportar hoy.</p>'
+        )
+    elif horario.get("estandar"):
+        asistencia_html = (
+            '<p style="margin:8px 0 4px;font-weight:600;color:#444">⏰ Asistencia</p>'
+            '<p style="margin:4px 0;font-size:14px;color:#2e7d32;font-weight:600">'
+            f'{activity_state.horario_estandar_label(today_iso)} (estándar) ✅</p>'
+        )
+    else:
+        desde = horario.get("desde") or "?"
+        hasta = horario.get("hasta") or "?"
+        razon = horario.get("razon") or "sin razón especificada"
+        asistencia_html = (
+            '<p style="margin:8px 0 4px;font-weight:600;color:#444">⏰ Asistencia</p>'
+            '<p style="margin:4px 0;font-size:14px;color:#ef6c00;font-weight:600">'
+            f'{desde} – {hasta} (no estándar)</p>'
+            f'<p style="margin:2px 0;font-size:12px;color:#666">Razón: {escape(razon)}</p>'
+        )
+
     # Phase V (2026-06-11): mismo estilo que _collaborator_block_html_v2
     # (header verde con bg sólido, body con bg suave, border 2px verde).
     header_color = "#0e7c39"  # mismo verde corporativo que los Asistentes 1
@@ -1655,6 +1682,7 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'<div style="padding:14px 18px;background:{header_bg};">'
         f'<p style="margin:0 0 10px 0;font-size:13px;color:#555;">'
         f'{fecha_fmt}  ·  {summary_chips}</p>'
+        f'{asistencia_html}'
         f'{salidas_html}'
         f'{entregas_html}'
         f'{caja_html}'
