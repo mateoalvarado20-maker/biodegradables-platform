@@ -1,0 +1,44 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "REEMPLAZAR_CON_DEMO_ACTIVITIES_BOT_APP_ID",
+  "developer": {
+    "name": "Andex (DEMO)",
+    "websiteUrl": "https://andexdemo.com",
+    "privacyUrl": "https://andexdemo.com/privacy",
+    "termsOfUseUrl": "https://andexdemo.com/terms"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Andex Tareas",
+    "full": "Andex Activities Bot (DEMO)"
+  },
+  "description": {
+    "short": "Check-in diario del equipo: actividades, cobranzas y cierre de caja (DEMO).",
+    "full": "Demo del bot de tracking del equipo. Envía el check-in diario (Adaptive Card), recibe actividades, cobranzas y cierre de caja por sucursal, y arma el resumen para gerencia. Datos 100% ficticios — entorno de demostración."
+  },
+  "accentColor": "#0B6E99",
+  "bots": [
+    {
+      "botId": "REEMPLAZAR_CON_DEMO_ACTIVITIES_BOT_APP_ID",
+      "scopes": ["personal"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal"],
+          "commands": [
+            { "title": "tareas", "description": "Ver mis tareas y actividades de la semana" },
+            { "title": "help", "description": "Ver comandos disponibles" }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}

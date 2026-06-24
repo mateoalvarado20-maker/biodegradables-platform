@@ -10,6 +10,8 @@
 !/PROPUESTA_ARQUITECTURA_MULTIEMPRESA.md
 !/PROPUESTA_DEMO_COMERCIAL.md
 !/DEMO_GUION.md
+!/DEMO_FASE5_RUNBOOK.md
+!/.env.demo.example
 !/azure_setup_checklist.md
 !/company_context.md
 !/*.py
