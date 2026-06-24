@@ -1,0 +1,44 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "1.0.0",
+  "id": "REEMPLAZAR_CON_DEMO_DATA_BOT_APP_ID",
+  "developer": {
+    "name": "Andex (DEMO)",
+    "websiteUrl": "https://andexdemo.com",
+    "privacyUrl": "https://andexdemo.com/privacy",
+    "termsOfUseUrl": "https://andexdemo.com/terms"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Andex Data Bot",
+    "full": "Andex Data Bot (DEMO)"
+  },
+  "description": {
+    "short": "Asistente de datos comerciales — ventas, cartera y marketing (DEMO).",
+    "full": "Demo del asistente conversacional para gerencia. Consulta ventas, cartera y cobranzas (ERP) y leads/deals/pipeline (CRM) en lenguaje natural. Datos 100% ficticios — entorno de demostración."
+  },
+  "accentColor": "#0B6E99",
+  "bots": [
+    {
+      "botId": "REEMPLAZAR_CON_DEMO_DATA_BOT_APP_ID",
+      "scopes": ["personal"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal"],
+          "commands": [
+            { "title": "help", "description": "Ver comandos disponibles" },
+            { "title": "refresh", "description": "Refrescar contexto de datos" }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}
