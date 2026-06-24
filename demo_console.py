@@ -18,7 +18,8 @@ Requisitos (los setea el operador, no este script):
     set ANTHROPIC_API_KEY=...                       (solo para `databot`)
 
 Uso:
-    python demo_console.py all                 # siembra + renderiza todo + index
+    python demo_console.py all                 # siembra + renderiza todo + index + demo.html
+    python demo_console.py site                # igual que `all` (sitio + demo.html 1-archivo)
     python demo_console.py comercial           # solo el reporte comercial
     python demo_console.py logistica
     python demo_console.py equipo
@@ -103,6 +104,78 @@ def render_recap() -> str:
     return _write("recap.html", html, f"Recap mensual {month:02d}/{year}")
 
 
+def _collect_html() -> list[tuple[str, str, str]]:
+    """Devuelve [(slug, titulo, html)] de los 4 artefactos, sin escribir archivos."""
+    import ask_agent
+    import daily_logistics_report as logi
+    import daily_report
+    import monthly_recap
+    hoy = _today()
+    desde = hoy - timedelta(days=logi.DIAS_DESDE)
+    hasta = hoy - timedelta(days=logi.DIAS_HASTA)
+    envios = logi.build_envios(desde, hasta)
+    year, month = (hoy.year - 1, 12) if hoy.month == 1 else (hoy.year, hoy.month - 1)
+    try:
+        recap_act = monthly_recap._build_activities_recap_html(year, month)
+    except Exception as e:  # noqa: BLE001
+        recap_act = f"<p>(recap de actividades no disponible: {e})</p>"
+    recap = (monthly_recap._build_sales_recap_html(year, month)
+             + "<hr style='margin:32px 0;'/>" + recap_act)
+    return [
+        ("comercial", "📊 Reporte comercial 8 AM", daily_report.html_morning()),
+        ("logistica", "🚚 Logística", logi._render_html(envios, desde, hasta)),
+        ("equipo", "👥 Resumen del equipo",
+         ask_agent._consolidated_daily_summary_html(_team_emails(), target_date=hoy)),
+        ("recap", "📅 Recap mensual", recap),
+    ]
+
+
+def build_single_file() -> str:
+    """Genera UN solo `demo.html` autocontenido (tabs + iframes srcdoc) con los 4
+    reportes — el artefacto ideal para compartir por link (OneDrive/SharePoint/
+    static host): un único archivo, sin dependencias externas."""
+    from html import escape
+    import core_config
+    arts = _collect_html()
+    for _slug, _t, html in arts:
+        demo_guard.assert_no_real_data(html, context="single-file")
+    tabs = "".join(
+        f'<button class="tab{" active" if i == 0 else ""}" onclick="show({i})">{escape(t)}</button>'
+        for i, (_s, t, _h) in enumerate(arts)
+    )
+    frames = "".join(
+        f'<iframe class="rep{" active" if i == 0 else ""}" id="rep{i}" '
+        f'srcdoc="{escape(html, quote=True)}"></iframe>'
+        for i, (_s, _t, html) in enumerate(arts)
+    )
+    page = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo — {escape(core_config.COMPANY_NAME)}</title>
+<style>
+  body{{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;color:#0f172a;}}
+  header{{background:#0B6E99;color:#fff;padding:16px 22px;}}
+  header h1{{margin:0;font-size:20px;}} header p{{margin:4px 0 0;opacity:.85;font-size:13px;}}
+  .tabs{{display:flex;gap:6px;flex-wrap:wrap;padding:12px 22px;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;}}
+  .tab{{border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:14px;}}
+  .tab.active{{background:#0B6E99;color:#fff;border-color:#0B6E99;font-weight:600;}}
+  .rep{{display:none;width:100%;height:calc(100vh - 130px);border:0;background:#fff;}}
+  .rep.active{{display:block;}}
+  footer{{padding:8px 22px;font-size:12px;color:#64748b;}}
+</style></head><body>
+<header><h1>Demo — {escape(core_config.COMPANY_NAME)}</h1>
+<p>{escape(core_config.COMPANY_SECTOR.capitalize())} · sucursales en {escape(core_config.COMPANY_SUCURSALES_DESC)} · datos 100% ficticios</p></header>
+<div class="tabs">{tabs}</div>
+{frames}
+<footer>Entorno de demostración — no contiene datos de ningún cliente real.</footer>
+<script>
+function show(n){{
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',i===n));
+  document.querySelectorAll('.rep').forEach((r,i)=>r.classList.toggle('active',i===n));
+}}
+</script></body></html>"""
+    return _write("demo.html", page, "Demo en un solo archivo (compartible)")
+
+
 def run_databot(pregunta: str) -> None:
     import ask_agent
     print(f"\n  Pregunta: {pregunta}")
@@ -167,7 +240,7 @@ def main() -> int:
         run_seed()
     elif cmd == "databot":
         run_databot(" ".join(sys.argv[2:]) or "¿cuánto vendimos ayer?")
-    elif cmd == "all":
+    elif cmd in ("all", "site"):
         run_seed()
         paths = {
             "📊 Reporte comercial 8 AM": render_comercial(),
@@ -176,7 +249,9 @@ def main() -> int:
             "📅 Recap mensual": render_recap(),
         }
         idx = write_index(paths)
-        print(f"\nAbrí en el navegador: {os.path.abspath(idx)}")
+        single = build_single_file()
+        print(f"\nSitio (multi-archivo): {os.path.abspath(idx)}")
+        print(f"Para compartir por LINK (1 archivo): {os.path.abspath(single)}")
     else:
         print(__doc__)
         return 1
