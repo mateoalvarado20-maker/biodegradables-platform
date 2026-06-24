@@ -1514,104 +1514,117 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'<span style="color:#999">⏳ {n_pendientes}</span>'
     )
 
-    # Salidas
-    salidas_visibles = [s for s in salidas if not s.get("marcado_en_oficina")]
-    if salidas_visibles:
-        salidas_rows = ""
-        for i, s in enumerate(salidas_visibles, 1):
-            ini = (s.get("inicio_ts") or "")[:16].replace("T", " ")[-8:]
-            fin_raw = s.get("fin_ts")
-            if fin_raw:
-                fin = fin_raw[:16].replace("T", " ")[-8:]
-                try:
-                    d1 = datetime.fromisoformat(s["inicio_ts"].replace("Z", "+00:00"))
-                    d2 = datetime.fromisoformat(fin_raw.replace("Z", "+00:00"))
-                    dur = f"{int((d2 - d1).total_seconds() / 60)} min"
-                except Exception:
-                    dur = "?"
-            else:
-                fin = "(en curso)"
-                dur = "—"
-            entr_n = sum(1 for e in (s.get("entregas") or {}).values()
-                         if e.get("status") == "entregado")
-            salidas_rows += (
-                f"<tr><td>#{i}</td><td>{ini}</td><td>{fin}</td>"
-                f"<td>{dur}</td><td>{entr_n} entregas</td></tr>"
+    # Envíos AGRUPADOS POR SALIDA (2026-06-23): el usuario quiere ver qué
+    # entregó José en CADA salida que hizo, no una lista plana. Cada salida
+    # lista sus propias entregas (lo que José marcó en esa salida); al final,
+    # los que nunca salieron quedan en "Pendientes". El detalle del cliente sale
+    # del snapshot; el estado/obs/pago de cada entrega, de la salida.
+    snapshot = ruta.get("envios_snapshot", {}) or {}
+
+    def _hora_corta(iso: str) -> str:
+        return iso[:16].replace("T", " ")[-5:] if iso else "?"
+
+    def _envio_row(fid: str, entr: dict) -> str:
+        snap = snapshot.get(fid, {}) or {}
+        cliente = escape(snap.get("cliente") or entr.get("cliente") or "?")
+        doc = escape(snap.get("documento", "?"))
+        total = snap.get("total", 0) or 0
+        status = entr.get("status", "pendiente")
+        dir_real = entr.get("direccion_real") or snap.get("direccion_factura") or ""
+        obs = entr.get("observacion") or ""
+        razon = entr.get("razon_no_entrega") or ""
+        pago = entr.get("pago_envio") or 0
+        if status == "entregado":
+            badge = '<span style="color:#0d8a3f;font-weight:600">✅ Entregado</span>'
+        elif status == "no_entregado":
+            badge = (
+                '<span style="color:#c53030;font-weight:600">❌ No entregado</span>'
+                + (f'<br><small style="color:#777">{escape(razon)}</small>' if razon else "")
             )
-        salidas_html = (
-            '<p style="margin:8px 0 4px;font-weight:600;color:#444">🚗 Salidas del día</p>'
-            '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px">'
-            '<tr style="background:#f0f0f0">'
-            '<th style="padding:4px 6px;text-align:left">#</th>'
-            '<th style="padding:4px 6px;text-align:left">Inicio</th>'
-            '<th style="padding:4px 6px;text-align:left">Fin</th>'
-            '<th style="padding:4px 6px;text-align:left">Duración</th>'
-            '<th style="padding:4px 6px;text-align:left">Entregas</th>'
-            '</tr>' + salidas_rows + '</table>'
-        )
-    else:
-        salidas_html = (
-            '<p style="color:#999;font-size:12px;margin:8px 0;">'
-            'José no salió a ruta hoy.</p>'
+        else:
+            badge = '<span style="color:#999">⏳ Pendiente</span>'
+        pago_html = f"${pago:,.2f}" if pago else "—"
+        obs_html = f'<br><small style="color:#777">{escape(obs)}</small>' if obs else ""
+        if snap.get("adhoc"):
+            tipo_a = (snap.get("tipo_adhoc") or "entrega").upper()
+            doc_extra = f'<br><small style="color:#e67e22;font-weight:600">➕ AD-HOC ({tipo_a})</small>'
+        else:
+            doc_extra = ""
+        total_html = f"${total:,.2f}" if total > 0 else "—"
+        return (
+            "<tr>"
+            f"<td>{cliente}<br><small style='color:#777'>{doc}</small>{doc_extra}</td>"
+            f"<td style='text-align:right'>{total_html}</td>"
+            f"<td>{escape(dir_real)}</td>"
+            f"<td style='text-align:right'>{pago_html}</td>"
+            f"<td>{badge}{obs_html}</td>"
+            "</tr>"
         )
 
-    # Tabla entregas
-    if entregas:
-        rows = ""
-        for fid, e in sorted(entregas.items(), key=lambda kv: kv[1].get("fecha_emision", "")):
-            cliente = escape(e.get("cliente", "?"))
-            doc = escape(e.get("documento", "?"))
-            total = e.get("total", 0)
-            status = e.get("status", "pendiente")
-            dir_real = e.get("direccion_real") or e.get("direccion_factura") or ""
-            obs = e.get("observacion") or ""
-            razon = e.get("razon_no_entrega") or ""
-            pago = e.get("pago_envio") or 0
-            if status == "entregado":
-                badge = '<span style="color:#0d8a3f;font-weight:600">✅ Entregado</span>'
-            elif status == "no_entregado":
-                badge = (
-                    '<span style="color:#c53030;font-weight:600">❌ No entregado</span>'
-                    + (f'<br><small style="color:#777">{escape(razon)}</small>' if razon else "")
-                )
-            else:
-                badge = '<span style="color:#999">⏳ Pendiente</span>'
-            pago_html = f"${pago:,.2f}" if pago else "—"
-            obs_html = (
-                f'<br><small style="color:#777">{escape(obs)}</small>'
-                if obs else ""
+    _TH = (
+        '<tr style="background:#f0f0f0">'
+        '<th style="padding:6px 8px;text-align:left">Cliente</th>'
+        '<th style="padding:6px 8px;text-align:right">Monto</th>'
+        '<th style="padding:6px 8px;text-align:left">Dirección final</th>'
+        '<th style="padding:6px 8px;text-align:right">Pago terminal</th>'
+        '<th style="padding:6px 8px;text-align:left">Estado</th>'
+        '</tr>'
+    )
+
+    def _tabla(rows: str) -> str:
+        return (
+            '<table style="width:100%;border-collapse:collapse;font-size:13px;'
+            'margin:4px 0 12px">' + _TH + rows + '</table>'
+        )
+
+    secciones = ""
+    fids_vistos: set[str] = set()
+    real_idx = 0
+    for s in salidas:
+        entr_dict = s.get("entregas", {}) or {}
+        en_oficina = s.get("marcado_en_oficina")
+        if en_oficina and not entr_dict:
+            continue
+        if en_oficina:
+            cabecera = "🏢 Entregado en oficina (sin salir a ruta)"
+        else:
+            real_idx += 1
+            ini = _hora_corta(s.get("inicio_ts", ""))
+            fin = _hora_corta(s.get("fin_ts", "")) if s.get("fin_ts") else "(en curso)"
+            n_ok = sum(1 for e in entr_dict.values() if e.get("status") == "entregado")
+            n_no = sum(1 for e in entr_dict.values() if e.get("status") == "no_entregado")
+            cabecera = (
+                f"🚗 Salida #{real_idx} · {ini} → {fin} · ✅ {n_ok} entregadas"
+                + (f" · ❌ {n_no} no entregadas" if n_no else "")
             )
-            # Phase V: destinos ad-hoc tienen badge especial
-            if e.get("adhoc"):
-                tipo_a = (e.get("tipo_adhoc") or "entrega").upper()
-                doc_extra = f'<br><small style="color:#e67e22;font-weight:600">➕ AD-HOC ({tipo_a})</small>'
-            else:
-                doc_extra = ""
-            total_html = f"${total:,.2f}" if total > 0 else "—"
-            rows += (
-                "<tr>"
-                f"<td>{cliente}<br><small style='color:#777'>{doc}</small>{doc_extra}</td>"
-                f"<td style='text-align:right'>{total_html}</td>"
-                f"<td>{escape(dir_real)}</td>"
-                f"<td style='text-align:right'>{pago_html}</td>"
-                f"<td>{badge}{obs_html}</td>"
-                "</tr>"
-            )
-        entregas_html = (
-            '<p style="margin:8px 0 4px;font-weight:600;color:#444">📦 Envíos del día</p>'
-            '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:10px">'
-            '<tr style="background:#f0f0f0">'
-            '<th style="padding:6px 8px;text-align:left">Cliente</th>'
-            '<th style="padding:6px 8px;text-align:right">Monto</th>'
-            '<th style="padding:6px 8px;text-align:left">Dirección final</th>'
-            '<th style="padding:6px 8px;text-align:right">Pago terminal</th>'
-            '<th style="padding:6px 8px;text-align:left">Estado</th>'
-            '</tr>' + rows + '</table>'
+        rows = "".join(_envio_row(fid, entr) for fid, entr in entr_dict.items())
+        fids_vistos.update(entr_dict.keys())
+        secciones += (
+            f'<p style="margin:12px 0 2px;font-weight:600;color:#0e7c39">{cabecera}</p>'
+            + (_tabla(rows) if rows else
+               '<p style="color:#999;font-size:12px;margin:2px 0 10px">'
+               '(sin entregas marcadas en esta salida)</p>')
+        )
+
+    # Pendientes: en el snapshot pero nunca marcados en ninguna salida
+    pend_fids = [fid for fid in snapshot if fid not in fids_vistos]
+    if pend_fids:
+        rows = "".join(_envio_row(fid, {"status": "pendiente"}) for fid in pend_fids)
+        secciones += (
+            '<p style="margin:12px 0 2px;font-weight:600;color:#c53030">'
+            f'⏳ Pendientes — no salieron en ninguna salida ({len(pend_fids)})</p>'
+            + _tabla(rows)
+        )
+
+    if secciones:
+        envios_html = (
+            '<p style="margin:8px 0 4px;font-weight:700;color:#444">'
+            '📦 Envíos por salida</p>' + secciones
         )
     else:
-        entregas_html = (
+        envios_html = (
             '<p style="color:#999;font-size:12px;margin:8px 0;">'
-            'Sin envíos cargados hoy.</p>'
+            'José no salió a ruta ni cargó envíos hoy.</p>'
         )
 
     # NOTA (2026-06-19): se eliminó la sección dedicada "📝 Observaciones de
@@ -1683,8 +1696,7 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'<p style="margin:0 0 10px 0;font-size:13px;color:#555;">'
         f'{fecha_fmt}  ·  {summary_chips}</p>'
         f'{asistencia_html}'
-        f'{salidas_html}'
-        f'{entregas_html}'
+        f'{envios_html}'
         f'{caja_html}'
         f'</div>'
         f'</div>'
