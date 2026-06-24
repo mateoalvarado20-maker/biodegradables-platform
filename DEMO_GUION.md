@@ -98,6 +98,36 @@ python demo_console.py seed         # re-siembra el estado del equipo
 python demo_console.py databot "tu pregunta aquí"
 ```
 
+## 3b. Compartir por LINK (sitio público)
+
+El demo está publicado como sitio estático en Azure (Storage static website), en
+el Resource Group **`rg-andex-demo`** (suscripción de producción, aislado):
+
+**URL pública (se abre sin login ni Teams):**
+**https://andexdemoq4rs7z.z20.web.core.windows.net/**
+
+La raíz abre `demo.html` (los 4 reportes en tabs). Pasásela a colaboradores o
+prospectos por correo/WhatsApp/Teams.
+
+**Actualizar el sitio** (tras cambiar datos de Andex o regenerar):
+```powershell
+# (con las env vars del bloque 0 cargadas)
+python demo_console.py site
+$sa='andexdemoq4rs7z'; $rg='rg-andex-demo'
+$key = az storage account keys list -g $rg -n $sa --query "[0].value" -o tsv
+az storage blob upload-batch -s $env:DEMO_OUT -d '$web' --account-name $sa --account-key $key --overwrite
+```
+
+**Borrar todo el hosting** (cuando ya no se necesite):
+```powershell
+az group delete -n rg-andex-demo --yes --no-wait
+```
+
+> Solo hostea HTML con datos 100% ficticios — no hay datos reales ni secretos en
+> el sitio. Cada artefacto se escanea con demo_guard antes de subirse.
+
+---
+
 ## 4. Checklist anti-incidentes
 
 - [ ] `DEMO_MODE=1` y `TENANT_SLUG=andex` seteados (si no, `demo_console` aborta).

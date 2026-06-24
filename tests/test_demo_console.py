@@ -70,3 +70,12 @@ def test_index_lista_artefactos(console):
     idx = console.write_index(paths)
     html = Path(idx).read_text(encoding="utf-8")
     assert "Andex" in html and "comercial.html" in html
+
+
+def test_single_file_compartible(console):
+    """El archivo único demo.html incluye los 4 reportes, sin fugas."""
+    path = console.build_single_file()        # _write escanea anti-fuga
+    html = Path(path).read_text(encoding="utf-8")
+    assert "Andex" in html
+    assert html.count("<iframe") == 4         # los 4 reportes embebidos
+    assert "biodegradables" not in html.lower()
