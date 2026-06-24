@@ -855,8 +855,13 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
     diarias = activity_state.sort_activities_by_priority_then_carryover(
         diarias, _today_iso, _yest_iso
     )
+    # Las finalizadas NO se muestran en el card (2026-06-24): cuando el
+    # colaborador confirma "quitar del card" una actividad al 100%, se finaliza
+    # y deja de aparecer acá. Las recolocadas vuelven a pendiente y sí aparecen.
     semanales = [
-        (aid, a) for aid, a in wk["activities"].items() if a["tipo"] != "diaria"
+        (aid, a) for aid, a in wk["activities"].items()
+        if a["tipo"] != "diaria"
+        and activity_state.task_effective_status(a) != "finalizada"
     ]
 
     hoy = datetime.now(activity_state.LOCAL_TZ)
@@ -1366,6 +1371,9 @@ async def _handle_checkin_submission(
 
     marcadas_daily = 0
     marcadas_weekly = 0
+    # Actividades semanales/proyecto que quedaron al 100% en este check-in
+    # (2026-06-24): al final se pregunta si quitarlas del card o recolocarlas.
+    al_100: list[tuple[str, str]] = []
     # Inicializar acá para que SIEMPRE exista (no solo si user en CIERRE_CAJA_USERS)
     choco_msg_extra = ""
 
@@ -1444,10 +1452,13 @@ async def _handle_checkin_submission(
                 continue
             try:
                 avance = float(avance_raw)
-                activity_state.set_weekly_progress(
+                ent = activity_state.set_weekly_progress(
                     aid, avance, user_email=user_email, notas=notas or "",
                 )
                 marcadas_weekly += 1
+                # ¿quedó al 100% y todavía NO finalizada? → preguntar al final
+                if (ent.get("avance") or 0) >= 100 and ent.get("status") != "finalizada":
+                    al_100.append((aid, a.get("nombre", aid)))
             except (TypeError, ValueError):
                 pass
 
@@ -1598,6 +1609,140 @@ async def _handle_checkin_submission(
             f"✅ Marqué tus actividades, **pero algo falló al confirmar:**\n```\n{e}\n```"
         )
 
+    # Actividades que quedaron al 100% → preguntar si quitarlas o recolocarlas.
+    if al_100:
+        try:
+            await context.send_activity(
+                _build_done_activities_card(user_email, al_100)
+            )
+        except Exception as e:
+            logger.exception("no pude mandar card de actividades al 100%%: %s", e)
+
+
+def _build_done_activities_card(
+    user_email: str, items: list[tuple[str, str]]
+) -> Activity:
+    """Tarjeta de seguimiento (2026-06-24): por cada actividad que quedó al 100%
+    pregunta si quitarla del card (finalizar), recolocarla para otro día (con
+    fecha a elección) o dejarla como está."""
+    hoy_iso = activity_state._today().isoformat()
+    body: list[dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": "🎉 ¡Actividades al 100%!",
+            "size": "ExtraLarge",
+            "weight": "Bolder",
+            "color": "Good",
+            "wrap": True,
+        },
+        {
+            "type": "TextBlock",
+            "text": ("Estas actividades quedaron al 100%. ¿Qué hacés con cada una? "
+                     "Si elegís *recolocar*, decime para qué día."),
+            "wrap": True,
+            "isSubtle": True,
+            "spacing": "Small",
+        },
+    ]
+    for aid, nombre in items:
+        body.append({
+            "type": "TextBlock",
+            "text": f"✅ **{nombre}**",
+            "wrap": True,
+            "weight": "Bolder",
+            "spacing": "Medium",
+            "separator": True,
+        })
+        body.append({
+            "type": "Input.ChoiceSet",
+            "id": f"done_action__{aid}",
+            "style": "expanded",
+            "value": "dejar",
+            "choices": [
+                {"title": "🗑️ Quitarla del card (ya está terminada)", "value": "quitar"},
+                {"title": "🔁 Recolocarla para hacerla otro día", "value": "recolocar"},
+                {"title": "➖ Dejarla como está (100% en el card)", "value": "dejar"},
+            ],
+        })
+        body.append({
+            "type": "Input.Date",
+            "id": f"recolocar_fecha__{aid}",
+            "label": "Si la recolocás: ¿para qué día?",
+            "spacing": "Small",
+        })
+    card = {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body,
+        "actions": [{
+            "type": "Action.Submit",
+            "title": "💾 Confirmar",
+            "style": "positive",
+            "data": {"intent": "confirm_done", "ctx_user": user_email, "ctx_fecha": hoy_iso},
+        }],
+    }
+    return Activity(
+        type=ActivityTypes.message,
+        attachments=[Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=card,
+        )],
+    )
+
+
+async def _handle_done_activities(
+    context: TurnContext, form_data: dict[str, Any], user_email: str
+) -> None:
+    """Procesa la tarjeta de actividades al 100%: quitar / recolocar / dejar."""
+    ctx_user = (form_data.get("ctx_user") or "").strip().lower()
+    if ctx_user and ctx_user != (user_email or "").strip().lower():
+        await context.send_activity(
+            "❌ Este formulario fue generado para otro usuario."
+        )
+        return
+    quitadas, recolocadas, errores = [], [], []
+    for key, val in form_data.items():
+        if not key.startswith("done_action__"):
+            continue
+        aid = key[len("done_action__"):]
+        accion = (val or "dejar").strip()
+        try:
+            if accion == "quitar":
+                ent = activity_state.set_task_status(
+                    aid, "finalizada", user_email=user_email, by="user",
+                    note="quitada del card (100%)",
+                )
+                quitadas.append(ent.get("nombre", aid))
+            elif accion == "recolocar":
+                fecha = (form_data.get(f"recolocar_fecha__{aid}") or "").strip() or None
+                if fecha:
+                    try:
+                        date.fromisoformat(fecha)
+                    except ValueError:
+                        errores.append(f"{aid}: fecha inválida ({fecha})")
+                        continue
+                ent = activity_state.reset_task_para_rehacer(
+                    aid, user_email=user_email, fecha_limite=fecha, by="user",
+                )
+                etiqueta = ent.get("nombre", aid)
+                recolocadas.append(f"{etiqueta}" + (f" → {fecha}" if fecha else ""))
+            # "dejar" → no se toca
+        except Exception as e:
+            logger.warning("done_action %s para %s falló: %s", aid, user_email, e)
+            errores.append(str(aid))
+
+    partes = []
+    if quitadas:
+        partes.append("🗑️ Quitadas del card: " + ", ".join(f"**{q}**" for q in quitadas))
+    if recolocadas:
+        partes.append("🔁 Recolocadas: " + ", ".join(f"**{r}**" for r in recolocadas))
+    if not partes and not errores:
+        partes.append("➖ Listo, las dejé como estaban (al 100% en tu card).")
+    if errores:
+        partes.append("⚠️ No pude procesar: " + ", ".join(errores))
+    await context.send_activity("\n\n".join(partes))
+
 
 async def _on_turn_activities(context: TurnContext) -> None:
     activity = context.activity
@@ -1640,6 +1785,17 @@ async def _on_turn_activities(context: TurnContext) -> None:
             ref = TurnContext.get_conversation_reference(activity)
             _save_ref_for_user("activities", email, ref)
             await _handle_task_confirmation(context, activity.value, email)
+            return
+        if intent == "confirm_done":
+            email = await _resolve_or_reject(context)
+            if not email:
+                return
+            if not _is_allowed_activities(email):
+                await context.send_activity("No tenés acceso a este bot.")
+                return
+            ref = TurnContext.get_conversation_reference(activity)
+            _save_ref_for_user("activities", email, ref)
+            await _handle_done_activities(context, activity.value, email)
             return
         # Phase U: handlers del card de ruta de José
         if isinstance(intent, str) and intent.startswith("jose_"):
