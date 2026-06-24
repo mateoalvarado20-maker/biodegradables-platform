@@ -1487,6 +1487,12 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
     today_iso = today_iso or _hoy_ec().isoformat()
     fecha_d = date.fromisoformat(today_iso)
     fecha_fmt = fecha_d.strftime("%d/%m/%Y")
+    # Header del chofer desde core_config (no hardcode de nombre real).
+    _ch = core_config.PEOPLE.get(JOSE_EMAIL_CONS, {})
+    _chofer_label = (
+        f"📦 ASISTENTE {_ch.get('asistente_num') or 2} "
+        f"{_ch.get('sucursal') or 'GYE'} — {_ch.get('name') or 'Chofer'}"
+    )
 
     ruta = activity_state.get_ruta_dia(JOSE_EMAIL_CONS, today_iso)
     salidas = ruta.get("salidas", []) or []
@@ -1499,9 +1505,7 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
     # envíos ni movimientos un sábado, es ausencia esperada por el turno
     # rotativo — no un reporte pendiente.
     if fecha_d.weekday() == 5 and not salidas and not entregas and not movs_hoy and not horario:
-        return _ausencia_rotativa_block_html(
-            "📦 ASISTENTE 2 GYE — José Solórzano", fecha_fmt
-        )
+        return _ausencia_rotativa_block_html(_chofer_label, fecha_fmt)
 
     # Resumen de entregas
     n_entregadas = sum(1 for e in entregas.values() if e.get("status") == "entregado")
@@ -1689,7 +1693,7 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'border-radius:8px;overflow:hidden;background:#fff;">'
         f'<div style="background:{header_color};color:#fff;padding:10px 16px;'
         f'font-weight:700;font-size:16px;">'
-        f'📦 ASISTENTE 2 GYE — José Solórzano'
+        f'{_chofer_label}'
         f'</div>'
         f'<div style="padding:14px 18px;background:{header_bg};">'
         f'<p style="margin:0 0 10px 0;font-size:13px;color:#555;">'
