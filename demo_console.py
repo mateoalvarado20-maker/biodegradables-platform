@@ -1,0 +1,187 @@
+r"""demo_console — "control remoto" de la demo comercial (Fase 4).
+
+Renderiza cada artefacto del producto (reporte comercial, logística, resumen del
+equipo, recap mensual) a archivos HTML que se abren en el navegador durante la
+presentación, y deja consultar el Data Bot por CLI. NO necesita servidor, Azure
+ni enviar correos: todo local, con los datos sintéticos de Andex.
+
+Cada artefacto se escanea con demo_guard ANTES de escribirse: si por algún motivo
+apareciera un dato real, aborta (defensa en profundidad sobre el sandbox).
+
+Requisitos (los setea el operador, no este script):
+    set DEMO_MODE=1
+    set TENANT_CONFIG_SOURCE=yaml
+    set TENANT_SLUG=andex
+    set DEMO_EMAIL_DOMAIN=andexdemo.com
+    set STATE_DIR=%USERPROFILE%\.andex-demo        (estado del equipo, dedicado)
+    set DEMO_TODAY=2026-06-24                       (opcional, fija "hoy")
+    set ANTHROPIC_API_KEY=...                       (solo para `databot`)
+
+Uso:
+    python demo_console.py all                 # siembra + renderiza todo + index
+    python demo_console.py comercial           # solo el reporte comercial
+    python demo_console.py logistica
+    python demo_console.py equipo
+    python demo_console.py recap
+    python demo_console.py seed                # siembra el estado del equipo
+    python demo_console.py databot "cuánto vendimos ayer?"
+"""
+from __future__ import annotations
+
+import os
+import sys
+from datetime import date, datetime, timedelta, timezone
+
+import demo_guard
+
+_EC_TZ = timezone(timedelta(hours=-5))
+OUT_DIR = os.environ.get("DEMO_OUT", "demo_out")
+
+
+def _today() -> date:
+    override = os.environ.get("DEMO_TODAY")
+    if override:
+        return date.fromisoformat(override.strip())
+    return datetime.now(_EC_TZ).date()
+
+
+def _write(name: str, html: str, titulo: str) -> str:
+    """Escanea y escribe un artefacto HTML. Devuelve la ruta."""
+    demo_guard.assert_no_real_data(html, context=name)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    path = os.path.join(OUT_DIR, name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"  [OK] {titulo} → {path}")
+    return path
+
+
+def _team_emails() -> list[str]:
+    """Colaboradores no-supervisor y no-chofer (el chofer se intercala solo)."""
+    import core_config
+    return [
+        e for e, p in core_config.PEOPLE.items()
+        if not p.get("supervisor") and p.get("role") != "chofer"
+    ]
+
+
+def render_comercial() -> str:
+    import daily_report
+    return _write("comercial.html", daily_report.html_morning(),
+                  "Reporte comercial 8 AM")
+
+
+def render_logistica() -> str:
+    import daily_logistics_report as logi
+    hoy = _today()
+    desde = hoy - timedelta(days=logi.DIAS_DESDE)
+    hasta = hoy - timedelta(days=logi.DIAS_HASTA)
+    envios = logi.build_envios(desde, hasta)
+    html = logi._render_html(envios, desde, hasta)
+    return _write("logistica.html", html, f"Reporte de logística ({len(envios)} envíos)")
+
+
+def render_equipo() -> str:
+    import ask_agent
+    html = ask_agent._consolidated_daily_summary_html(_team_emails(), target_date=_today())
+    return _write("equipo.html", html, "Resumen diario del equipo")
+
+
+def render_recap() -> str:
+    import monthly_recap
+    hoy = _today()
+    year, month = (hoy.year - 1, 12) if hoy.month == 1 else (hoy.year, hoy.month - 1)
+    ventas = monthly_recap._build_sales_recap_html(year, month)
+    try:
+        actividades = monthly_recap._build_activities_recap_html(year, month)
+    except Exception as e:  # noqa: BLE001
+        actividades = f"<p>(recap de actividades no disponible: {e})</p>"
+    html = (
+        "<html><body style='font-family:Segoe UI,Arial,sans-serif;'>"
+        + ventas + "<hr style='margin:32px 0;'/>" + actividades + "</body></html>"
+    )
+    return _write("recap.html", html, f"Recap mensual {month:02d}/{year}")
+
+
+def run_databot(pregunta: str) -> None:
+    import ask_agent
+    print(f"\n  Pregunta: {pregunta}")
+    try:
+        resp = ask_agent.ask(pregunta, mode="data")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [ERROR] {e}\n  (¿falta ANTHROPIC_API_KEY?)", file=sys.stderr)
+        return
+    hits = demo_guard.scan_for_real_data(resp)
+    if hits:
+        print(f"  [⚠️ FUGA] la respuesta menciona datos reales: {hits}", file=sys.stderr)
+    print("\n" + resp + "\n")
+
+
+def run_seed() -> None:
+    import seed_demo_state
+    seed_demo_state.seed_activities(_today())
+    n = seed_demo_state.seed_dispatch(_today())
+    print(f"  [OK] estado del equipo sembrado ({n} despachos)")
+
+
+def write_index(paths: dict[str, str]) -> str:
+    import core_config
+    links = "".join(
+        f'<li><a href="{os.path.basename(p)}">{titulo}</a></li>'
+        for titulo, p in paths.items()
+    )
+    html = f"""<html><head><meta charset="utf-8"><title>Demo {core_config.COMPANY_NAME}</title></head>
+<body style="font-family:Segoe UI,Arial,sans-serif;max-width:680px;margin:40px auto;color:#1f2937;">
+<h1 style="color:{core_config.SUCURSAL_NAMES and '#0B6E99'};">Demo — {core_config.COMPANY_NAME}</h1>
+<p>{core_config.COMPANY_SECTOR.capitalize()} · sucursales en {core_config.COMPANY_SUCURSALES_DESC}.</p>
+<p>Artefactos generados (datos 100% ficticios):</p>
+<ul style="line-height:2;font-size:16px;">{links}</ul>
+<p style="color:#6b7280;font-size:13px;">Generado por demo_console.py — entorno DEMO, sin datos de ningún cliente real.</p>
+</body></html>"""
+    return _write("index.html", html, "Índice de la demo")
+
+
+def main() -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    # Falla cerrado si el entorno no es un demo válido.
+    demo_guard.verify_demo_config()
+    if os.environ.get("DEMO_MODE") != "1":
+        print("[demo_console] DEMO_MODE != 1 — abortando.", file=sys.stderr)
+        return 2
+
+    cmd = sys.argv[1] if len(sys.argv) >= 2 else "all"
+    print(f"== demo_console: {cmd} ==")
+
+    if cmd == "comercial":
+        render_comercial()
+    elif cmd == "logistica":
+        render_logistica()
+    elif cmd == "equipo":
+        render_equipo()
+    elif cmd == "recap":
+        render_recap()
+    elif cmd == "seed":
+        run_seed()
+    elif cmd == "databot":
+        run_databot(" ".join(sys.argv[2:]) or "¿cuánto vendimos ayer?")
+    elif cmd == "all":
+        run_seed()
+        paths = {
+            "📊 Reporte comercial 8 AM": render_comercial(),
+            "🚚 Reporte de logística": render_logistica(),
+            "👥 Resumen diario del equipo": render_equipo(),
+            "📅 Recap mensual": render_recap(),
+        }
+        idx = write_index(paths)
+        print(f"\nAbrí en el navegador: {os.path.abspath(idx)}")
+    else:
+        print(__doc__)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
