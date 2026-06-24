@@ -2980,6 +2980,12 @@ def _build_jose_ruta_card(
             return (prio, env.get("fecha_emision", ""))
         envios_ordenados = sorted(entregas_consol.items(), key=_orden)
 
+        # Opción A (2026-06-23): las entregas YA hechas se colapsan en una sola
+        # línea compacta al final, para que el card sea más corto cuando José
+        # vuelve. Solo los PENDIENTES y los NO ENTREGADOS (accionables) se
+        # muestran expandidos.
+        entregados_compactos: list[dict[str, Any]] = []
+
         for fid, env in envios_ordenados:
             cliente = env.get("cliente", "?")
             doc = env.get("documento", "?")
@@ -3034,46 +3040,19 @@ def _build_jose_ruta_card(
             ]
 
             if status == "entregado":
-                envio_items.append({
-                    "type": "TextBlock",
-                    "text": "✅ **ENTREGADO**" + (f" a las {_hora_local(env.get('entrega_ts',''))}" if env.get('entrega_ts') else ""),
-                    "color": "Good",
-                    "weight": "Bolder",
-                    "spacing": "Small",
-                })
-                if dir_real_guardada:
-                    envio_items.append({
-                        "type": "TextBlock",
-                        "text": f"📍 Entregado en: {dir_real_guardada}",
-                        "wrap": True,
-                        "isSubtle": True,
-                        "spacing": "None",
-                        "size": "Small",
-                    })
+                # Colapsado: una sola línea (cliente + hora). El detalle
+                # (dirección real, pago, obs) ya quedó guardado y aparece en el
+                # resumen del equipo; acá no satura el card.
+                hora_e = _hora_local(env.get("entrega_ts", "")) if env.get("entrega_ts") else ""
+                linea = f"✅ **{cliente}**" + (f" · {hora_e}" if hora_e else "")
                 if env.get("pago_envio"):
-                    envio_items.append({
-                        "type": "TextBlock",
-                        "text": f"💰 Pago al terminal: ${env['pago_envio']:,.2f}",
-                        "wrap": True,
-                        "isSubtle": True,
-                        "spacing": "None",
-                        "size": "Small",
-                    })
-                if obs_guardada:
-                    envio_items.append({
-                        "type": "TextBlock",
-                        "text": f"📝 {obs_guardada}",
-                        "wrap": True,
-                        "isSubtle": True,
-                        "spacing": "None",
-                        "size": "Small",
-                    })
-                envios_items.append({
-                    "type": "Container",
-                    "style": box_style,
-                    "spacing": "Medium",
-                    "separator": True,
-                    "items": envio_items,
+                    linea += f" · 💰${env['pago_envio']:,.2f}"
+                entregados_compactos.append({
+                    "type": "TextBlock",
+                    "text": linea,
+                    "wrap": True,
+                    "spacing": "None",
+                    "size": "Small",
                 })
             elif status == "no_entregado":
                 envio_items.append({
@@ -3173,6 +3152,25 @@ def _build_jose_ruta_card(
                     ],
                 })
 
+        # Entregadas colapsadas (resumen compacto al final del bloque de envíos)
+        if entregados_compactos:
+            envios_items.append({
+                "type": "Container",
+                "style": "good",
+                "spacing": "Medium",
+                "separator": True,
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": f"✅ Ya entregadas hoy ({len(entregados_compactos)})",
+                        "weight": "Bolder",
+                        "color": "Good",
+                        "size": "Small",
+                    },
+                    *entregados_compactos,
+                ],
+            })
+
     # Sub-bloque al final: añadir destino ad-hoc (cuando José tiene que ir a
     # un lugar no facturado: retiro, encargo extra, devolución, etc.)
     envios_items.extend([
@@ -3221,6 +3219,13 @@ def _build_jose_ruta_card(
             "id": "jose_adhoc_direccion",
             "label": "Dirección",
             "placeholder": "Ej. Av. Las Américas N123 y Loja",
+        },
+        {
+            "type": "Input.Text",
+            "id": "jose_adhoc_obs",
+            "label": "📝 Observación — a dónde fuiste / detalle",
+            "isMultiline": True,
+            "placeholder": "Ej. fui a la bodega del cliente, retiré 2 bobinas, dejé factura…",
         },
         {
             "type": "Input.Number",
@@ -3417,18 +3422,12 @@ def _build_jose_ruta_card(
         "items": cc_items,
     })
 
-    # Asistencia / horario del día — mismo bloque que el check-in del resto del
-    # equipo, para que José también registre su jornada (2026-06-19).
-    body.append({
-        "type": "Container",
-        "style": "emphasis",
-        "spacing": "ExtraLarge",
-        "separator": True,
-        "bleed": True,
-        "items": _horario_card_items(hoy),
-    })
+    # Asistencia / horario: ya NO va en el card de ruta (2026-06-23). José la
+    # marca UNA sola vez al día en un card dedicado a las 17:10 (como Asistente 1
+    # UIO/GYE) — ver send_jose_asistencia_card_job. Esto evita que el botón de
+    # asistencia reaparezca en cada card de ruta y lo confunda.
 
-    # Acciones principales del card: ACTUALIZAR + SALIDA/LLEGADA + asistencia
+    # Acciones principales del card: ACTUALIZAR + SALIDA/LLEGADA
     actions: list[dict[str, Any]] = [
         {
             "type": "Action.Submit",
@@ -3450,11 +3449,6 @@ def _build_jose_ruta_card(
             "style": "positive",
             "data": {"intent": "jose_start_ruta"},
         })
-    actions.append({
-        "type": "Action.Submit",
-        "title": "💾 Guardar asistencia",
-        "data": {"intent": "jose_asistencia"},
-    })
 
     card = {
         "type": "AdaptiveCard",
@@ -3474,6 +3468,20 @@ def _build_jose_ruta_card(
     )
 
 
+def _jose_pendientes_suffix(email: str, hoy_str: str) -> str:
+    """Texto corto con cuántos envíos quedan pendientes — para las
+    confirmaciones cortas (Opción A 2026-06-23: no re-publicar el card entero
+    en cada acción, solo confirmar y decir cuánto falta)."""
+    try:
+        consol = activity_state.get_entregas_consolidadas_dia(email, hoy_str) or {}
+        pend = sum(1 for e in consol.values() if e.get("status") == "pendiente")
+        if pend == 0:
+            return "\n🎉 ¡No te quedan envíos pendientes!"
+        return f"\n⏳ Te quedan **{pend}** pendiente(s). Tocá 🔄 ACTUALIZAR LISTA para verlos."
+    except Exception:
+        return ""
+
+
 async def _handle_jose_intent(
     context: TurnContext,
     intent: str,
@@ -3490,7 +3498,6 @@ async def _handle_jose_intent(
                if est == "no"
                else "✅ Asistencia registrada: horario estándar. ¡Gracias, José!")
         await context.send_activity(msg)
-        await context.send_activity(_build_jose_ruta_card(email, skip_refresh=True))
         return
 
     if intent == "jose_start_ruta":
@@ -3512,6 +3519,7 @@ async def _handle_jose_intent(
         tipo = (value.get("jose_adhoc_tipo") or "entrega").strip().lower()
         cliente = (value.get("jose_adhoc_cliente") or "").strip()
         direccion = (value.get("jose_adhoc_direccion") or "").strip()
+        observacion = (value.get("jose_adhoc_obs") or "").strip() or None
         try:
             monto_raw = value.get("jose_adhoc_monto")
             monto = float(monto_raw) if monto_raw not in (None, "", "0") else 0.0
@@ -3531,15 +3539,17 @@ async def _handle_jose_intent(
             JOSE_EMAIL,
             cliente=cliente,
             direccion=direccion,
+            descripcion=observacion,
             tipo=tipo,
             monto=monto,
             fecha=hoy_str,
         )
         tipo_label = {"entrega": "📦 entrega extra", "retiro": "↩️ retiro", "otro": "📍 destino"}.get(tipo, tipo)
-        await context.send_activity(
-            f"✅ Agregado a tu lista: **{cliente}** ({tipo_label}) — {direccion}"
-        )
-        await context.send_activity(_build_jose_ruta_card(JOSE_EMAIL, skip_refresh=True))
+        msg = f"✅ Agregado a tu lista: **{cliente}** ({tipo_label}) — {direccion}"
+        if observacion:
+            msg += f"\n📝 {observacion}"
+        msg += "\n_(Tocá 🔄 ACTUALIZAR LISTA en tu card para verlo.)_"
+        await context.send_activity(msg)
         return
 
     if intent == "jose_actualizar":
@@ -3582,14 +3592,14 @@ async def _handle_jose_intent(
             cliente_label=cliente_label,
             fecha=hoy_str,
         )
-        msg = "✅ Entrega marcada."
+        msg = f"✅ Entrega marcada: **{cliente_label}**."
         if direccion_real:
             msg += f"\n📍 Dirección real: {direccion_real}"
         if pago_envio > 0:
             cc_now = activity_state.get_caja_chica(email)
             msg += f"\n💰 Pago de ${pago_envio:,.2f} descontado de caja chica (saldo: ${cc_now['saldo']:,.2f})"
+        msg += _jose_pendientes_suffix(email, hoy_str)
         await context.send_activity(msg)
-        await context.send_activity(_build_jose_ruta_card(email, skip_refresh=True))
         return
 
     if intent == "jose_marcar_no_entregado":
@@ -3612,8 +3622,10 @@ async def _handle_jose_intent(
             cliente_label=cliente_label,
             fecha=hoy_str,
         )
-        await context.send_activity(f"❌ Marcado como no entregado: {razon}")
-        await context.send_activity(_build_jose_ruta_card(email, skip_refresh=True))
+        await context.send_activity(
+            f"❌ **{cliente_label}** marcado como no entregado: {razon}"
+            + _jose_pendientes_suffix(email, hoy_str)
+        )
         return
 
     if intent == "jose_reintentar_envio":
@@ -3626,8 +3638,10 @@ async def _handle_jose_intent(
             if factura_id in entrs and entrs[factura_id].get("status") != "entregado":
                 entrs.pop(factura_id, None)
         activity_state.save(st)
-        await context.send_activity(f"🔄 Envío {factura_id} vuelto a pendiente.")
-        await context.send_activity(_build_jose_ruta_card(email, skip_refresh=True))
+        await context.send_activity(
+            f"🔄 Envío {factura_id} vuelto a pendiente."
+            + _jose_pendientes_suffix(email, hoy_str)
+        )
         return
 
     if intent == "jose_end_ruta":
@@ -3680,7 +3694,6 @@ async def _handle_jose_intent(
                 f"⚠️ Ya tenías saldo inicial guardado (${res.get('inicial', 0):,.2f}). "
                 f"Si querés corregirlo, pedile a Mateo que lo resetee."
             )
-        await context.send_activity(_build_jose_ruta_card(email))
         return
 
     if intent == "jose_caja_gasto":
@@ -3703,7 +3716,6 @@ async def _handle_jose_intent(
             f"➖ Gasto registrado: **${monto:,.2f}** ({desc}).\n"
             f"💰 Saldo actual: **${cc['saldo']:,.2f}**"
         )
-        await context.send_activity(_build_jose_ruta_card(email))
         return
 
     if intent == "jose_caja_reposicion":
@@ -3722,7 +3734,6 @@ async def _handle_jose_intent(
             f"➕ Reposición de **${monto:,.2f}** sumada a caja chica.\n"
             f"💰 Saldo actual: **${cc['saldo']:,.2f}**"
         )
-        await context.send_activity(_build_jose_ruta_card(email))
         return
 
 
@@ -3749,6 +3760,69 @@ async def send_jose_route_card_job() -> None:
         logger.info("Card de ruta enviado a José")
     except Exception as e:
         logger.exception("Falló send_jose_route_card_job: %s", e)
+
+
+def _build_jose_asistencia_card(user_email: str | None = None) -> Activity:
+    """Card dedicado de asistencia para José (2026-06-23). Se envía UNA vez al
+    día a las 17:10 (como el check-in de Asistente 1 UIO/GYE), en lugar de tener
+    el botón de asistencia repetido en cada card de ruta."""
+    hoy = activity_state._today()
+    body: list[dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": "🚚 José — registro de asistencia",
+            "size": "ExtraLarge",
+            "weight": "Bolder",
+            "color": "Accent",
+            "wrap": True,
+        },
+        {
+            "type": "TextBlock",
+            "text": "Marcá tu jornada de hoy (una sola vez al día).",
+            "wrap": True,
+            "isSubtle": True,
+            "spacing": "Small",
+        },
+        {"type": "Container", "items": _horario_card_items(hoy)},
+    ]
+    card = {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body,
+        "actions": [{
+            "type": "Action.Submit",
+            "title": "💾 Guardar asistencia",
+            "data": {"intent": "jose_asistencia"},
+        }],
+    }
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card,
+    )
+    return Activity(type=ActivityTypes.message, attachments=[attachment])
+
+
+async def send_jose_asistencia_card_job() -> None:
+    """Job de scheduler: envía a José el card de asistencia (17:10 Lun-Vie,
+    12:30 Sáb — igual que el check-in de sucursales del Asistente 1)."""
+    refs = _load_refs()
+    ref_dict = refs.get("activities", {}).get(JOSE_EMAIL)
+    if not ref_dict:
+        logger.warning("send_jose_asistencia_card_job: no hay ref para %s", JOSE_EMAIL)
+        return
+    try:
+        ref = ConversationReference().deserialize(ref_dict)
+
+        async def cb(turn_context: TurnContext) -> None:
+            await turn_context.send_activity(_build_jose_asistencia_card(JOSE_EMAIL))
+
+        await activities_adapter.continue_conversation(
+            ref, cb, bot_id=ACTIVITIES_APP_ID
+        )
+        logger.info("Card de asistencia enviado a José")
+    except Exception as e:
+        logger.exception("Falló send_jose_asistencia_card_job: %s", e)
 
 
 def _jose_summary_html(fecha: str | None = None) -> str:
@@ -4671,11 +4745,27 @@ def _schedule_jobs() -> None:
         replace_existing=True,
     )
 
-    # Phase U (2026-06-09): José — card on-demand cuando él escribe al bot,
-    # NO en horario fijo.
+    # Phase U (2026-06-09): José — card de RUTA on-demand cuando él escribe al
+    # bot, NO en horario fijo.
     # Phase V (2026-06-10): el resumen del día de José YA NO se envía como
     # correo aparte — está integrado en el consolidated_daily_summary 18:30
     # como bloque "📦 ASISTENTE 2 GYE — José Solórzano".
+    # (2026-06-23): José marca su ASISTENCIA una sola vez al día en un card
+    # dedicado — 17:10 Lun-Vie y 12:30 Sáb, igual que el Asistente 1 UIO/GYE.
+    jh, jm = core_config.CHECKIN_WEEKDAY_SUCURSALES
+    scheduler.add_job(
+        send_jose_asistencia_card_job,
+        CronTrigger(day_of_week="mon-fri", hour=jh, minute=jm, timezone=EC_TZ),
+        id="jose_asistencia_weekday",
+        replace_existing=True,
+    )
+    jbh, jbm = core_config.CHECKIN_SATURDAY_SUCURSALES
+    scheduler.add_job(
+        send_jose_asistencia_card_job,
+        CronTrigger(day_of_week="sat", hour=jbh, minute=jbm, timezone=EC_TZ),
+        id="jose_asistencia_saturday",
+        replace_existing=True,
+    )
 
     # Phase U+ (2026-06-10): morning_sales_report al bot 24/7 (Lun-Sáb 8:00 EC).
     # Reemplaza el timer del azfunc (que se dormía en Consumption Plan).
@@ -5347,6 +5437,42 @@ async def preview_jose_route(request: Request) -> dict[str, Any]:
         await turn_context.send_activity(_build_jose_ruta_card(JOSE_EMAIL))
         await turn_context.send_activity(
             "_(Preview — si apretás botones, las marcas quedan en el state de JOSÉ.)_"
+        )
+
+    await activities_adapter.continue_conversation(
+        ref, cb, bot_id=ACTIVITIES_APP_ID
+    )
+    return {"status": "sent", "to": send_to_email}
+
+
+@app.post("/admin/preview-jose-asistencia")
+async def preview_jose_asistencia(request: Request) -> dict[str, Any]:
+    """Dispara el card de ASISTENCIA de José al ref de `send_to_email`
+    (default: malvarado@) para previsualizarlo. Body: {"send_to_email": "..."}."""
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    send_to_email = (body or {}).get(
+        "send_to_email", "malvarado@biodegradablesecuador.com"
+    ).strip().lower()
+    refs = _load_refs()
+    target_ref = refs.get("activities", {}).get(send_to_email)
+    if not target_ref:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{send_to_email} no tiene ref del Activities Bot",
+        )
+    ref = ConversationReference().deserialize(target_ref)
+
+    async def cb(turn_context: TurnContext) -> None:
+        await turn_context.send_activity(
+            "📋 **PREVIEW** — card de asistencia de José (17:10 Lun-Vie / 12:30 Sáb):"
+        )
+        await turn_context.send_activity(_build_jose_asistencia_card(JOSE_EMAIL))
+        await turn_context.send_activity(
+            "_(Preview — si apretás Guardar, la asistencia queda en el state de JOSÉ.)_"
         )
 
     await activities_adapter.continue_conversation(
