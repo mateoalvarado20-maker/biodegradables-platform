@@ -1,13 +1,19 @@
 """Tests de la métrica de videos TikTok de Mateo en el resumen diario.
 
 Pedido por gerencia (2026-06-19): el bloque de Mateo en el consolidado debe
-mostrar la meta semanal de videos TikTok (5) y cuántos lleva completados.
-El conteo sale de sumar las marcas diarias de la activity `video-tiktok`.
+mostrar la meta semanal de videos TikTok y cuántos lleva completados. El conteo
+sale de sumar las marcas diarias de la actividad de videos TikTok.
+
+2026-06-24: se borró la actividad vieja `video-tiktok` (meta 1) del template;
+la métrica se repuntó a `tiktok-videos-diarios` (meta 6/día → 30/semana).
 """
 from __future__ import annotations
 
 import importlib
 from datetime import date
+
+TT_AID = "tiktok-videos-diarios"
+TT_NOMBRE = "Videos diarios TikTok BIOdegradables"
 
 
 def _reload_ask_agent():
@@ -21,15 +27,24 @@ _DIAS = ["2026-06-15", "2026-06-16", "2026-06-17", "2026-06-18", "2026-06-19"]
 
 
 def _mateo(a):
-    return a.DEFAULT_USER  # Mateo — único user con el template default (video-tiktok)
+    return a.DEFAULT_USER
 
 
-def test_meta_semanal_se_copia_del_template(state_env):
-    """init_week debe copiar meta_semanal del template a la activity de la semana."""
+def _add_tiktok(a, mateo, wk):
+    a.init_week(mateo, wk=wk)
+    a.add_adhoc(TT_AID, TT_NOMBRE, user_email=mateo, tipo="diaria", meta=6, wk=wk)
+
+
+def test_meta_semanal_default_diaria_por_cinco(state_env):
+    """Sin meta_semanal explícita, la meta = meta diaria (6) × 5 días = 30."""
     a = state_env.activity_state
-    week = a.init_week(_mateo(a), wk=a.week_key(_WED))
-    tt = week["activities"]["video-tiktok"]
-    assert tt.get("meta_semanal") == 5
+    ask = _reload_ask_agent()
+    mateo = _mateo(a)
+    wk = a.week_key(_WED)
+    _add_tiktok(a, mateo, wk)
+    html = ask._collaborator_block_html_v2(mateo, target_date=_WED)
+    assert "Meta TikTok:" in html
+    assert "30 videos" in html
 
 
 def test_tiktok_videos_parcial(state_env):
@@ -37,18 +52,14 @@ def test_tiktok_videos_parcial(state_env):
     ask = _reload_ask_agent()
     mateo = _mateo(a)
     wk = a.week_key(_WED)
-    a.init_week(mateo, wk=wk)
-    for f in _DIAS[:3]:  # 3 videos
-        # wk explícito: si no, mark_daily usa la semana de HOY (week_key()) y las
-        # marcas caen en otra semana cuando el test corre fuera de la semana de _WED.
-        a.mark_daily("video-tiktok", 1, user_email=mateo, fecha=f, wk=wk)
+    _add_tiktok(a, mateo, wk)
+    for f in _DIAS[:3]:  # 3 días × 6 = 18 videos
+        a.mark_daily(TT_AID, 6, user_email=mateo, fecha=f, wk=wk)
 
     html = ask._collaborator_block_html_v2(mateo, target_date=_WED)
-    assert "Meta TikTok:" in html
-    assert "5 videos" in html
-    assert "3/5 completados" in html
+    assert "18/30 completados" in html
     # parcial → naranja, sin check verde
-    assert "✅</span>" not in html.split("3/5 completados")[1][:5]
+    assert "✅</span>" not in html.split("18/30 completados")[1][:5]
 
 
 def test_tiktok_videos_completo(state_env):
@@ -56,9 +67,9 @@ def test_tiktok_videos_completo(state_env):
     ask = _reload_ask_agent()
     mateo = _mateo(a)
     wk = a.week_key(_WED)
-    a.init_week(mateo, wk=wk)
-    for f in _DIAS:  # 5 videos = meta cumplida
-        a.mark_daily("video-tiktok", 1, user_email=mateo, fecha=f, wk=wk)
+    _add_tiktok(a, mateo, wk)
+    for f in _DIAS:  # 5 días × 6 = 30 = meta cumplida
+        a.mark_daily(TT_AID, 6, user_email=mateo, fecha=f, wk=wk)
 
     html = ask._collaborator_block_html_v2(mateo, target_date=_WED)
-    assert "5/5 completados ✅" in html
+    assert "30/30 completados ✅" in html

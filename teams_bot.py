@@ -1036,9 +1036,12 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
         })
 
     # Phase R (2026-06-08) — TikTok seguidores semanales (para users con
-    # activity video-tiktok). Pregunta una vez por semana, principalmente lunes.
+    # actividad de videos TikTok). Pregunta una vez por semana, principalmente
+    # lunes. 2026-06-24: actividad vigente "tiktok-videos-diarios" (+compat con
+    # la vieja "video-tiktok").
     has_tiktok = any(
-        aid == "video-tiktok" for aid in wk["activities"].keys()
+        aid in ("tiktok-videos-diarios", "video-tiktok")
+        for aid in wk["activities"].keys()
     )
     if has_tiktok:
         tt = activity_state.get_tiktok_seguidores_semana(user_email)
