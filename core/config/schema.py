@@ -68,6 +68,26 @@ class Branding(_Strict):
     logo_url: str | None = None
 
 
+class Company(_Strict):
+    """Identidad de negocio que aparece en prompts y reportes."""
+
+    sector: str = ""               # "distribución de productos biodegradables"
+    sucursales_desc: str = ""      # "Quito (UIO) y Guayaquil (GYE)"
+    sucursal_names: dict[str, str] = Field(default_factory=dict)  # {"UIO": "Quito"}
+
+
+class Person(_Strict):
+    """Una persona del equipo del tenant (directorio de identidad/roles)."""
+
+    email: str
+    name: str
+    role: str = "colaborador"      # gerente_general|gerente_comercial|analista|asistente|chofer
+    sucursal: str | None = None    # "UIO"|"GYE"|None
+    asistente_num: int | None = None
+    supervisor: bool = False
+    rotativo_sabado: bool = False
+
+
 class TenantConfig(_Strict):
     """Configuración completa de UNA empresa. La forma de `config.yaml`."""
 
@@ -77,6 +97,8 @@ class TenantConfig(_Strict):
     timezone: str = "America/Guayaquil"
     recipients: Recipients = Field(default_factory=Recipients)
     branding: Branding = Field(default_factory=Branding)
+    company: Company = Field(default_factory=Company)
+    people: list[Person] = Field(default_factory=list)
     commercial: Commercial = Field(default_factory=Commercial)
     checkin: Checkin = Field(default_factory=Checkin)
     holidays: dict[int, list[date]] = Field(default_factory=dict)

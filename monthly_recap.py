@@ -25,6 +25,7 @@ from typing import Any
 
 import activity_state
 import contifico_client
+import core_config
 import forecasting
 import graph_mail
 import news_brief
@@ -36,14 +37,12 @@ LOCAL_TZ = timezone(timedelta(hours=-5))
 RECAP_TO = [
     e.strip() for e in os.environ.get(
         "MONTHLY_RECAP_TO",
-        "dsanchez@biodegradablesecuador.com,gsanchez@biodegradablesecuador.com",
+        ",".join(core_config.JEFE),
     ).split(",")
     if e.strip()
 ]
 
-RECAP_FROM = os.environ.get(
-    "TRACKER_TARGET_USER", "malvarado@biodegradablesecuador.com"
-).strip()
+RECAP_FROM = os.environ.get("TRACKER_TARGET_USER", core_config.MIO).strip()
 
 MESES_ES = [
     "enero", "febrero", "marzo", "abril", "mayo", "junio",
@@ -125,7 +124,7 @@ def _build_sales_recap_html(year: int, month: int) -> str:
         for key, label in [
             ("economia_ecuador", "🇪🇨 Economía Ecuador"),
             ("geopolitica_supply", "🌎 Geopolítica / supply"),
-            ("sector_empaques_biodegradables", "📦 Sector empaques"),
+            ("sector_industria", f"📦 Sector {core_config.COMPANY_SECTOR}"),
         ]:
             points = brief.get(key) or []
             if points:

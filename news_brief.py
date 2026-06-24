@@ -27,6 +27,8 @@ from typing import Any
 
 from anthropic import Anthropic
 
+import core_config
+
 LOCAL_TZ = timezone(timedelta(hours=-5))
 STATE_PATH = Path(os.environ.get("STATE_DIR") or str(Path.home() / ".claude-agent")) / "daily_news_brief.json"
 MODEL = "claude-sonnet-4-6"
@@ -68,10 +70,8 @@ def is_brief_fresh(max_age_hours: int = 30) -> bool:
 
 PROMPT_TEMPLATE = """Sos un analista económico. Hoy es {hoy}.
 
-Hacé una investigación con web_search de las noticias relevantes para una
-empresa distribuidora de empaques biodegradables en Ecuador (sucursales en
-Quito y Guayaquil). Investigá EXCLUSIVAMENTE noticias publicadas en los
-últimos 7 días.
+Hacé una investigación con web_search de las noticias relevantes para {empresa_desc}.
+Investigá EXCLUSIVAMENTE noticias publicadas en los últimos 7 días.
 
 Cubrí estas 3 áreas:
 
@@ -85,9 +85,9 @@ Cubrí estas 3 áreas:
    tarifas o sanciones internacionales, costos de flete contenedor, conflictos
    en zonas productoras).
 
-3. **Sector empaques biodegradables**: regulaciones ambientales en Ec o
-   LATAM, prohibiciones de plástico (existentes o por venir), anuncios de
-   competidores grandes en la región, tendencias del mercado / consumidor.
+3. **Sector {sector_nombre}**: regulaciones aplicables en Ec o LATAM,
+   tendencias del mercado / consumidor, anuncios de competidores grandes en la
+   región que afecten al sector.
 
 Para cada área devolveme 3-5 puntos concisos (cada uno 1-2 líneas) con la
 fuente y la fecha entre paréntesis. Si en alguna área no encontrás nada
@@ -102,7 +102,7 @@ empezando directo con {{. Estructura:
 {{
   "economia_ecuador": ["punto 1 con fuente y fecha", "punto 2 ..."],
   "geopolitica_supply": ["..."],
-  "sector_empaques_biodegradables": ["..."]
+  "sector_industria": ["..."]
 }}"""
 
 
@@ -113,8 +113,14 @@ def generate_brief() -> dict[str, Any]:
     Raises si la API call falla.
     """
     client = Anthropic()
+    _cities = " y ".join(core_config.SUCURSAL_NAMES.values()) or "Ecuador"
     prompt = PROMPT_TEMPLATE.format(
-        hoy=_now().strftime("%A %d de %B de %Y")
+        hoy=_now().strftime("%A %d de %B de %Y"),
+        empresa_desc=(
+            f"una empresa de {core_config.COMPANY_SECTOR} en Ecuador "
+            f"(sucursales en {_cities})"
+        ),
+        sector_nombre=core_config.COMPANY_SECTOR,
     )
 
     response = client.messages.create(
@@ -172,7 +178,7 @@ def format_brief_for_prompt() -> str:
     sec_def = [
         ("economia_ecuador", "🇪🇨 Economía Ecuador"),
         ("geopolitica_supply", "🌎 Geopolítica / supply chains"),
-        ("sector_empaques_biodegradables", "📦 Sector empaques biodegradables"),
+        ("sector_industria", f"📦 Sector {core_config.COMPANY_SECTOR}"),
     ]
     for key, label in sec_def:
         points = brief.get(key) or []

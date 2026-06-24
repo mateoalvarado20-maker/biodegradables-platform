@@ -86,20 +86,21 @@ def _parse_date(s: str | None, default: date | None = None) -> date:
 
 # ============ Tracker helpers (Phase C) ============
 TRACKER_EMAIL_FROM = os.environ.get(
-    "TRACKER_TARGET_USER", "malvarado@biodegradablesecuador.com"
+    "TRACKER_TARGET_USER", core_config.MIO
 ).strip()
-TRACKER_EMAIL_TO_DEFAULT = (
-    "dsanchez@biodegradablesecuador.com,gsanchez@biodegradablesecuador.com"
-)
+TRACKER_EMAIL_TO_DEFAULT = ",".join(core_config.JEFE)
 
 # Directorio de colaboradores: alias → email. Lo lee el Data Bot para que la
 # gerencia diga "Mateo" en vez de "malvarado@..." cuando asigna tareas.
 # Editable via env var KNOWN_COLLABORATORS="alias1:email1,alias2:email2".
 def _load_collaborators() -> dict[str, str]:
-    raw = os.environ.get(
-        "KNOWN_COLLABORATORS",
-        "mateo:malvarado@biodegradablesecuador.com",
+    # Default = directorio del tenant (primer-nombre:email por cada persona).
+    # Overridable por env KNOWN_COLLABORATORS="alias1:email1,alias2:email2".
+    _default = ",".join(
+        f"{p['name'].split()[0].lower()}:{e}"
+        for e, p in core_config.PEOPLE.items() if p.get("name")
     )
+    raw = os.environ.get("KNOWN_COLLABORATORS", _default)
     out: dict[str, str] = {}
     for entry in raw.split(","):
         entry = entry.strip()
@@ -901,10 +902,8 @@ def _send_daily_summary_email(user_email: str | None = None) -> dict:
 
 
 # ============ Cierre de caja (Phase N, 2026-06-02) ============
-CIERRE_CAJA_TO_DEFAULT = (
-    "dsanchez@biodegradablesecuador.com,gsanchez@biodegradablesecuador.com"
-)
-CIERRE_CAJA_CC_DEFAULT = "malvarado@biodegradablesecuador.com"
+CIERRE_CAJA_TO_DEFAULT = ",".join(core_config.JEFE)
+CIERRE_CAJA_CC_DEFAULT = core_config.MIO
 
 
 def _cierre_caja_html(
@@ -1048,19 +1047,19 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
     alias = user_email.split("@")[0] if "@" in user_email else user_email
     es_sabado_recap = target_date is not None and hoy.weekday() == 5
 
-    # Determinar role + título del bloque
+    # Determinar role + título del bloque (desde core_config.PEOPLE, sin hardcode)
     es_asistente = user_email.lower() in ASISTENTE_EMAILS
-    if user_email.lower() == "info@biodegradablesecuador.com":
-        titulo_bloque = "📦 ASISTENTE 1 — GUAYAQUIL"
-        sucursal = "Guayaquil"
-    elif user_email.lower() == "quito@biodegradablesecuador.com":
-        titulo_bloque = "📦 ASISTENTE 1 — QUITO"
-        sucursal = "Quito"
-    elif user_email.lower() == "gsanchez@biodegradablesecuador.com":
-        titulo_bloque = "👩 GABRIELA SÁNCHEZ"
-        sucursal = ""
-    elif user_email.lower() == "malvarado@biodegradablesecuador.com":
-        titulo_bloque = "👨 MATEO ALVARADO"
+    _suc_name = core_config.sucursal_name_for(user_email)
+    _person_name = core_config.display_name_for(user_email)
+    if es_asistente:
+        _num = core_config.PEOPLE.get(user_email.lower(), {}).get("asistente_num")
+        _label = f"ASISTENTE {_num}" if _num else "ASISTENTE"
+        titulo_bloque = (
+            f"📦 {_label} — {_suc_name.upper()}" if _suc_name else f"📦 {_label}"
+        )
+        sucursal = _suc_name
+    elif _person_name:
+        titulo_bloque = f"👤 {_person_name.upper()}"
         sucursal = ""
     else:
         titulo_bloque = f"👤 {alias.upper()}"
@@ -1405,36 +1404,36 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
 # solo se usa _collaborator_block_html_v2 (auditoría C8).
 
 # ============ Consolidated daily summary (Phase O, 2026-06-02) ============
-CONSOLIDATED_DAILY_TO_DEFAULT = (
-    "dsanchez@biodegradablesecuador.com,gsanchez@biodegradablesecuador.com"
-)
-CONSOLIDATED_DAILY_CC_DEFAULT = "malvarado@biodegradablesecuador.com"
-SUPERVISORS_ONLY_EMAILS: set[str] = {
-    "dsanchez@biodegradablesecuador.com",  # debe matchear teams_bot.SUPERVISORS_ONLY
-}
+CONSOLIDATED_DAILY_TO_DEFAULT = ",".join(core_config.JEFE)
+CONSOLIDATED_DAILY_CC_DEFAULT = core_config.MIO
+# Identidad/roles ahora salen de core_config (single source, tenant-overridable).
+# Antes estaban hardcodeados aquí; los valores legacy de Biodegradables son
+# idénticos (lo fija test_tenant_config_biodegradables).
+SUPERVISORS_ONLY_EMAILS = core_config.SUPERVISORS_ONLY_EMAILS  # = teams_bot.SUPERVISORS_ONLY
+ASISTENTE_EMAILS = core_config.ASISTENTE_EMAILS
 
-
-ASISTENTE_EMAILS = {
-    "info@biodegradablesecuador.com",   # Guayaquil
-    "quito@biodegradablesecuador.com",  # Quito
-}
-
-# Phase V (2026-06-10): José Solórzano (Asistente 2 GYE — chofer/repartidor)
-# tiene un bloque dedicado dentro del consolidado, con su data de logística
-# (entregas, salidas, caja chica). NO está en ASISTENTE_EMAILS porque su
-# state es diferente (no usa cierre de caja con denominaciones, etc.).
-JOSE_EMAIL_CONS = "jsolorzano@biodegradablesecuador.com"
+# Chofer/repartidor (José en Biodegradables): bloque dedicado en el consolidado
+# con su data de logística (entregas, salidas, caja chica). NO está en
+# ASISTENTE_EMAILS porque su state es diferente (sin cierre de caja con
+# denominaciones, etc.).
+JOSE_EMAIL_CONS = next(iter(core_config.CHOFER_EMAILS), "")
 CAJA_CHICA_ALERTA_JOSE = 30.0
 
-# ===== Rotación de asistentes GYE los sábados (2026-06-15) =====
-# En Guayaquil hay 2 asistentes que se turnan los sábados:
-#   - Asistente 1 GYE: info@  (caja/sucursal)
-#   - Asistente 2 GYE: José Solórzano (jsolorzano@, logística/ruta)
-# Un sábado trabaja uno, el siguiente el otro. Si un asistente NO llena el
-# reporte del sábado, se asume AUSENCIA ESPERADA por el turno rotativo — no
-# es error ni reporte pendiente. Solo aplica al recap del sábado (lunes 8 AM).
-GYE_ASISTENTE1_EMAIL = "info@biodegradablesecuador.com"
-GYE_ROTATIVOS_SABADO = {GYE_ASISTENTE1_EMAIL, JOSE_EMAIL_CONS}
+# ===== Rotación de asistentes los sábados (2026-06-15) =====
+# En la sucursal del chofer hay 2 asistentes que se turnan los sábados
+# (Asistente 1 = caja/sucursal, Asistente 2 = chofer/logística). Si el rotativo
+# no llena el reporte del sábado, se asume AUSENCIA ESPERADA por turno — no es
+# error ni pendiente. Solo aplica al recap del sábado (lunes 8 AM). Derivado de
+# core_config: asistente 1 de la sucursal del chofer + el set de rotativos.
+_CHOFER_SUCURSAL = core_config.sucursal_for(JOSE_EMAIL_CONS)
+GYE_ASISTENTE1_EMAIL = next(
+    (e for e, p in core_config.PEOPLE.items()
+     if p.get("role") == "asistente"
+     and p.get("sucursal") == _CHOFER_SUCURSAL
+     and p.get("asistente_num") == 1),
+    "",
+)
+GYE_ROTATIVOS_SABADO = set(core_config.ROTATIVOS_SABADO_EMAILS)
 
 
 def _gye_sin_reporte_dia(email: str, fecha_iso: str) -> bool:
@@ -1897,7 +1896,7 @@ def _problemas_section(collaborator_data: list[dict]) -> str:
 def _asistente_column_html(user_email: str, today_iso: str) -> str:
     """Bloque para una sucursal (info@ o quito@) — cobranzas + cierre + chocolates."""
     week = activity_state.get_week(user_email)
-    sucursal = "Guayaquil" if user_email == "info@biodegradablesecuador.com" else "Quito"
+    sucursal = core_config.sucursal_name_for(user_email) or "Quito"
     icon = "📍"
 
     # Cobranzas: ids que empiezan con "cobranza-"
@@ -2007,9 +2006,14 @@ def _asistentes_section_html(today_iso: str) -> str:
     if not asistentes_con_data:
         return ""
 
-    # Si solo hay uno, mostrar de ancho completo; si dos, en columnas
-    info_email = "info@biodegradablesecuador.com"
-    quito_email = "quito@biodegradablesecuador.com"
+    # Si solo hay uno, mostrar de ancho completo; si dos, en columnas.
+    # Asistente de cada sucursal (GYE/UIO) desde core_config — sin hardcode de email.
+    info_email = next(
+        (e for e in ASISTENTE_EMAILS if core_config.sucursal_for(e) == "GYE"), ""
+    )
+    quito_email = next(
+        (e for e in ASISTENTE_EMAILS if core_config.sucursal_for(e) == "UIO"), ""
+    )
     info_html = (
         _asistente_column_html(info_email, today_iso)
         if info_email in asistentes_con_data
@@ -2149,18 +2153,14 @@ def _consolidated_daily_summary_html(
         #   3. GYE: Asistente 1 (info@)
         #   4. GYE: Asistente 2 (José — bloque dedicado entre info@ y quito@)
         #   5. UIO: Asistente 1 (quito@)
+        _ROLE_RANK = {"gerente_comercial": 0, "analista": 1, "asistente": 2}
+
         def _orden(d: dict) -> int:
             email = d["email"].lower()
-            if email == "gsanchez@biodegradablesecuador.com":
-                return 0
-            if email == "malvarado@biodegradablesecuador.com":
-                return 1
-            if email == "info@biodegradablesecuador.com":
-                return 2
-            # 3 → josé (intercalado abajo)
-            if email == "quito@biodegradablesecuador.com":
-                return 4
-            return 99
+            base = _ROLE_RANK.get(core_config.role_for(email), 99)
+            if base == 2:  # asistentes: GYE (2) antes que UIO (4); José va entre medio
+                return 2 if core_config.sucursal_for(email) == "GYE" else 4
+            return base
 
         sorted_data = sorted(collaborator_data, key=_orden)
 
@@ -2180,8 +2180,8 @@ def _consolidated_daily_summary_html(
         for d in sorted_data:
             email_l = d["email"].lower()
             bloques_list.append(_collaborator_block_html_v2(d["email"], target_date=target_date))
-            # Después de info@ (GYE Asistente 1), insertar bloque de José
-            if email_l == "info@biodegradablesecuador.com" and not jose_insertado:
+            # Después del Asistente 1 de la sucursal del chofer, insertar su bloque
+            if email_l == GYE_ASISTENTE1_EMAIL and not jose_insertado:
                 try:
                     jose_block = _jose_consolidated_block_html(today_iso)
                     bloques_list.append(jose_block)
@@ -2538,13 +2538,13 @@ Confirmación registrada el {datetime.now(LOCAL_TZ).strftime("%d/%m/%Y %H:%M")}
 </div>
 </body></html>"""
 
-    # Destinatarios: Daniel + Gabriela S. + emisor + CC Mateo
-    to_default = "dsanchez@biodegradablesecuador.com,gsanchez@biodegradablesecuador.com"
+    # Destinatarios: gerencia (JEFE) + emisor + CC analista (MIO)
+    to_default = ",".join(core_config.JEFE)
     to_str = os.environ.get("CONFIRMACION_CIERRE_TO", to_default)
     to_list = [e.strip() for e in to_str.split(",") if e.strip()]
     if emisor_email not in to_list:
         to_list.append(emisor_email)
-    cc_list = ["malvarado@biodegradablesecuador.com"]
+    cc_list = [core_config.MIO]
 
     subject = f"{emoji} {titulo}"
     graph_mail.send(
@@ -3293,6 +3293,12 @@ def _system_prompt_activities(user_email: str | None = None) -> str:
     target_humano = _humano(target_email)
     es_supervisor = target_email in SUPERVISORS_ONLY_EMAILS
     es_no_identificado = target_email.startswith("unidentified-")
+    # Contacto admin (quien vincula usuarios) = el analista del tenant.
+    _admin_name, _admin_email = next(
+        ((p["name"], e) for e, p in core_config.PEOPLE.items()
+         if p.get("role") == "analista"),
+        ("el administrador del sistema", ""),
+    )
 
     # Cuenta sin vincular: el AAD del usuario no está registrado, así que el bot
     # no sabe quién es ni qué permisos tiene (un supervisor como Daniel aparece
@@ -3300,14 +3306,14 @@ def _system_prompt_activities(user_email: str | None = None) -> str:
     # mensaje claro y accionable en vez de improvisar o "perder" la petición.
     no_id_block = ""
     if es_no_identificado:
-        no_id_block = """
+        no_id_block = f"""
 
 ⚠️ CUENTA NO VINCULADA:
 El AAD de este usuario no está registrado, así que NO sé con certeza quién es
 ni qué puede hacer. NO asumas que es un colaborador ni un supervisor.
 Si pide asignar/delegar algo a otra persona, o marcar actividades, respondé:
 "Tu cuenta todavía no está vinculada al sistema, por eso no puedo registrar ni
-delegar nada de forma segura. Escribile a Mateo (malvarado@biodegradablesecuador.com)
+delegar nada de forma segura. Escribile a {_admin_name} ({_admin_email})
 para que vincule tu usuario — tu AAD id aparece en los logs del bot." NO inventes
 ni crees actividades a ciegas.
 """
@@ -3339,7 +3345,7 @@ NO uses `add_activity_to_week` ni `mark_daily_activity` con el email de
 {target_humano} — él NO tiene actividades propias.
 """
 
-    return f"""Eres el asistente de tracking de actividades de Biodegradables Ecuador.
+    return f"""Eres el asistente de tracking de actividades de {core_config.COMPANY_NAME}.
 
 Estás hablando con: {target_humano}
 Hoy es {now_ec.strftime("%A %d de %B de %Y, %H:%M")} (Ecuador, UTC-5).
@@ -3392,7 +3398,18 @@ REGLAS GENERALES:
 
 def _system_prompt_data() -> str:
     now_ec = datetime.now(LOCAL_TZ)
-    base_prompt = f"""Eres el asistente de datos comerciales de Biodegradables Ecuador.
+    # Supervisores (gerencia) y un colaborador de ejemplo, desde core_config —
+    # así los ejemplos del prompt quedan correctos para cualquier tenant.
+    _supervisores = " y ".join(
+        p["name"] for p in core_config.PEOPLE.values()
+        if p.get("supervisor") or p.get("role") == "gerente_comercial"
+    ) or "la gerencia"
+    _ej_colab = next(
+        (p["name"].split()[0] for p in core_config.PEOPLE.values()
+         if p.get("role") == "analista"),
+        "un colaborador",
+    )
+    base_prompt = f"""Eres el asistente de datos comerciales de {core_config.COMPANY_NAME}.
 
 Respondes preguntas sobre la operación comercial usando 2 fuentes:
 - **Contifico** (ERP, source of truth en tiempo real para ventas, clientes, vendedores)
@@ -3403,8 +3420,8 @@ una respuesta clara y breve en español.
 
 CONTEXTO:
 - Hoy es {now_ec.strftime("%A %d de %B de %Y, %H:%M")} (Ecuador, UTC-5)
-- Empresa: Biodegradables Ecuador — distribución de productos biodegradables
-- 2 sucursales: Quito (UIO) y Guayaquil (GYE)
+- Empresa: {core_config.COMPANY_NAME} — {core_config.COMPANY_SECTOR}
+- Sucursales: {core_config.COMPANY_SUCURSALES_DESC}
 - Datos de Contifico son **en vivo** (no cache de 4 refrescos/día como PBI)
 
 CÓMO USAR LAS HERRAMIENTAS:
@@ -3440,7 +3457,7 @@ REGLAS al proyectar:
 - NUNCA inventes números fuera del rango del baseline sin justificación clara
 - Si NO tenés data histórica suficiente, decile al user honestamente
 - Si el factor externo no afecta el mix del negocio (ej. "guerra Yemen" pero
-  Biodegradables no importa de Yemen), explicalo y no infles ajustes
+  {core_config.COMPANY_NAME} no importa de Yemen), explicalo y no infles ajustes
 - Para factores muy especulativos ("y si baja el precio del litio"), aclarar
   que es razonamiento sin data específica
 
@@ -3450,26 +3467,26 @@ Ejemplos:
 - "qué % de mi mix es PLA" → analyze_product_mix(['PLA','pla','poliláctico'])
 
 GESTIÓN DE EQUIPO (Phase E — solo gerencia):
-Como Daniel y Gabriela son supervisores, pueden asignar tareas y recordatorios
+Como {_supervisores} son supervisores, pueden asignar tareas y recordatorios
 a otros colaboradores. Patrones típicos:
 
-- "Añade a Mateo a esta semana hacer un bot de WhatsApp"
-  → llamá `list_team_collaborators` (para resolver "Mateo" → email)
+- "Añade a {_ej_colab} a esta semana hacer un bot de WhatsApp"
+  → llamá `list_team_collaborators` (para resolver "{_ej_colab}" → email)
   → llamá `add_activity_for_collaborator` con target_user, activity_id (slug
      que vos generás), nombre legible, tipo='unica' o 'semanal'
-  → confirmá: "Listo, le agregué a Mateo: 'Bot WhatsApp...'. Le aparecerá
+  → confirmá: "Listo, le agregué a {_ej_colab}: 'Bot WhatsApp...'. Le aparecerá
      en su próximo check-in (lun 4:30 PM)."
 
-- "Recordale a Mateo un día antes que el 15 entrega el reporte mensual"
-  → resolvé Mateo → email
+- "Recordale a {_ej_colab} un día antes que el 15 entrega el reporte mensual"
+  → resolvé {_ej_colab} → email
   → calculá la fecha: si entrega el 15, el recordatorio va el 14 a una hora
      razonable (default 8 AM Ecuador)
   → llamá `schedule_reminder_for_collaborator` con send_at en ISO
   → confirmá: "Listo, le programé recordatorio para el 14 a las 8 AM:
      'Mañana entregás el reporte mensual de ventas'"
 
-- "Qué recordatorios le mandé a Mateo?"
-  → llamá `list_pending_reminders` con filtro target_user='Mateo'
+- "Qué recordatorios le mandé a {_ej_colab}?"
+  → llamá `list_pending_reminders` con filtro target_user='{_ej_colab}'
   → mostrá fecha + mensaje
 
 REGLAS gestión:
@@ -3557,14 +3574,9 @@ SCHEDULING_TOOLS = {
 
 # Phase V (2026-06-11): mapa email → nombre humano. Evita que Claude se
 # invente nombres cuando solo recibe el email crudo en el system prompt.
-EMAIL_TO_NAME = {
-    "dsanchez@biodegradablesecuador.com": "Daniel Sánchez",
-    "gsanchez@biodegradablesecuador.com": "Gabriela Sánchez",
-    "malvarado@biodegradablesecuador.com": "Mateo Alvarado",
-    "info@biodegradablesecuador.com": "Gabriela Bravo (Asistente 1 GYE)",
-    "quito@biodegradablesecuador.com": "Gladys López (Asistente 1 UIO)",
-    "jsolorzano@biodegradablesecuador.com": "José Solórzano (Asistente 2 GYE)",
-}
+# Fase 1 (de-hardcode): ahora se deriva de core_config.PEOPLE (single source,
+# tenant-overridable). Los valores legacy de Biodegradables son idénticos.
+EMAIL_TO_NAME = core_config.EMAIL_TO_NAME
 
 
 def _humano(email: str | None) -> str:
