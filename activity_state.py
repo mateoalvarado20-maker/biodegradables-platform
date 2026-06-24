@@ -1634,6 +1634,50 @@ def get_ruta_dia(
 
 
 @_locked
+def set_ruta_card_id(
+    user_email: str | None, fecha: str, activity_id: str
+) -> None:
+    """Guarda el activity_id del card de ruta del día (2026-06-23). Permite
+    editar EN SU LUGAR el mismo card durante el día (un card por día) en vez de
+    publicar uno nuevo en cada acción."""
+    email = _normalize_email(user_email)
+    state = load()
+    user = _get_user_state(state, email)
+    if "rutas" not in user:
+        user["rutas"] = {}
+    if fecha not in user["rutas"]:
+        user["rutas"][fecha] = {"salidas": [], "envios_snapshot": {}}
+    user["rutas"][fecha]["card_activity_id"] = activity_id
+    save(state)
+
+
+def get_ruta_card_id(user_email: str | None, fecha: str) -> str | None:
+    """Devuelve el activity_id del card de ruta del día, o None."""
+    email = _normalize_email(user_email)
+    state = load()
+    rec = state.get("users", {}).get(email, {}).get("rutas", {}).get(fecha)
+    if not rec:
+        return None
+    return rec.get("card_activity_id")
+
+
+def prev_ruta_date_with_card(
+    user_email: str | None, fecha: str
+) -> str | None:
+    """Devuelve la fecha (ISO) más reciente ANTERIOR a `fecha` que tenga un card
+    de ruta con activity_id guardado. Para 'cerrar/contraer' el card del día
+    anterior cuando arranca uno nuevo."""
+    email = _normalize_email(user_email)
+    state = load()
+    rutas = state.get("users", {}).get(email, {}).get("rutas", {})
+    candidatas = [
+        f for f, rec in rutas.items()
+        if f < fecha and isinstance(rec, dict) and rec.get("card_activity_id")
+    ]
+    return max(candidatas) if candidatas else None
+
+
+@_locked
 def set_envios_snapshot(
     user_email: str | None,
     envios: dict[str, dict[str, Any]],

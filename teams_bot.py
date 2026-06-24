@@ -1902,10 +1902,12 @@ async def _on_turn_activities(context: TurnContext) -> None:
     # dispara el card de ruta actualizado con la última lista de Contifico.
     # No le mandamos check-in normal de actividades.
     if email == JOSE_EMAIL:
-        await context.send_activity(
-            "🚚 Acá tenés tu ruta actualizada al momento:"
-        )
-        await context.send_activity(_build_jose_ruta_card(JOSE_EMAIL))
+        # Un solo card de ruta por día, actualizado en su lugar (2026-06-23).
+        created = await _upsert_jose_card(context, JOSE_EMAIL, skip_refresh=False)
+        if not created:
+            await context.send_activity(
+                "🔄 Listo, actualicé tu card de ruta de hoy ☝️"
+            )
         return
 
     # Fase 2 (auditoría H17): los supervisores no trackean actividades
@@ -3468,6 +3470,78 @@ def _build_jose_ruta_card(
     )
 
 
+def _build_jose_ruta_card_closed(user_email: str | None, fecha_str: str) -> Activity:
+    """Card CONTRAÍDO y de solo lectura del día anterior (2026-06-23). Sin
+    botones ni inputs: resume la jornada cerrada para que no se modifique y no
+    se confunda con la del día en curso."""
+    email = (user_email or JOSE_EMAIL).lower()
+    try:
+        consol = activity_state.get_entregas_consolidadas_dia(email, fecha_str) or {}
+    except Exception:
+        consol = {}
+    try:
+        fecha_lbl = date.fromisoformat(fecha_str).strftime("%A %d/%m/%Y")
+    except Exception:
+        fecha_lbl = fecha_str
+    n_ok = sum(1 for e in consol.values() if e.get("status") == "entregado")
+    n_no = sum(1 for e in consol.values() if e.get("status") == "no_entregado")
+    n_pend = sum(1 for e in consol.values() if e.get("status") == "pendiente")
+
+    lineas: list[dict[str, Any]] = []
+    for _fid, e in sorted(consol.items(), key=lambda kv: kv[1].get("cliente", "")):
+        st = e.get("status", "pendiente")
+        ic = {"entregado": "✅", "no_entregado": "❌"}.get(st, "⏳")
+        extra = ""
+        if st == "no_entregado" and e.get("razon_no_entrega"):
+            extra = f" — {e['razon_no_entrega']}"
+        lineas.append({
+            "type": "TextBlock",
+            "text": f"{ic} {e.get('cliente', '?')}{extra}",
+            "wrap": True,
+            "size": "Small",
+            "spacing": "None",
+            "isSubtle": True,
+        })
+
+    body: list[dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": f"🗓️ Ruta del {fecha_lbl} — CERRADA",
+            "size": "Large",
+            "weight": "Bolder",
+            "wrap": True,
+            "color": "Default",
+        },
+        {
+            "type": "TextBlock",
+            "text": (
+                f"✅ {n_ok} entregadas · ❌ {n_no} no entregadas · ⏳ {n_pend} quedaron pendientes\n"
+                "_(Cerrado — los pendientes pasaron al card de hoy.)_"
+            ),
+            "wrap": True,
+            "isSubtle": True,
+            "spacing": "Small",
+        },
+    ]
+    if lineas:
+        body.append({"type": "Container", "items": lineas, "spacing": "Small"})
+
+    card = {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body,
+        # sin actions → no se puede modificar
+    }
+    return Activity(
+        type=ActivityTypes.message,
+        attachments=[Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=card,
+        )],
+    )
+
+
 def _jose_pendientes_suffix(email: str, hoy_str: str) -> str:
     """Texto corto con cuántos envíos quedan pendientes — para las
     confirmaciones cortas (Opción A 2026-06-23: no re-publicar el card entero
@@ -3477,9 +3551,76 @@ def _jose_pendientes_suffix(email: str, hoy_str: str) -> str:
         pend = sum(1 for e in consol.values() if e.get("status") == "pendiente")
         if pend == 0:
             return "\n🎉 ¡No te quedan envíos pendientes!"
-        return f"\n⏳ Te quedan **{pend}** pendiente(s). Tocá 🔄 ACTUALIZAR LISTA para verlos."
+        return f"\n⏳ Te quedan **{pend}** pendiente(s) (ya actualicé tu card de hoy ☝️)."
     except Exception:
         return ""
+
+
+async def _cerrar_card_dia_anterior(
+    turn_context: TurnContext, email: str, hoy_str: str
+) -> None:
+    """Best-effort: contrae (deja solo lectura) el card de ruta del día anterior
+    cuando arranca el de hoy. Si Teams no deja editarlo (muy viejo / id perdido),
+    queda como estaba — igual ya no se modifica porque el id de hoy es otro."""
+    try:
+        prev = activity_state.prev_ruta_date_with_card(email, hoy_str)
+        if not prev:
+            return
+        prev_id = activity_state.get_ruta_card_id(email, prev)
+        if not prev_id:
+            return
+        closed = _build_jose_ruta_card_closed(email, prev)
+        closed.id = prev_id
+        await turn_context.update_activity(closed)
+        logger.info("Card de ruta de José del %s contraído (cerrado)", prev)
+    except Exception as e:
+        logger.info("no pude contraer el card del día anterior de José: %s", e)
+
+
+async def _upsert_jose_card(
+    turn_context: TurnContext,
+    email: str,
+    *,
+    skip_refresh: bool = False,
+    create_if_absent: bool = True,
+) -> bool:
+    """Mantiene UN card de ruta por día para José, editándolo EN SU LUGAR
+    (update_activity) en vez de publicar uno nuevo en cada acción (2026-06-23).
+
+    - Si ya hay card de hoy → lo actualiza en su lugar.
+    - Si no hay y create_if_absent → cierra el del día anterior y crea el de hoy.
+    - Fallback robusto: si el update falla, crea uno nuevo (comportamiento viejo).
+
+    Devuelve True si creó un card NUEVO (para que el caller ajuste el texto)."""
+    hoy_str = activity_state._today().isoformat()
+    card = _build_jose_ruta_card(email, skip_refresh=skip_refresh)
+    existing_id = activity_state.get_ruta_card_id(email, hoy_str)
+
+    if existing_id:
+        card.id = existing_id
+        try:
+            await turn_context.update_activity(card)
+            return False
+        except Exception as e:
+            logger.info("update card de ruta de José falló (%s); creo uno nuevo", e)
+            if not create_if_absent:
+                return False
+    elif not create_if_absent:
+        # No hay card de hoy y no toca crearlo acá (la confirmación de texto ya
+        # informó). El próximo mensaje / Actualizar lo creará.
+        return False
+
+    # Crear card nuevo del día
+    await _cerrar_card_dia_anterior(turn_context, email, hoy_str)
+    try:
+        resp = await turn_context.send_activity(card)
+        new_id = getattr(resp, "id", None) if resp is not None else None
+        if new_id:
+            activity_state.set_ruta_card_id(email, hoy_str, new_id)
+        return True
+    except Exception as e:
+        logger.exception("no pude enviar el card de ruta de José: %s", e)
+        return False
 
 
 async def _handle_jose_intent(
@@ -3512,7 +3653,7 @@ async def _handle_jose_intent(
                 f"🟢 **¡Ruta iniciada!** Buen viaje, José. Marcá cada cliente "
                 f"cuando entregues. Cuando vuelvas a la oficina apretá 🏁."
             )
-        await context.send_activity(_build_jose_ruta_card(email))
+        await _upsert_jose_card(context, email, skip_refresh=True)
         return
 
     if intent == "jose_add_destino":
@@ -3548,8 +3689,8 @@ async def _handle_jose_intent(
         msg = f"✅ Agregado a tu lista: **{cliente}** ({tipo_label}) — {direccion}"
         if observacion:
             msg += f"\n📝 {observacion}"
-        msg += "\n_(Tocá 🔄 ACTUALIZAR LISTA en tu card para verlo.)_"
         await context.send_activity(msg)
+        await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
         return
 
     if intent == "jose_actualizar":
@@ -3565,7 +3706,7 @@ async def _handle_jose_intent(
             )
         except Exception as e:
             await context.send_activity(f"⚠️ No pude actualizar Contifico: {e}")
-        await context.send_activity(_build_jose_ruta_card(email, skip_refresh=True))
+        await _upsert_jose_card(context, email, skip_refresh=True)
         return
 
     if intent == "jose_marcar_entrega":
@@ -3600,6 +3741,7 @@ async def _handle_jose_intent(
             msg += f"\n💰 Pago de ${pago_envio:,.2f} descontado de caja chica (saldo: ${cc_now['saldo']:,.2f})"
         msg += _jose_pendientes_suffix(email, hoy_str)
         await context.send_activity(msg)
+        await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
         return
 
     if intent == "jose_marcar_no_entregado":
@@ -3626,6 +3768,7 @@ async def _handle_jose_intent(
             f"❌ **{cliente_label}** marcado como no entregado: {razon}"
             + _jose_pendientes_suffix(email, hoy_str)
         )
+        await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
         return
 
     if intent == "jose_reintentar_envio":
@@ -3642,6 +3785,7 @@ async def _handle_jose_intent(
             f"🔄 Envío {factura_id} vuelto a pendiente."
             + _jose_pendientes_suffix(email, hoy_str)
         )
+        await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
         return
 
     if intent == "jose_end_ruta":
@@ -3672,7 +3816,7 @@ async def _handle_jose_intent(
             msg += f"⚠️ Pendientes: **{no_entr_count}**\n"
         msg += "\n_(Tu día se incluye en el resumen del equipo que sale a las 6:30 PM)_"
         await context.send_activity(msg)
-        await context.send_activity(_build_jose_ruta_card(email))
+        await _upsert_jose_card(context, email, skip_refresh=True)
         return
 
     if intent == "jose_caja_inicial":
@@ -3694,6 +3838,7 @@ async def _handle_jose_intent(
                 f"⚠️ Ya tenías saldo inicial guardado (${res.get('inicial', 0):,.2f}). "
                 f"Si querés corregirlo, pedile a Mateo que lo resetee."
             )
+        await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
         return
 
     if intent == "jose_caja_gasto":
@@ -3716,6 +3861,7 @@ async def _handle_jose_intent(
             f"➖ Gasto registrado: **${monto:,.2f}** ({desc}).\n"
             f"💰 Saldo actual: **${cc['saldo']:,.2f}**"
         )
+        await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
         return
 
     if intent == "jose_caja_reposicion":
@@ -3734,6 +3880,7 @@ async def _handle_jose_intent(
             f"➕ Reposición de **${monto:,.2f}** sumada a caja chica.\n"
             f"💰 Saldo actual: **${cc['saldo']:,.2f}**"
         )
+        await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
         return
 
 
@@ -3749,10 +3896,11 @@ async def send_jose_route_card_job() -> None:
         ref = ConversationReference().deserialize(ref_dict)
 
         async def cb(turn_context: TurnContext) -> None:
-            await turn_context.send_activity(
-                "🚚 Actualicé tu lista de envíos. Revisá el card y arrancá cuando salgas."
-            )
-            await turn_context.send_activity(_build_jose_ruta_card(JOSE_EMAIL))
+            created = await _upsert_jose_card(turn_context, JOSE_EMAIL, skip_refresh=False)
+            if not created:
+                await turn_context.send_activity(
+                    "🔄 Actualicé tu card de ruta de hoy ☝️"
+                )
 
         await activities_adapter.continue_conversation(
             ref, cb, bot_id=ACTIVITIES_APP_ID
