@@ -712,6 +712,39 @@ def set_task_status(
 
 
 @_locked
+def reset_task_para_rehacer(
+    activity_id: str,
+    *,
+    user_email: str | None = None,
+    wk: str | None = None,
+    fecha_limite: str | None = None,
+    by: str = "",
+) -> dict[str, Any]:
+    """Recoloca una tarea no-diaria para rehacerla otro día (2026-06-24):
+    avance=0, status='pendiente', y opcionalmente nueva fecha límite. Para la
+    opción 'recolocar para otro día' cuando la tarea ya estaba al 100%."""
+    if fecha_limite:
+        date.fromisoformat(fecha_limite)  # valida formato (lanza ValueError)
+    email = _normalize_email(user_email)
+    wk = wk or week_key()
+    state = load()
+    _, _, entry = _task_entry_for_mutation(state, email, wk, activity_id)
+    if entry.get("tipo") == "diaria":
+        raise ValueError(f"'{activity_id}' es diaria — no se recoloca.")
+    prev = entry.get("status")
+    entry["avance"] = 0
+    entry["status"] = "pendiente"
+    if fecha_limite is not None:
+        entry["fecha_limite"] = fecha_limite or None
+    entry["ultima_actualizacion"] = _now_iso()
+    entry["updated_at"] = entry["ultima_actualizacion"]
+    nota = "recolocada para rehacer" + (f" (para {fecha_limite})" if fecha_limite else "")
+    _append_history(entry, prev, "pendiente", by=by or "user", note=nota)
+    save(state)
+    return entry
+
+
+@_locked
 def set_task_fecha_limite(
     activity_id: str,
     fecha_limite: str | None,
