@@ -1915,9 +1915,16 @@ def add_destino_adhoc(
         user["rutas"][fecha] = {"salidas": [], "envios_snapshot": {}}
     snap = user["rutas"][fecha].setdefault("envios_snapshot", {})
 
-    # ID sintético basado en timestamp para no colisionar con facturas reales
+    # ID sintético basado en timestamp para no colisionar con facturas reales.
+    # Garantizar unicidad: si José agrega varios destinos en el mismo segundo,
+    # el truncado a 16 chars colisionaba y el segundo sobrescribía al primero.
     ts = _now_iso().replace(":", "").replace(".", "").replace("-", "")[:16]
     fid = f"adhoc-{ts}"
+    _base = fid
+    _n = 1
+    while fid in snap:
+        _n += 1
+        fid = f"{_base}-{_n}"
     item = {
         "factura_id": fid,
         "documento": f"AD-HOC ({tipo.upper()})",
