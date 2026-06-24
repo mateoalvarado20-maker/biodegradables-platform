@@ -4371,8 +4371,8 @@ async def _job_weekly_summaries() -> None:
     )
 
 
-async def _job_consolidated_daily() -> None:
-    await _reliable_job(
+async def _job_consolidated_daily() -> bool:
+    return await _reliable_job(
         "consolidated_daily_summary",
         send_consolidated_daily_summary_job,
         ledger_key="consolidated_daily",
@@ -5689,6 +5689,27 @@ async def trigger_consolidated_daily(request: Request) -> dict[str, Any]:
         _send_consolidated_daily_summary, to_override, cc_override
     )
     return result
+
+
+@app.post("/admin/run-consolidated-daily-now")
+async def run_consolidated_daily_now(request: Request) -> dict[str, Any]:
+    """Dispara el consolidado diario REAL ahora — a los destinatarios normales
+    (Daniel + Gabriela, CC Mateo) y PASANDO POR EL LEDGER. A diferencia de
+    /admin/trigger-consolidated-daily-summary (que saltea el ledger para tests),
+    este marca 'ya enviado hoy', así el cron de las 18:30 se saltea solo y NO
+    duplica. La programación sigue normal mañana."""
+    _require_admin(request)
+    ran = await _job_consolidated_daily()
+    return {
+        "ok": True,
+        "enviado": ran,
+        "nota": (
+            "Consolidado enviado a los destinatarios normales y ledger marcado; "
+            "el job de las 18:30 se saltea hoy."
+            if ran else
+            "No se envió (el ledger ya estaba marcado para hoy — ya salió)."
+        ),
+    }
 
 
 @app.post("/admin/trigger-saturday-recap")
