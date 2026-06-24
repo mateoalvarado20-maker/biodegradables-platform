@@ -43,6 +43,12 @@ def test_yaml_switch_equals_legacy(monkeypatch):
         "H2025": set(legacy.holidays_for(2025)),
         "H2026": set(legacy.holidays_for(2026)),
         "H2027": set(legacy.holidays_for(2027)),
+        "COMPANY_NAME": legacy.COMPANY_NAME,
+        "COMPANY_SECTOR": legacy.COMPANY_SECTOR,
+        "PEOPLE": dict(legacy.PEOPLE),
+        "EMAIL_TO_NAME": dict(legacy.EMAIL_TO_NAME),
+        "SUPERVISORS": set(legacy.SUPERVISORS_ONLY_EMAILS),
+        "ASISTENTES": set(legacy.ASISTENTE_EMAILS),
     }
 
     # 2) prender el flag y comparar
@@ -66,6 +72,13 @@ def test_yaml_switch_equals_legacy(monkeypatch):
         assert set(sw.holidays_for(2026)) == snap["H2026"]
         assert set(sw.holidays_for(2027)) == snap["H2027"]
         assert sw.py_override_for(2026, 5) == legacy.py_override_for(2026, 5)
+        # Identidad de empresa + directorio de personas (Fase 1)
+        assert sw.COMPANY_NAME == snap["COMPANY_NAME"]
+        assert sw.COMPANY_SECTOR == snap["COMPANY_SECTOR"]
+        assert dict(sw.PEOPLE) == snap["PEOPLE"]
+        assert dict(sw.EMAIL_TO_NAME) == snap["EMAIL_TO_NAME"]
+        assert set(sw.SUPERVISORS_ONLY_EMAILS) == snap["SUPERVISORS"]
+        assert set(sw.ASISTENTE_EMAILS) == snap["ASISTENTES"]
     finally:
         # 3) restaurar legacy para no contaminar otros tests
         monkeypatch.delenv("TENANT_CONFIG_SOURCE", raising=False)

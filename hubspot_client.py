@@ -465,6 +465,28 @@ def leads_sin_responder(horas_min: int = 24, dias_ventana: int = 7) -> dict:
         return {"count": 0, "leads": [], "_warning": "no-actividad-disponible"}
 
 
+# ============ Hook DEMO (Fase 2) ============
+# Con DEMO_MODE=1, las funciones públicas se sirven desde demo_hubspot (datos
+# sintéticos) en vez de la API real. Cero cambios en daily_report ni en el Data Bot.
+if os.environ.get("DEMO_MODE") == "1":
+    try:
+        import sys as _sys
+
+        import demo_hubspot as _demo_hubspot
+        for _name in _demo_hubspot.__all__:
+            globals()[_name] = getattr(_demo_hubspot, _name)
+        print(
+            "[hubspot_client] DEMO_MODE: servido por demo_hubspot (datos sintéticos)",
+            file=_sys.stderr,
+        )
+    except Exception as _e:  # noqa: BLE001
+        import sys as _sys
+        print(
+            f"[hubspot_client] DEMO_MODE: no se pudo cargar demo_hubspot: {_e}",
+            file=_sys.stderr,
+        )
+
+
 if __name__ == "__main__":
     # Smoke test
     print("=== Leads ayer ===")

@@ -1,0 +1,126 @@
+# Tenant DEMO: Andex (Distribuidora Andina del Pacífico S.A.) — empresa FICTICIA.
+#
+# Sirve para mostrar la plataforma a prospectos sin exponer datos de ningún
+# cliente real. Estructura paralela a Biodegradables (2 sucursales Quito/Guayaquil,
+# mismos códigos UIO/GYE) para reutilizar TODA la lógica del motor sin cambios.
+# Se activa con TENANT_SLUG=andex + TENANT_CONFIG_SOURCE=yaml (+ DEMO_MODE=1 para
+# el sandbox de correo). Ningún dato aquí es real.
+
+slug: andex
+display_name: "Andex"
+locale: es-EC
+timezone: America/Guayaquil
+
+recipients:
+  commercial_report:                       # gerencia que recibe el reporte comercial
+    - rsalinas@andexdemo.com
+    - cvega@andexdemo.com
+  commercial_report_cc:
+    - amora@andexdemo.com
+  logistics_report:
+    - cvega@andexdemo.com
+  calendar_sync_users:
+    - rsalinas@andexdemo.com
+    - cvega@andexdemo.com
+
+branding:
+  brand_color: "#0B6E99"                   # azul corporativo Andex
+  logo_url: null
+
+company:
+  sector: "distribución de productos de consumo masivo"
+  sucursales_desc: "Quito (UIO) y Guayaquil (GYE)"
+  sucursal_names:
+    UIO: Quito
+    GYE: Guayaquil
+
+people:
+  - email: rsalinas@andexdemo.com
+    name: "Roberto Salinas"
+    role: gerente_general
+    supervisor: true
+  - email: cvega@andexdemo.com
+    name: "Carolina Vega"
+    role: gerente_comercial
+  - email: amora@andexdemo.com
+    name: "Andrés Mora"
+    role: analista
+  - email: info@andexdemo.com
+    name: "Pamela Ortiz"
+    role: asistente
+    sucursal: GYE
+    asistente_num: 1
+    rotativo_sabado: true
+  - email: quito@andexdemo.com
+    name: "Lucía Ramírez"
+    role: asistente
+    sucursal: UIO
+    asistente_num: 1
+  - email: mtipan@andexdemo.com
+    name: "Marco Tipán"
+    role: chofer
+    sucursal: GYE
+    asistente_num: 2
+    rotativo_sabado: true
+
+commercial:
+  meta_factor: 1.20
+  py_override: {}
+  thresholds:
+    cumpl_verde: 1.00
+    cumpl_amarillo: 0.85
+    ayer_verde: 1.00
+    ayer_amarillo: 0.80
+    mora_verde: 0.05
+    mora_amarillo: 0.10
+
+checkin:
+  oficina:
+    users:
+      - amora@andexdemo.com
+      - cvega@andexdemo.com
+    weekday_time: "16:30"
+  sucursales:
+    users:
+      - info@andexdemo.com
+      - quito@andexdemo.com
+    weekday_time: "17:10"
+    saturday_time: "12:30"
+
+# Andex opera en Ecuador → mismos feriados que el tenant real.
+holidays:
+  2025:
+    - 2025-01-01
+    - 2025-03-03
+    - 2025-03-04
+    - 2025-04-18
+    - 2025-05-01
+    - 2025-05-23
+    - 2025-08-10
+    - 2025-10-10
+    - 2025-11-03
+    - 2025-12-25
+  2026:
+    - 2026-01-01
+    - 2026-02-16
+    - 2026-02-17
+    - 2026-04-03
+    - 2026-05-01
+    - 2026-05-25
+    - 2026-08-10
+    - 2026-10-09
+    - 2026-11-02
+    - 2026-11-03
+    - 2026-12-25
+  2027:
+    - 2027-01-01
+    - 2027-02-08
+    - 2027-02-09
+    - 2027-03-26
+    - 2027-05-01
+    - 2027-05-24
+    - 2027-08-10
+    - 2027-10-09
+    - 2027-11-02
+    - 2027-11-03
+    - 2027-12-25

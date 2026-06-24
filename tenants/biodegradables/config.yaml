@@ -27,6 +27,42 @@ branding:
   brand_color: "#2E7D32"                   # verde corporativo (generate_bot_icons.py)
   logo_url: null
 
+company:                                   # core_config.COMPANY_* (prompts/reportes)
+  sector: "distribución de productos biodegradables"
+  sucursales_desc: "Quito (UIO) y Guayaquil (GYE)"
+  sucursal_names:                          # core_config.SUCURSAL_NAMES (código -> ciudad)
+    UIO: Quito
+    GYE: Guayaquil
+
+people:                                    # core_config.PEOPLE (directorio identidad/roles)
+  - email: dsanchez@biodegradablesecuador.com
+    name: "Daniel Sánchez"
+    role: gerente_general
+    supervisor: true
+  - email: gsanchez@biodegradablesecuador.com
+    name: "Gabriela Sánchez"
+    role: gerente_comercial
+  - email: malvarado@biodegradablesecuador.com
+    name: "Mateo Alvarado"
+    role: analista
+  - email: info@biodegradablesecuador.com
+    name: "Gabriela Bravo"
+    role: asistente
+    sucursal: GYE
+    asistente_num: 1
+    rotativo_sabado: true
+  - email: quito@biodegradablesecuador.com
+    name: "Gladys López"
+    role: asistente
+    sucursal: UIO
+    asistente_num: 1
+  - email: jsolorzano@biodegradablesecuador.com
+    name: "José Solórzano"
+    role: chofer
+    sucursal: GYE
+    asistente_num: 2
+    rotativo_sabado: true
+
 commercial:
   meta_factor: 1.20                        # core_config.META_FACTOR (meta = PY x 1.20)
   py_override:                             # core_config.PY_OVERRIDE, keyed "YYYY-MM"

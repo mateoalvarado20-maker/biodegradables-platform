@@ -856,6 +856,29 @@ def envios_dia_gye(
     return envios
 
 
+# ============ Hook DEMO (Fase 2) ============
+# Con DEMO_MODE=1, las funciones públicas se sirven desde demo_contifico (dataset
+# sintético coherente) en vez de la API real de Contifico. Las funciones de
+# ventas/cumplimiento/top/saldos/envíos agregan sobre get_documentos, así que con
+# sólo reemplazar get_documentos ya operan sobre datos demo; demo_contifico ademas
+# reescribe las de cartera (que dependen de condiciones_credito reales). CERO
+# cambios en los reportes ni en el Data Bot.
+if os.environ.get("DEMO_MODE") == "1":
+    try:
+        import demo_contifico as _demo_contifico
+        for _name in _demo_contifico.__all__:
+            globals()[_name] = getattr(_demo_contifico, _name)
+        print(
+            "[contifico_client] DEMO_MODE: servido por demo_contifico (datos sintéticos)",
+            file=sys.stderr,
+        )
+    except Exception as _e:  # noqa: BLE001
+        print(
+            f"[contifico_client] DEMO_MODE: no se pudo cargar demo_contifico: {_e}",
+            file=sys.stderr,
+        )
+
+
 # ============ CLI para debugging ============
 if __name__ == "__main__":
     import json

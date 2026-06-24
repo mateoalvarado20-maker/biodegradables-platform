@@ -52,3 +52,27 @@ def test_holidays_match():
     c = _cfg()
     for year in (2025, 2026, 2027):
         assert set(c.holidays[year]) == cc.holidays_for(year)
+
+
+def test_company_match():
+    c = _cfg()
+    assert c.display_name == cc.COMPANY_NAME
+    assert c.company.sector == cc.COMPANY_SECTOR
+    assert c.company.sucursales_desc == cc.COMPANY_SUCURSALES_DESC
+    assert c.company.sucursal_names == cc.SUCURSAL_NAMES
+
+
+def test_people_match():
+    """El directorio del YAML reproduce exactamente core_config.PEOPLE legacy."""
+    c = _cfg()
+    from_yaml = cc._normalize_people({
+        p.email: {
+            "name": p.name, "role": p.role, "sucursal": p.sucursal,
+            "asistente_num": p.asistente_num, "supervisor": p.supervisor,
+            "rotativo_sabado": p.rotativo_sabado,
+        }
+        for p in c.people
+    })
+    assert from_yaml == cc.PEOPLE
+    # Y los derivados (lo que consumen los bots) también coinciden.
+    assert {e: cc.display_name_for(e) for e in cc.PEOPLE} == cc.EMAIL_TO_NAME

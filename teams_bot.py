@@ -101,9 +101,7 @@ DATA_ALLOWED_USERS = {
     e.strip().lower()
     for e in os.environ.get(
         "BOT_ALLOWED_USERS_DATA",
-        "dsanchez@biodegradablesecuador.com,"
-        "gsanchez@biodegradablesecuador.com,"
-        "malvarado@biodegradablesecuador.com",
+        ",".join([*core_config.JEFE, core_config.MIO]),  # gerencia, desde core_config
     ).split(",")
     if e.strip()
 }
@@ -180,7 +178,7 @@ def _save_ref_for_user(section: str, email: str, ref: ConversationReference) -> 
 
 # ===== Helpers compartidos =====
 FALLBACK_EMAIL = os.environ.get(
-    "TRACKER_TARGET_USER", "malvarado@biodegradablesecuador.com"
+    "TRACKER_TARGET_USER", core_config.MIO
 ).strip().lower()
 
 
@@ -423,7 +421,7 @@ def _user_email(context: TurnContext) -> str:
     # no se cae al bucket compartido `unidentified-unknown@` (auditoría A4:
     # dos personas distintas compartían state, historial y conversation ref).
     if aad_id_short:
-        isolated = f"unidentified-{aad_id_short}@biodegradablesecuador.com"
+        isolated = f"unidentified-{aad_id_short}@{core_config.email_domain()}"
         logger.warning("Email aislado: %s (name='%s')", isolated, name)
         return isolated
     logger.error(
@@ -2095,8 +2093,8 @@ async def send_weekly_summaries() -> None:
 # ===== Auto-asignación de cobranzas (Phase F) =====
 # Mapeo ciudad → colaborador responsable de cobranza en esa plaza
 COBRANZA_COLABORADORES = {
-    "UIO": "quito@biodegradablesecuador.com",
-    "GYE": "info@biodegradablesecuador.com",
+    "UIO": core_config.asistente_email_for_sucursal("UIO"),
+    "GYE": core_config.asistente_email_for_sucursal("GYE"),
 }
 
 
@@ -2235,17 +2233,18 @@ async def deliver_due_reminders() -> None:
 
 # ===== Proactive messaging (check-in del activities bot) =====
 # Emails que tienen horarios CUSTOM y NO entran en el send_daily_checkin general
-INFO_EMAIL = "info@biodegradablesecuador.com"
-QUITO_EMAIL = "quito@biodegradablesecuador.com"
-JOSE_EMAIL = "jsolorzano@biodegradablesecuador.com"  # Phase U — chofer GYE
+# Identidad/roles desde core_config (single source, tenant-overridable).
+INFO_EMAIL = core_config.asistente_email_for_sucursal("GYE")
+QUITO_EMAIL = core_config.asistente_email_for_sucursal("UIO")
+JOSE_EMAIL = core_config.chofer_email()  # chofer GYE
 # Horarios/destinatarios del check-in viven en core_config (CHECKIN_*).
 
 # Phase N (2026-06-02): cierre de caja diario en sub-card del check-in
 CIERRE_CAJA_USERS = {INFO_EMAIL, QUITO_EMAIL}
 SUCURSAL_POR_USER = {
-    INFO_EMAIL: "Guayaquil",
-    QUITO_EMAIL: "Quito",
-    JOSE_EMAIL: "Guayaquil",
+    INFO_EMAIL: core_config.sucursal_name_for(INFO_EMAIL),
+    QUITO_EMAIL: core_config.sucursal_name_for(QUITO_EMAIL),
+    JOSE_EMAIL: core_config.sucursal_name_for(JOSE_EMAIL),
 }
 
 # Phase U (2026-06-09): usuarios que reciben el card de ruta de envíos
@@ -2256,29 +2255,30 @@ ROUTE_USERS: set[str] = {JOSE_EMAIL}
 # Cuando info@/quito@ guarda su cierre, el validador correspondiente recibe
 # un card proactivo para confirmar que recibió el monto reportado.
 VALIDADOR_CIERRE_POR_CIUDAD = {
-    "Guayaquil": "dsanchez@biodegradablesecuador.com",  # Daniel recibe GYE
-    "Quito": "gsanchez@biodegradablesecuador.com",      # Gabriela Sánchez recibe UIO
+    # El gerente general valida el cierre de la sucursal del chofer (GYE);
+    # el gerente comercial valida la otra (UIO). Desde core_config.
+    core_config.SUCURSAL_NAMES.get("GYE", "Guayaquil"): core_config.email_by_role("gerente_general"),
+    core_config.SUCURSAL_NAMES.get("UIO", "Quito"): core_config.email_by_role("gerente_comercial"),
 }
 
 # Supervisores que NO trackean actividades propias — solo reciben los reportes
 # de los colaboradores. Se excluyen del send_daily_checkin y NO se les crean
-# actividades aunque haya un ref del bot por accidente.
-SUPERVISORS_ONLY: set[str] = {
-    "dsanchez@biodegradablesecuador.com",  # Daniel — gerente general
-}
+# actividades aunque haya un ref del bot por accidente. Desde core_config (debe
+# matchear ask_agent.SUPERVISORS_ONLY_EMAILS).
+SUPERVISORS_ONLY: set[str] = set(core_config.SUPERVISORS_ONLY_EMAILS)
 
 # Quienes pueden consultar la carga de TODO el equipo vía /tareas (gerencia).
-# Gabriela Sánchez SÍ trackea actividades propias (no está en SUPERVISORS_ONLY)
-# pero como gerente comercial puede ver la carga del equipo.
+# El gerente comercial SÍ trackea actividades propias (no está en SUPERVISORS_ONLY)
+# pero puede ver la carga del equipo.
 WORKLOAD_SUPERVISORS: set[str] = SUPERVISORS_ONLY | {
-    "gsanchez@biodegradablesecuador.com",
+    core_config.email_by_role("gerente_comercial"),
 }
 
-# Phase U: el resumen del día de José va solo a Daniel + Mateo
-# (Gabriela maneja UIO, José es chofer GYE)
+# Phase U: el resumen del día del chofer va a gerencia general + analista
+# (el gerente comercial maneja UIO, el chofer es GYE).
 JOSE_SUMMARY_TO = [
-    "dsanchez@biodegradablesecuador.com",
-    "malvarado@biodegradablesecuador.com",
+    core_config.email_by_role("gerente_general"),
+    core_config.email_by_role("analista"),
 ]
 
 
@@ -4172,9 +4172,7 @@ async def send_jose_summary_email_job() -> None:
 # ============================================================
 JOB_RETRY_ATTEMPTS = 3
 JOB_RETRY_WAIT = 60  # segundos entre intentos
-ALERT_EMAIL = os.environ.get(
-    "ALERT_EMAIL", "malvarado@biodegradablesecuador.com"
-).strip()
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL", core_config.MIO).strip()
 
 
 def _send_job_failure_alert(job_name: str, error_msg: str, attempts: int) -> None:
@@ -4463,7 +4461,7 @@ def _build_apertura_caja_card(user_email: str) -> Activity:
 
 
 RECORDATORIO_MATINAL_USERS = CIERRE_CAJA_USERS | {
-    "gsanchez@biodegradablesecuador.com",
+    core_config.email_by_role("gerente_comercial"),
 }
 
 

@@ -834,18 +834,22 @@ def _generate_marketing_summary(hs: dict) -> dict:
             "leads_sin_responder_ultimos_30d": sin_resp.get("count", 0),
         }
 
-        system = """Eres un asistente que ayuda a Daniel Sánchez, gerente general de
-Biodegradables Ecuador (empresa de empaques biodegradables en Quito y Guayaquil).
+        _gg = core_config.gerente_general_name() or "la gerencia"
+        _gg_first = _gg.split()[0] if _gg else "la gerencia"
+        system = (
+            f"""Eres un asistente que ayuda a {_gg}, gerente general de
+{core_config.COMPANY_NAME} ({core_config.COMPANY_SECTOR}; sucursales en {core_config.COMPANY_SUCURSALES_DESC}).
 
 Esta sección del correo es SOLO sobre generación de leads (demanda nueva). NO
 hables de ventas cerradas, pipeline ni tasa de cierre: eso va en otra sección.
 
 Tu tarea: en base a los datos de leads, escribir:
 1. Un resumen ejecutivo de 2-3 oraciones EN ESPAÑOL, claro, sin jerga, que le
-   diga a Daniel cómo viene la captación de leads (ayer y los últimos 30 días)
+   diga a {_gg_first} cómo viene la captación de leads (ayer y los últimos 30 días)
    y qué destacaría. Habla en segunda persona (vos / te).
 2. Una lista de 1 a 3 acciones concretas recomendadas para HOY. Específicas, no
-   genéricas. Si los datos están sanos, decílo y propone mantener el ritmo.
+   genéricas. Si los datos están sanos, decílo y propone mantener el ritmo."""
+            + """
 
 Devuelve EXACTAMENTE este JSON, sin texto antes ni después:
 {
@@ -861,6 +865,7 @@ Reglas:
 - No uses emojis en el resumen
 - No menciones números que no estén en los datos
 - Tono profesional pero cercano (es para el CEO)"""
+        )
 
         response = client.messages.create(
             model="claude-sonnet-4-5",
@@ -987,8 +992,8 @@ def _ciudad_nombre(codigo: str) -> str:
 # (Contactado / No contactado + nota) sobre los clientes con cartera vencida.
 # Se muestran junto a cada deudor en la sección de Cartera del reporte comercial.
 _COBRANZA_CIUDAD_USER = {
-    "UIO": "quito@biodegradablesecuador.com",
-    "GYE": "info@biodegradablesecuador.com",
+    "UIO": core_config.asistente_email_for_sucursal("UIO"),
+    "GYE": core_config.asistente_email_for_sucursal("GYE"),
 }
 
 
