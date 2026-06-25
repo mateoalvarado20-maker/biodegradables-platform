@@ -1770,7 +1770,52 @@ def _classify_dailies(user_email: str, today_iso: str, wk: str | None = None) ->
     counts = {"hechas": 0, "parciales": 0, "no_hechas": 0, "sin_marcar": 0}
     problematicas = []  # cada elem: dict con nombre, estado, razon, priority
 
+    # Dedup cobranzas por cliente (2026-06-25): los aids `cobranza-<cliente>-<fecha>`
+    # acumulaban el mismo cliente → se contaba y listaba repetido en
+    # "Lo que requiere seguimiento". Colapsamos a UNA entrada por cliente con su
+    # estado agregado de hoy (contactado si alguna marca tiene valor > 0).
+    cob_por_cliente: dict = {}
+    no_cobranzas = []
     for aid, a in diarias:
+        if not aid.startswith("cobranza-"):
+            no_cobranzas.append((aid, a))
+            continue
+        nombre_full = a.get("nombre", aid)
+        _cli = nombre_full.replace("📞 Cobranza:", "").strip()
+        cli_key = _cli.split(" — ")[0].strip() if " — " in _cli else _cli
+        rec = (a.get("log") or {}).get(today_iso)
+        cur = cob_por_cliente.setdefault(cli_key, {
+            "nombre": nombre_full, "priority": a.get("priority", "media"),
+            "valor": None, "razon": "", "marcada": False,
+        })
+        if rec is not None:
+            cur["marcada"] = True
+            v = rec.get("valor", 0) or 0
+            if cur["valor"] is None or v > (cur["valor"] or 0):
+                cur["valor"] = v
+            rz = (rec.get("notas") or "").strip()
+            if rz and not cur["razon"]:
+                cur["razon"] = rz
+
+    for info in cob_por_cliente.values():
+        nombre = info["nombre"]
+        priority = info["priority"]
+        if not info["marcada"]:
+            counts["sin_marcar"] += 1
+            problematicas.append({
+                "nombre": nombre, "estado": "sin_marcar",
+                "razon": "", "priority": priority,
+            })
+        elif (info["valor"] or 0) == 0:
+            counts["no_hechas"] += 1
+            problematicas.append({
+                "nombre": nombre, "estado": "no_hecha",
+                "razon": info["razon"], "priority": priority,
+            })
+        else:
+            counts["hechas"] += 1  # cobranza meta=1, valor>0 → contactada
+
+    for aid, a in no_cobranzas:
         rec = (a.get("log") or {}).get(today_iso)
         meta = a.get("meta")
         priority = a.get("priority", "media")
