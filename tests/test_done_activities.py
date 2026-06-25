@@ -74,11 +74,12 @@ def test_recolocar_con_fecha(state_env):
     assert ent["fecha_limite"] == "2026-07-05"
 
 
-def test_dejar_no_cambia_nada(state_env):
+def test_sin_eleccion_no_cambia_nada(state_env):
+    # Ya no existe la opción "dejar": si el user envía sin elegir nada, es no-op.
     a = state_env.activity_state
     _add_proyecto(a, "proj-w", "Proyecto W")
     a.set_weekly_progress("proj-w", 100, user_email=USER)
-    form = {"ctx_user": USER, "done_action__proj-w": "dejar"}
+    form = {"ctx_user": USER, "done_action__proj-w": ""}
     asyncio.run(teams_bot._handle_done_activities(FakeCtx(), form, USER))
     ent = a.get_week(USER)["activities"]["proj-w"]
     assert ent["avance"] == 100
@@ -100,3 +101,8 @@ def test_done_card_tiene_opciones_y_fecha(state_env):
     walk(card)
     assert "done_action__proj-a" in ids
     assert "recolocar_fecha__proj-a" in ids
+    # La opción "Dejarla como está" fue removida (2026-06-25)
+    import json
+    blob = json.dumps(card, ensure_ascii=False)
+    assert "Dejarla como está" not in blob
+    assert '"value": "dejar"' not in blob and '"value":"dejar"' not in blob
