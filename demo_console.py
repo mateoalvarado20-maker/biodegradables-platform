@@ -131,22 +131,23 @@ def _collect_html() -> list[tuple[str, str, str]]:
 
 
 def build_single_file() -> str:
-    """Genera UN solo `demo.html` autocontenido (tabs + iframes srcdoc) con los 4
-    reportes — el artefacto ideal para compartir por link (OneDrive/SharePoint/
-    static host): un único archivo, sin dependencias externas."""
+    """Genera UN solo `demo.html` autocontenido con los 4 reportes APILADOS en una
+    sola página scrolleable (no tabs): así se ven todos los ejemplos de corrido.
+    Menú sticky arriba para saltar a cada sección. Cada reporte va en un iframe
+    srcdoc que se auto-ajusta a su alto. Ideal para compartir por link."""
     from html import escape
     import core_config
     arts = _collect_html()
     for _slug, _t, html in arts:
         demo_guard.assert_no_real_data(html, context="single-file")
-    tabs = "".join(
-        f'<button class="tab{" active" if i == 0 else ""}" onclick="show({i})">{escape(t)}</button>'
-        for i, (_s, t, _h) in enumerate(arts)
-    )
-    frames = "".join(
-        f'<iframe class="rep{" active" if i == 0 else ""}" id="rep{i}" '
-        f'srcdoc="{escape(html, quote=True)}"></iframe>'
-        for i, (_s, _t, html) in enumerate(arts)
+    nav = "".join(f'<a href="#{slug}">{escape(t)}</a>' for slug, t, _h in arts)
+    sections = "".join(
+        f'<section id="{slug}"><h2 class="sec">{escape(t)}</h2>'
+        f'<iframe class="rep" srcdoc="{escape(html, quote=True)}" '
+        # auto-ajusta el alto del iframe a su contenido (srcdoc = same-origin)
+        f'onload="this.style.height=(this.contentWindow.document.body.scrollHeight+40)+&#39;px&#39;">'
+        f'</iframe></section>'
+        for slug, t, html in arts
     )
     page = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -155,25 +156,21 @@ def build_single_file() -> str:
   body{{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:#f1f5f9;color:#0f172a;}}
   header{{background:#0B6E99;color:#fff;padding:16px 22px;}}
   header h1{{margin:0;font-size:20px;}} header p{{margin:4px 0 0;opacity:.85;font-size:13px;}}
-  .tabs{{display:flex;gap:6px;flex-wrap:wrap;padding:12px 22px;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;}}
-  .tab{{border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:14px;}}
-  .tab.active{{background:#0B6E99;color:#fff;border-color:#0B6E99;font-weight:600;}}
-  .rep{{display:none;width:100%;height:calc(100vh - 130px);border:0;background:#fff;}}
-  .rep.active{{display:block;}}
-  footer{{padding:8px 22px;font-size:12px;color:#64748b;}}
+  .nav{{display:flex;gap:6px;flex-wrap:wrap;padding:10px 22px;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:10;}}
+  .nav a{{text-decoration:none;color:#0B6E99;border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;padding:6px 12px;font-size:13px;}}
+  .nav a:hover{{background:#0B6E99;color:#fff;border-color:#0B6E99;}}
+  section{{max-width:980px;margin:22px auto;background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);scroll-margin-top:64px;}}
+  h2.sec{{margin:0;padding:12px 18px;background:#eef6fb;color:#0B6E99;border-bottom:1px solid #e2e8f0;font-size:17px;}}
+  .rep{{display:block;width:100%;min-height:300px;border:0;background:#fff;}}
+  footer{{padding:14px 22px;font-size:12px;color:#64748b;text-align:center;}}
 </style></head><body>
 <header><h1>Demo — {escape(core_config.COMPANY_NAME)}</h1>
 <p>{escape(core_config.COMPANY_SECTOR.capitalize())} · sucursales en {escape(core_config.COMPANY_SUCURSALES_DESC)} · datos 100% ficticios</p></header>
-<div class="tabs">{tabs}</div>
-{frames}
+<div class="nav">{nav}</div>
+{sections}
 <footer>Entorno de demostración — no contiene datos de ningún cliente real.</footer>
-<script>
-function show(n){{
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',i===n));
-  document.querySelectorAll('.rep').forEach((r,i)=>r.classList.toggle('active',i===n));
-}}
-</script></body></html>"""
-    return _write("demo.html", page, "Demo en un solo archivo (compartible)")
+</body></html>"""
+    return _write("demo.html", page, "Demo en un solo archivo (reportes apilados)")
 
 
 def run_databot(pregunta: str) -> None:
