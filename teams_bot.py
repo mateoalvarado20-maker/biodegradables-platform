@@ -3357,8 +3357,8 @@ def _build_jose_ruta_card(
         {
             "type": "Input.Text",
             "id": "jose_adhoc_cliente",
-            "label": "Cliente / motivo",
-            "placeholder": "Ej. Juan Pérez, retirar bobina, devolución cliente XX",
+            "label": "Motivo",
+            "placeholder": "Ej. retirar bobina, devolución cliente XX, encargo extra",
         },
         {
             "type": "Input.Text",
