@@ -1296,9 +1296,15 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
                 f'</div>'
             )
 
-    # === TikTok seguidores (para users con activity video-tiktok) ===
+    # === TikTok seguidores (para users con actividad de videos TikTok) ===
+    # 2026-06-24: la actividad vigente es "tiktok-videos-diarios" (6/día). Se
+    # mantiene compat con la vieja "video-tiktok" (meta 1) por si reaparece.
     tiktok_section = ""
-    tiene_tiktok = "video-tiktok" in week.get("activities", {})
+    _tt_act = (
+        week.get("activities", {}).get("tiktok-videos-diarios")
+        or week.get("activities", {}).get("video-tiktok")
+    )
+    tiene_tiktok = _tt_act is not None
     if tiene_tiktok:
         tt_actual = activity_state.get_tiktok_seguidores_semana(user_email)
         # tt_anterior = semana pasada para mostrar delta
@@ -1333,9 +1339,15 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
     # videos lleva subidos en la semana contra la meta semanal. El conteo sale
     # de sumar las marcas diarias de la activity "video-tiktok" (cada video = 1).
     tiktok_videos_section = ""
-    tt_video_act = week.get("activities", {}).get("video-tiktok")
+    tt_video_act = _tt_act
     if tt_video_act:
-        meta_videos = int(tt_video_act.get("meta_semanal") or 5)
+        # Meta semanal: la del entry si está; si no, la diaria × 5 días
+        # laborales (ej. tiktok-videos-diarios = 6/día → 30/semana). Fallback 5.
+        _meta_sem = tt_video_act.get("meta_semanal")
+        if not _meta_sem:
+            _meta_diaria = int(tt_video_act.get("meta") or 0)
+            _meta_sem = _meta_diaria * 5 if _meta_diaria else 5
+        meta_videos = int(_meta_sem)
         videos_hechos = 0
         for log_entry in (tt_video_act.get("log") or {}).values():
             videos_hechos += int(float(log_entry.get("valor") or 0))

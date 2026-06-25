@@ -21,16 +21,6 @@
       "descripcion": "Conteo de respuestas a outreach. Sin meta fija — solo se reporta."
     },
     {
-      "id": "video-tiktok",
-      "nombre": "Video TikTok",
-      "tipo": "diaria",
-      "meta": 1,
-      "meta_semanal": 5,
-      "unidad": "video",
-      "fuente": "manual",
-      "descripcion": "Subida manual de video diario en TikTok. Objetivo: 1/día con meta total de 5 a la semana."
-    },
-    {
       "id": "codigos-contifico",
       "nombre": "Códigos Contifico: modificar para showroom",
       "tipo": "semanal",
