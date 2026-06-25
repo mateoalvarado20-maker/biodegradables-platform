@@ -1660,11 +1660,9 @@ def _build_done_activities_card(
             "type": "Input.ChoiceSet",
             "id": f"done_action__{aid}",
             "style": "expanded",
-            "value": "dejar",
             "choices": [
                 {"title": "🗑️ Quitarla del card (ya está terminada)", "value": "quitar"},
                 {"title": "🔁 Recolocarla para hacerla otro día", "value": "recolocar"},
-                {"title": "➖ Dejarla como está (100% en el card)", "value": "dejar"},
             ],
         })
         body.append({
