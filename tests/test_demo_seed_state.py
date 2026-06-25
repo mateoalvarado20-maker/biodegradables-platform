@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import importlib
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -58,10 +58,12 @@ def test_activities_and_cierres_seeded(seeded):
     wk = st.week_key(TODAY)
     amora = st.get_week("amora@andexdemo.com", wk)
     assert "prospeccion-correos" in amora["activities"]
-    # cierre de caja de la sucursal GYE (ayer)
-    ayer = (TODAY - timedelta(days=1)).isoformat()
-    cierre = st.get_cierre_caja("info@andexdemo.com", ayer)
+    # cierre de caja de la sucursal GYE (HOY — lo que resume el correo del día)
+    cierre = st.get_cierre_caja("info@andexdemo.com", TODAY.isoformat())
     assert cierre and cierre["total"] > 0
+    # cobranzas sembradas como actividades cobranza-* del asistente
+    info_wk = st.get_week("info@andexdemo.com", wk)
+    assert any(aid.startswith("cobranza-") for aid in info_wk["activities"])
 
 
 def test_dispatch_seeded(seeded):
@@ -84,3 +86,6 @@ def test_consolidated_summary_andex_sin_fuga(seeded):
     # identidad Andex presente (algún nombre del equipo demo; títulos van en MAYÚS)
     low = html.lower()
     assert any(n in low for n in ("vega", "mora", "tipán", "tipan", "andex"))
+    # Ejemplos de cómo llenan los colaboradores (lo que pidió el usuario):
+    assert "Cierre de caja" in html and "TOTAL CONTADO" in html, "falta cierre de caja lleno"
+    assert "Cobranza" in html, "faltan cobranzas"
