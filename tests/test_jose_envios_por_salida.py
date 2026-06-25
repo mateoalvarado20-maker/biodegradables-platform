@@ -39,8 +39,8 @@ def test_envios_agrupados_por_salida(state_env):
     assert "📦 Envíos por salida" in html
     assert "Salida #1" in html
     assert "Salida #2" in html
-    # GAMMA nunca se entregó → aparece en pendientes
-    assert "Pendientes — no salieron en ninguna salida" in html
+    # GAMMA nunca se entregó → aparece en la sección de pendientes
+    assert "Aún sin entregar" in html
     assert "GAMMA" in html and "ACME" in html and "BETA" in html
 
 

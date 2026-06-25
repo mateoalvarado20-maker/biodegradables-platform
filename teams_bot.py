@@ -2295,7 +2295,13 @@ async def auto_assign_cobranzas() -> None:
 
         for c in top:
             cliente_slug = _slugify(c["cliente"])
-            activity_id = f"cobranza-{cliente_slug}-{today_str}"
+            # aid ESTABLE por cliente (2026-06-25): antes era
+            # `cobranza-<cliente>-<fecha>`, lo que creaba una activity NUEVA por
+            # día y acumulaba el mismo cliente toda la semana (se repetía en el
+            # check-in y en el reporte). Con aid estable, re-asignar el mismo
+            # cliente en la semana es idempotente (add_adhoc lanza ValueError →
+            # skip) y el cliente queda como UNA sola cobranza con marca por día.
+            activity_id = f"cobranza-{cliente_slug}"
             nombre = (
                 f"📞 Cobranza: {c['cliente']} — "
                 f"${c['saldo_vencido']:,.0f} "

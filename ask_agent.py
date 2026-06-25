@@ -1592,6 +1592,14 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
             'margin:4px 0 12px">' + _TH + rows + '</table>'
         )
 
+    def _dur_min(ini_iso: str, fin_iso: str) -> str:
+        try:
+            d1 = datetime.fromisoformat((ini_iso or "").replace("Z", "+00:00"))
+            d2 = datetime.fromisoformat((fin_iso or "").replace("Z", "+00:00"))
+            return f"{int((d2 - d1).total_seconds() / 60)} min"
+        except Exception:
+            return ""
+
     secciones = ""
     fids_vistos: set[str] = set()
     real_idx = 0
@@ -1600,34 +1608,38 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         en_oficina = s.get("marcado_en_oficina")
         if en_oficina and not entr_dict:
             continue
+        n_ok = sum(1 for e in entr_dict.values() if e.get("status") == "entregado")
+        n_no = sum(1 for e in entr_dict.values() if e.get("status") == "no_entregado")
         if en_oficina:
-            cabecera = "🏢 Entregado en oficina (sin salir a ruta)"
+            cabecera = f"🏢 Entregado en oficina (sin salir a ruta) · ✅ {n_ok}"
+            if n_no:
+                cabecera += f" · ❌ {n_no}"
         else:
             real_idx += 1
             ini = _hora_corta(s.get("inicio_ts", ""))
-            fin = _hora_corta(s.get("fin_ts", "")) if s.get("fin_ts") else "(en curso)"
-            n_ok = sum(1 for e in entr_dict.values() if e.get("status") == "entregado")
-            n_no = sum(1 for e in entr_dict.values() if e.get("status") == "no_entregado")
-            cabecera = (
-                f"🚗 Salida #{real_idx} · {ini} → {fin} · ✅ {n_ok} entregadas"
-                + (f" · ❌ {n_no} no entregadas" if n_no else "")
-            )
+            if s.get("fin_ts"):
+                dur = _dur_min(s.get("inicio_ts", ""), s.get("fin_ts"))
+                tramo = f"{ini} → {_hora_corta(s.get('fin_ts'))}" + (f" ({dur})" if dur else "")
+            else:
+                tramo = f"{ini} → <span style='color:#c53030'>sin cerrar</span>"
+            cabecera = f"🚗 Salida #{real_idx} · {tramo} · ✅ {n_ok} entregadas"
+            if n_no:
+                cabecera += f" · ❌ {n_no} no entregadas"
+            if not entr_dict:
+                cabecera += " · <span style='color:#999'>sin entregas marcadas</span>"
         rows = "".join(_envio_row(fid, entr) for fid, entr in entr_dict.items())
         fids_vistos.update(entr_dict.keys())
-        secciones += (
-            f'<p style="margin:12px 0 2px;font-weight:600;color:#0e7c39">{cabecera}</p>'
-            + (_tabla(rows) if rows else
-               '<p style="color:#999;font-size:12px;margin:2px 0 10px">'
-               '(sin entregas marcadas en esta salida)</p>')
-        )
+        secciones += f'<p style="margin:12px 0 2px;font-weight:600;color:#0e7c39">{cabecera}</p>'
+        if rows:
+            secciones += _tabla(rows)
 
-    # Pendientes: en el snapshot pero nunca marcados en ninguna salida
+    # Aún sin entregar: en el snapshot pero nunca marcados en ninguna salida
     pend_fids = [fid for fid in snapshot if fid not in fids_vistos]
     if pend_fids:
         rows = "".join(_envio_row(fid, {"status": "pendiente"}) for fid in pend_fids)
         secciones += (
             '<p style="margin:12px 0 2px;font-weight:600;color:#c53030">'
-            f'⏳ Pendientes — no salieron en ninguna salida ({len(pend_fids)})</p>'
+            f'⏳ Aún sin entregar — quedaron pendientes ({len(pend_fids)})</p>'
             + _tabla(rows)
         )
 
@@ -1650,9 +1662,12 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
 
     # Caja chica
     saldo = float(cc.get("saldo") or 0)
-    inicial = float(cc.get("inicial") or 0)
     gastos_dia = sum(float(m.get("monto") or 0) for m in movs_hoy if m.get("tipo") == "gasto")
     repos_dia = sum(float(m.get("monto") or 0) for m in movs_hoy if m.get("tipo") == "reposicion")
+    # Saldo con el que José ARRANCÓ hoy = saldo actual revirtiendo los
+    # movimientos de hoy (= cierre del día anterior). Fix 2026-06-25: antes se
+    # mostraba el `inicial` fijo (siempre $69.53), no el saldo real de arranque.
+    saldo_inicio_dia = saldo - repos_dia + gastos_dia
     saldo_color = "#c53030" if saldo <= CAJA_CHICA_ALERTA_JOSE else (
         "#e67e22" if saldo <= CAJA_CHICA_ALERTA_JOSE * 2 else "#0d8a3f"
     )
@@ -1663,7 +1678,8 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
     caja_html = (
         f'<p style="margin:8px 0 4px;font-weight:600;color:#444">💵 Caja chica</p>'
         f'<p style="margin:4px 0;font-size:14px">'
-        f'Inicial: <b>${inicial:,.2f}</b>  ·  '
+        f'Saldo inicial del día <span style="color:#888;font-size:11px">(cierre de ayer)</span>: '
+        f'<b>${saldo_inicio_dia:,.2f}</b>  ·  '
         f'Gastos hoy: <b style="color:#c53030">-${gastos_dia:,.2f}</b>  ·  '
         f'Reposiciones hoy: <b style="color:#0d8a3f">+${repos_dia:,.2f}</b><br>'
         f'<span style="font-size:16px;font-weight:700;color:{saldo_color}">'
@@ -1915,38 +1931,44 @@ def _asistente_column_html(user_email: str, today_iso: str) -> str:
     sucursal = core_config.sucursal_name_for(user_email) or "Quito"
     icon = "📍"
 
-    # Cobranzas: ids que empiezan con "cobranza-"
-    cobranzas_contactadas: list[str] = []
-    cobranzas_pendientes: list[str] = []
+    # Cobranzas: ids que empiezan con "cobranza-". DEDUP por cliente (2026-06-25):
+    # auto_assign crea un aid `cobranza-<cliente>-<fecha>` por día, así que el
+    # MISMO cliente se acumulaba varias veces en la semana y aparecía repetido en
+    # el reporte. Acá colapsamos a UNA entrada por cliente, con el estado y la
+    # observación de HOY (contactada si alguna marca de hoy tiene valor > 0).
+    por_cliente: dict = {}
     for aid, a in week["activities"].items():
         if not aid.startswith("cobranza-"):
             continue
         nombre = a.get("nombre", "")
-        # Extraer solo el nombre del cliente (sin emoji ni montos)
         cliente = nombre.replace("📞 Cobranza:", "").strip()
-        # Limpiar el monto "— $X (Yd atraso)" para mostrar versión corta
-        if " — " in cliente:
-            cliente_corto = cliente.split(" — ")[0].strip()
-        else:
-            cliente_corto = cliente
+        cliente_corto = cliente.split(" — ")[0].strip() if " — " in cliente else cliente
+        info = por_cliente.setdefault(cliente_corto, {"contactada": False, "razon": ""})
         rec = (a.get("log") or {}).get(today_iso)
-        if rec is None:
-            cobranzas_pendientes.append(cliente_corto)
-        else:
+        if rec is not None:
             valor = rec.get("valor", 0) or 0
             razon = (rec.get("notas") or "").strip()
             if valor > 0:
-                line = f"<li>{cliente_corto}"
-                if razon:
-                    line += f' <span style="color:#666;font-style:italic;font-size:11px;">"{razon}"</span>'
-                line += "</li>"
-                cobranzas_contactadas.append(line)
-            else:
-                line = f"<li>{cliente_corto}"
-                if razon:
-                    line += f' <span style="color:#999;font-style:italic;font-size:11px;">({razon})</span>'
-                line += "</li>"
-                cobranzas_pendientes.append(line)
+                info["contactada"] = True
+            if razon and not info["razon"]:
+                info["razon"] = razon
+
+    cobranzas_contactadas: list[str] = []
+    cobranzas_pendientes: list[str] = []
+    for cliente_corto, info in por_cliente.items():
+        razon = info["razon"]
+        if info["contactada"]:
+            line = f"<li>{cliente_corto}"
+            if razon:
+                line += f' <span style="color:#666;font-style:italic;font-size:11px;">"{razon}"</span>'
+            line += "</li>"
+            cobranzas_contactadas.append(line)
+        else:
+            line = f"<li>{cliente_corto}"
+            if razon:
+                line += f' <span style="color:#999;font-style:italic;font-size:11px;">({razon})</span>'
+            line += "</li>"
+            cobranzas_pendientes.append(line)
 
     cobranzas_html = ""
     if cobranzas_contactadas or cobranzas_pendientes:
