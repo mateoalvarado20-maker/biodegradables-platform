@@ -3355,23 +3355,10 @@ def _build_jose_ruta_card(
             "spacing": "Small",
         },
         {
-            "type": "Input.ChoiceSet",
-            "id": "jose_adhoc_tipo",
-            "label": "Tipo",
-            "style": "expanded",
-            "isMultiSelect": False,
-            "value": "entrega",
-            "choices": [
-                {"title": "📦 Entrega extra", "value": "entrega"},
-                {"title": "↩️ Retiro de mercadería", "value": "retiro"},
-                {"title": "📍 Otro destino", "value": "otro"},
-            ],
-        },
-        {
             "type": "Input.Text",
             "id": "jose_adhoc_cliente",
-            "label": "Cliente / motivo",
-            "placeholder": "Ej. Juan Pérez, retirar bobina, devolución cliente XX",
+            "label": "Motivo",
+            "placeholder": "Ej. retirar bobina, devolución cliente XX, encargo extra",
         },
         {
             "type": "Input.Text",
