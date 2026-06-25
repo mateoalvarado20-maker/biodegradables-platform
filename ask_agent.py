@@ -1099,9 +1099,28 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
     diarias_items = activity_state.sort_activities_by_priority_then_carryover(
         diarias_items, today_iso, yesterday_iso
     )
+    # Dedup cobranzas por cliente (2026-06-25): auto_assign creaba un aid
+    # `cobranza-<cliente>-<fecha>` por día y el MISMO cliente se repetía como
+    # varias filas en la tabla. Elegimos UNA activity por cliente — la marcada
+    # hoy si existe; las demás se omiten del render.
+    _chosen_cob: dict = {}  # cliente -> (aid, marcada_hoy)
+    for _aid, _a in diarias_items:
+        if not _aid.startswith("cobranza-"):
+            continue
+        _nom = _a.get("nombre", "").replace("📞 Cobranza:", "").strip()
+        _cli = _nom.split(" — ")[0].strip() if " — " in _nom else _nom
+        _marcada = (_a.get("log") or {}).get(today_iso) is not None
+        _cur = _chosen_cob.get(_cli)
+        if _cur is None or (_marcada and not _cur[1]):
+            _chosen_cob[_cli] = (_aid, _marcada)
+    _cob_keep = {v[0] for v in _chosen_cob.values()}
+
     daily_rows = ""
     counts = {"hecha": 0, "parcial": 0, "no": 0, "sin": 0}
     for aid, a in diarias_items:
+        # omitir cobranzas duplicadas del mismo cliente (ver dedup arriba)
+        if aid.startswith("cobranza-") and aid not in _cob_keep:
+            continue
         rec = (a.get("log") or {}).get(today_iso)
         meta = a.get("meta")
         if rec is None:
