@@ -2952,6 +2952,91 @@ def _refresh_envios_jose(fecha: date | None = None) -> dict[str, Any]:
 CAJA_CHICA_ALERTA_ROJO = 30.0  # Phase V: alerta cuando ≤ $30
 
 
+def _jose_actividades_items(email: str) -> list[dict[str, Any]]:
+    """Items del card para las actividades diarias/semanales que gerencia DELEGA
+    a José (2026-06-25). Se ven y se marcan dentro de su card de ruta (no recibe
+    el check-in normal). Devuelve [] si no tiene ninguna (no satura el card).
+    Reusa los ids estado__/valor__/razon__/avance__/notas__ del check-in."""
+    try:
+        wk = activity_state.get_week(email)
+    except Exception:
+        return []
+    acts = wk.get("activities", {})
+    diarias = [
+        (aid, a) for aid, a in acts.items()
+        if a.get("tipo") == "diaria" and not aid.startswith("cobranza-")
+    ]
+    semanales = [
+        (aid, a) for aid, a in acts.items()
+        if a.get("tipo") != "diaria"
+        and activity_state.task_effective_status(a) != "finalizada"
+    ]
+    if not diarias and not semanales:
+        return []
+
+    items: list[dict[str, Any]] = [{
+        "type": "TextBlock",
+        "text": "📋 Actividades asignadas",
+        "size": "ExtraLarge",
+        "weight": "Bolder",
+        "color": "Accent",
+    }, {
+        "type": "TextBlock",
+        "text": "Tareas que te asignó gerencia. Marcalas acá.",
+        "wrap": True, "isSubtle": True, "size": "Small", "spacing": "None",
+    }]
+    for aid, a in diarias:
+        meta = a.get("meta")
+        items.append({
+            "type": "TextBlock",
+            "text": f"**{a.get('nombre', aid)}**" + (f" (meta {meta})" if meta else ""),
+            "wrap": True, "spacing": "Medium", "weight": "Bolder",
+        })
+        items.append({
+            "type": "Input.ChoiceSet", "id": f"estado__{aid}", "style": "expanded",
+            "value": "skip",
+            "choices": [
+                {"title": "✅ Hecho", "value": "hecho"},
+                {"title": "⚠️ Parcial", "value": "parcial"},
+                {"title": "❌ No hecho", "value": "no_hecho"},
+                {"title": "— Saltar", "value": "skip"},
+            ],
+        })
+        items.append({
+            "type": "Input.Number", "id": f"valor__{aid}",
+            "placeholder": "¿Cuánto se hizo? (cantidad)", "min": 0,
+        })
+        items.append({
+            "type": "Input.Text", "id": f"razon__{aid}",
+            "placeholder": "Si Parcial o No hecho: ¿por qué?",
+        })
+    for aid, a in semanales:
+        current = a.get("avance") or 0
+        items.append({
+            "type": "TextBlock",
+            "text": f"**{a.get('nombre', aid)}** — avance actual {current:.0f}%",
+            "wrap": True, "spacing": "Medium", "weight": "Bolder",
+        })
+        items.append({
+            "type": "Input.Number", "id": f"avance__{aid}",
+            "placeholder": "Nuevo % avance (0-100)", "min": 0, "max": 100,
+        })
+        items.append({
+            "type": "Input.Text", "id": f"notas__{aid}",
+            "placeholder": "Notas (opcional)",
+        })
+    items.append({
+        "type": "ActionSet",
+        "actions": [{
+            "type": "Action.Submit",
+            "title": "💾 Guardar actividades",
+            "style": "positive",
+            "data": {"intent": "jose_marcar_actividades"},
+        }],
+    })
+    return items
+
+
 def _build_jose_ruta_card(
     user_email: str | None = None, skip_refresh: bool = False
 ) -> Activity:
@@ -3574,6 +3659,19 @@ def _build_jose_ruta_card(
         "items": cc_items,
     })
 
+    # Actividades diarias/semanales DELEGADAS por gerencia (2026-06-25): José
+    # las ve y marca acá. Vacío si no tiene ninguna (no satura el card).
+    _act_items = _jose_actividades_items(email)
+    if _act_items:
+        body.append({
+            "type": "Container",
+            "style": "emphasis",
+            "spacing": "ExtraLarge",
+            "separator": True,
+            "bleed": True,
+            "items": _act_items,
+        })
+
     # Asistencia / horario: ya NO va en el card de ruta (2026-06-23). José la
     # marca UNA sola vez al día en un card dedicado a las 17:10 (como Asistente 1
     # UIO/GYE) — ver send_jose_asistencia_card_job. Esto evita que el botón de
@@ -3781,6 +3879,56 @@ async def _handle_jose_intent(
 ) -> None:
     """Maneja todos los intents jose_* del card de ruta."""
     hoy_str = activity_state._today().isoformat()
+
+    if intent == "jose_marcar_actividades":
+        # Marca las actividades diarias/semanales delegadas por gerencia
+        # (2026-06-25). Solo procesa actividades — NO toca horario/caja/envíos.
+        wk = activity_state.get_week(email)
+        marcadas = 0
+        for aid, a in wk.get("activities", {}).items():
+            if a.get("tipo") == "diaria" and not aid.startswith("cobranza-"):
+                estado = (value.get(f"estado__{aid}") or "skip").strip()
+                if estado == "skip":
+                    continue
+                valor_raw = value.get(f"valor__{aid}")
+                razon = (value.get(f"razon__{aid}") or "").strip()
+                try:
+                    if estado == "hecho":
+                        valor = (float(valor_raw)
+                                 if valor_raw not in (None, "", "0")
+                                 else float(a.get("meta") or 1))
+                        activity_state.mark_daily(aid, valor, user_email=email, notas="")
+                    elif estado == "parcial":
+                        valor = float(valor_raw) if valor_raw not in (None, "") else 0.0
+                        activity_state.mark_daily(
+                            aid, valor, user_email=email,
+                            notas=razon or "Parcial (sin razón)")
+                    elif estado == "no_hecho":
+                        activity_state.mark_daily(
+                            aid, 0, user_email=email,
+                            notas=razon or "No realizada (sin razón)")
+                    marcadas += 1
+                except Exception as e:
+                    logger.warning("jose marcar actividad %s: %s", aid, e)
+            elif a.get("tipo") != "diaria":
+                avance_raw = value.get(f"avance__{aid}")
+                if avance_raw in (None, ""):
+                    continue
+                try:
+                    activity_state.set_weekly_progress(
+                        aid, float(avance_raw), user_email=email,
+                        notas=(value.get(f"notas__{aid}") or "").strip())
+                    marcadas += 1
+                except (TypeError, ValueError):
+                    pass
+        if marcadas:
+            await context.send_activity(
+                f"✅ Registré **{marcadas}** actividad(es). ¡Gracias, José!")
+        else:
+            await context.send_activity(
+                "👀 No marcaste ninguna actividad (todas en 'Saltar' o vacías).")
+        await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
+        return
 
     if intent == "jose_asistencia":
         _save_horario_from_form(value, email)
