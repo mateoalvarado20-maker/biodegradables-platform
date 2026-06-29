@@ -5138,7 +5138,7 @@ def _schedule_jobs() -> None:
     # Phase M — Monthly recaps día 1: full recap mes anterior + proyección
     scheduler.add_job(
         _job_monthly_sales_recap,
-        CronTrigger(day=1, hour=9, minute=0, timezone=EC_TZ),
+        CronTrigger(day=1, hour=8, minute=0, timezone=EC_TZ),
         id="monthly_sales_recap_day1",
         replace_existing=True,
     )
@@ -5241,7 +5241,7 @@ def _schedule_jobs() -> None:
         "Jobs: checkin oficina mon-fri 16:30, sucursales mon-fri 17:10 + "
         "sat 12:30 (domingo NADA), reminders */5min, "
         "cobranzas mon-fri 7:30, "
-        "news_brief daily 6:00, monthly_recaps day 1 9:00+10:00, "
+        "news_brief daily 6:00, monthly_recaps day 1 8:00+10:00, "
         "consolidated_daily mon-fri 18:30, saturday_recap mon 8:00, "
         "jose_summary mon-sat 18:30 (card on-demand)"
     )
@@ -5264,7 +5264,7 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
         ("task_confirmations", _job_task_confirmations,
          lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (9, 0)),
         ("monthly_sales_recap", _job_monthly_sales_recap,
-         lambda now: now.day == 1 and (now.hour, now.minute) >= (9, 0)),
+         lambda now: now.day == 1 and (now.hour, now.minute) >= (8, 0)),
         ("monthly_activities_recap", _job_monthly_activities_recap,
          lambda now: now.day == 1 and (now.hour, now.minute) >= (10, 0)),
         # Check-ins: lun-vie oficina y sucursales; sáb solo sucursales.

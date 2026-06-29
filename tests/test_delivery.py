@@ -112,7 +112,7 @@ def test_horarios_de_jobs_configurados(bot):
         "auto_assign_cobranzas": ("day_of_week='mon-fri'", "hour='7'", "minute='30'"),
         # weekly_summaries DESHABILITADO 2026-06-29 (ya no se agenda)
         "daily_news_brief": ("hour='6'", "minute='0'"),
-        "monthly_sales_recap_day1": ("day='1'", "hour='9'"),
+        "monthly_sales_recap_day1": ("day='1'", "hour='8'"),
         "monthly_activities_recap_day1": ("day='1'", "hour='10'"),
         "apertura_caja_matinal": ("day_of_week='mon-fri'", "hour='8'", "minute='15'"),
         "consolidated_daily_summary": ("day_of_week='mon-fri'", "hour='18'", "minute='30'"),

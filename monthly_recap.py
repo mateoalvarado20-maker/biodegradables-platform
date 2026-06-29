@@ -72,47 +72,58 @@ def _build_sales_recap_html(year: int, month: int) -> str:
     period_start = date(year, month, 1)
     period_end = date(year, month, last_day)
 
-    # Pull data del mes
-    try:
-        ventas_mes = contifico_client.ventas_rango(period_start, period_end)
-    except Exception as e:
-        ventas_mes = {"error": str(e), "total": 0, "num_facturas": 0}
+    def _safe(fn, default):
+        try:
+            return fn()
+        except Exception:
+            return default
 
-    try:
-        top_clientes = contifico_client.top_clientes(period_start, period_end, n=10)
-    except Exception:
-        top_clientes = []
+    # Pull data del mes — TODO SIN IVA (subtotal)
+    ventas_mes = _safe(lambda: contifico_client.ventas_rango(period_start, period_end),
+                       {"subtotal": 0, "num_facturas": 0, "clientes_unicos": 0})
+    top_clientes = _safe(lambda: contifico_client.top_clientes(period_start, period_end, n=10), [])
+    top_vendedores = _safe(lambda: contifico_client.top_vendedores(period_start, period_end, n=5), [])
+    ventas_ciudad = _safe(lambda: contifico_client.ventas_por_ciudad(period_start, period_end),
+                          {"por_ciudad": {}})
+    top_cli_ciudad = _safe(lambda: contifico_client.top_clientes_por_ciudad(period_start, period_end, n=10),
+                           {"UIO": [], "GYE": []})
+    top_prod_ciudad = _safe(lambda: contifico_client.top_productos_por_ciudad(period_start, period_end, n=10),
+                            {"UIO": [], "GYE": []})
+    unidades = _safe(lambda: contifico_client.unidades_vendidas(period_start, period_end),
+                     {"unidades": 0, "productos_unicos": 0})
+    rango = _safe(lambda: contifico_client.clientes_por_rango(period_start, period_end),
+                  {"rangos": [], "total_ventas": 0, "total_clientes": 0})
+    actividad = _safe(lambda: contifico_client.clientes_actividad(period_end),
+                      {"activos": 0, "inactivos": 0, "inactivos_lista": []})
 
-    try:
-        top_vendedores = contifico_client.top_vendedores(period_start, period_end, n=5)
-    except Exception:
-        top_vendedores = []
-
-    try:
-        ventas_ciudad = contifico_client.ventas_por_ciudad(period_start, period_end)
-    except Exception:
-        ventas_ciudad = {"por_ciudad": {}}
-
-    # Comparación con mismo mes año anterior
+    # Crecimiento del MES (YoY: este mes vs mismo mes año anterior)
     py_year = year - 1
     py_start = date(py_year, month, 1)
     py_end = date(py_year, month, monthrange(py_year, month)[1])
-    try:
-        ventas_py = contifico_client.ventas_rango(py_start, py_end)
-    except Exception:
-        ventas_py = {"total": 0}
+    ventas_py = _safe(lambda: contifico_client.ventas_rango(py_start, py_end), {"subtotal": 0})
 
-    total_mes = ventas_mes.get("total") or 0
-    total_py = ventas_py.get("total") or 0
+    total_mes = ventas_mes.get("subtotal") or 0
+    total_py = ventas_py.get("subtotal") or 0
     growth_yoy = (
         ((total_mes - total_py) / total_py * 100)
         if total_py > 0 else None
     )
 
+    # Crecimiento del AÑO (YTD: enero→mes cerrado, vs mismo período año anterior)
+    ytd_cur = _safe(lambda: contifico_client.ventas_rango(date(year, 1, 1), period_end), {"subtotal": 0})
+    ytd_py = _safe(lambda: contifico_client.ventas_rango(date(py_year, 1, 1), py_end), {"subtotal": 0})
+    ytd_cur_v = ytd_cur.get("subtotal") or 0
+    ytd_py_v = ytd_py.get("subtotal") or 0
+    growth_ytd = ((ytd_cur_v - ytd_py_v) / ytd_py_v * 100) if ytd_py_v > 0 else None
+
+    # % de ventas concentrado en el top 10 de clientes (global, neto)
+    top10_total = sum((c.get("total") or 0) for c in top_clientes[:10])
+    pct_top10 = (top10_total / total_mes * 100) if total_mes > 0 else 0.0
+
     # Proyecciones del mes SIGUIENTE
     next_year, next_month = _next_month(year, month)
     try:
-        forecast_next = forecasting.forecast_baseline(next_year, next_month)
+        forecast_next = forecasting.forecast_baseline(next_year, next_month, neto=True)
     except Exception as e:
         forecast_next = {"error": str(e)}
 
@@ -138,12 +149,6 @@ def _build_sales_recap_html(year: int, month: int) -> str:
     nombre_mes_next = MESES_ES[next_month - 1].capitalize()
 
     # Top tablas
-    clientes_rows = "".join(
-        f'<tr><td>{c.get("cliente", "—")}</td>'
-        f'<td style="text-align:right;">${c.get("total", 0):,.0f}</td>'
-        f'<td style="text-align:right;color:#888;">{c.get("num_facturas", 0)}</td></tr>'
-        for c in top_clientes[:10]
-    )
     vendedores_rows = "".join(
         f'<tr><td>{v.get("vendedor", "—")}</td>'
         f'<td style="text-align:right;">${v.get("total", 0):,.0f}</td>'
@@ -179,14 +184,90 @@ def _build_sales_recap_html(year: int, month: int) -> str:
             f'Rango ± 15%. Mismo mes {py_year}: ${forecast_next.get("ventas_mismo_mes_anio_anterior", 0):,.0f}.</p>'
         )
 
-    growth_html = ""
-    if growth_yoy is not None:
-        color = "#2e7d32" if growth_yoy > 0 else "#c62828"
-        arrow = "▲" if growth_yoy > 0 else "▼"
-        growth_html = (
-            f' <span style="color:{color};font-weight:600;">'
-            f'{arrow} {abs(growth_yoy):.1f}% vs {nombre_mes} {py_year}</span>'
+    def _growth_card(titulo, sub, cur_label, cur_v, prev_label, prev_v, pct):
+        if pct is None:
+            badge = '<span style="color:#888;font-size:24px;font-weight:800;">s/d</span>'
+            note = f'Sin datos de {prev_label} para comparar.'
+        else:
+            col = "#2e7d32" if pct > 0 else "#c62828"
+            arr = "▲" if pct > 0 else "▼"
+            verbo = "más" if pct > 0 else "menos"
+            badge = (f'<span style="color:{col};font-size:26px;font-weight:800;">'
+                     f'{arr} {abs(pct):.1f}%</span>')
+            note = f'Vendimos {abs(pct):.1f}% {verbo} que {prev_label}.'
+        return (
+            f'<td width="50%" valign="top" bgcolor="#f4f8f4" '
+            f'style="padding:14px 16px;border:1px solid #d9e6d9;border-radius:8px;">'
+            f'<div style="font-size:11px;color:#5e6b5e;text-transform:uppercase;'
+            f'font-weight:700;letter-spacing:.5px;">{titulo}</div>'
+            f'<div style="font-size:12px;color:#888;margin-bottom:8px;">{sub}</div>'
+            f'<div style="margin:4px 0;">{badge}</div>'
+            f'<div style="font-size:13px;color:#333;margin-top:10px;">'
+            f'{cur_label}: <b>${cur_v:,.0f}</b></div>'
+            f'<div style="font-size:13px;color:#888;">{prev_label}: ${prev_v:,.0f}</div>'
+            f'<div style="font-size:12px;color:#555;margin-top:8px;">{note}</div>'
+            f'</td>'
         )
+
+    mes_card = _growth_card(
+        "Crecimiento del mes",
+        f"{nombre_mes} {year} vs {nombre_mes} {py_year}",
+        f"{nombre_mes} {year}", total_mes,
+        f"{nombre_mes} {py_year}", total_py,
+        growth_yoy,
+    )
+    anio_card = _growth_card(
+        "Crecimiento del año",
+        f"Acumulado ene–{nombre_mes} {year} vs ene–{nombre_mes} {py_year}",
+        f"Ene–{nombre_mes} {year}", ytd_cur_v,
+        f"Ene–{nombre_mes} {py_year}", ytd_py_v,
+        growth_ytd,
+    )
+
+    # Top 10 clientes por ciudad
+    def _cli_rows(lst):
+        return "".join(
+            f'<tr><td>{c.get("cliente","—")}</td>'
+            f'<td style="text-align:right;">${c.get("total",0):,.0f}</td>'
+            f'<td style="text-align:right;color:#888;">{c.get("num_facturas",0)}</td></tr>'
+            for c in lst[:10]
+        ) or '<tr><td colspan="3" style="color:#888;">Sin datos</td></tr>'
+    cli_uio_rows = _cli_rows(top_cli_ciudad.get("UIO", []))
+    cli_gye_rows = _cli_rows(top_cli_ciudad.get("GYE", []))
+
+    # Top 10 productos por ciudad
+    def _prod_rows(lst):
+        return "".join(
+            f'<tr><td>{p.get("producto","—")}</td>'
+            f'<td style="text-align:right;">{p.get("cantidad",0):,.0f}</td>'
+            f'<td style="text-align:right;">${p.get("revenue",0):,.0f}</td></tr>'
+            for p in lst[:10]
+        ) or '<tr><td colspan="3" style="color:#888;">Sin datos</td></tr>'
+    prod_uio_rows = _prod_rows(top_prod_ciudad.get("UIO", []))
+    prod_gye_rows = _prod_rows(top_prod_ciudad.get("GYE", []))
+
+    # Leyenda de la dona (rangos de cliente)
+    _dona_colors = {">$1000": "#0e7c39", "$500–1000": "#43a047",
+                    "$100–500": "#9ccc65", "<$100": "#e0e0e0"}
+    rango_rows = "".join(
+        f'<tr><td><span style="display:inline-block;width:11px;height:11px;'
+        f'background:{_dona_colors.get(r["rango"], "#999")};border-radius:2px;margin-right:6px;"></span>'
+        f'{r["rango"]}</td>'
+        f'<td style="text-align:right;">{r["clientes"]}</td>'
+        f'<td style="text-align:right;">${r["ventas"]:,.0f}</td>'
+        f'<td style="text-align:right;font-weight:600;">{r["pct_ventas"]:.1f}%</td></tr>'
+        for r in rango.get("rangos", [])
+    )
+
+    # Inactivos (lista corta para no saturar)
+    inact_lista = actividad.get("inactivos_lista", [])
+    inact_preview = ", ".join(inact_lista[:15])
+    if len(inact_lista) > 15:
+        inact_preview += f" … (+{len(inact_lista) - 15} más)"
+
+    # Tickets por ciudad (ya vienen netos)
+    uio_ticket = uio.get("ticket_promedio", 0)
+    gye_ticket = gye.get("ticket_promedio", 0)
 
     css = """
     body{font-family:'Segoe UI',Arial,sans-serif;color:#2c2c2c;max-width:780px;margin:0;padding:18px;}
@@ -206,18 +287,33 @@ def _build_sales_recap_html(year: int, month: int) -> str:
 <p>Hola Daniel y Gabriela,<br>acá el resumen comercial del mes recién cerrado y
 las proyecciones para {nombre_mes_next}.</p>
 
+<p style="color:#888;font-size:12px;margin:2px 0 0;">Todos los montos son <b>sin IVA</b> (subtotal).</p>
+
 <h3>💰 Ventas del mes</h3>
 <div class="kpi-box">
-  <div style="font-size:11px;color:#5e6b5e;text-transform:uppercase;">Total facturado</div>
+  <div style="font-size:11px;color:#5e6b5e;text-transform:uppercase;">Total facturado (sin IVA)</div>
   <div style="font-size:28px;font-weight:700;color:#0e7c39;">
-    ${total_mes:,.0f}{growth_html}
+    ${total_mes:,.0f}
   </div>
   <div style="color:#555;font-size:13px;margin-top:6px;">
     {ventas_mes.get("num_facturas", 0)} facturas · Ticket promedio
     ${ventas_mes.get("ticket_promedio", 0):,.0f} ·
     {ventas_mes.get("clientes_unicos", 0)} clientes únicos
   </div>
+  <div style="color:#555;font-size:13px;margin-top:6px;">
+    📦 <b>{unidades.get("unidades", 0):,.0f}</b> unidades vendidas ·
+    {unidades.get("productos_unicos", 0)} productos distintos
+  </div>
 </div>
+
+<h3>📈 Crecimiento</h3>
+<table width="100%" style="border-collapse:separate;border-spacing:10px 0;">
+<tr>{mes_card}{anio_card}</tr>
+</table>
+<p style="color:#888;font-size:11px;margin:4px 0 0;">
+  <b>Mes</b> = {nombre_mes} {year} comparado con {nombre_mes} {py_year}. ·
+  <b>Año</b> = todo lo vendido de enero a {nombre_mes} {year}, comparado con el
+  mismo tramo de {py_year}.</p>
 
 <h3>🏙️ Por ciudad</h3>
 <table>
@@ -225,11 +321,11 @@ las proyecciones para {nombre_mes_next}.</p>
 <tr><td>Quito (UIO)</td>
     <td style="text-align:right;">${uio.get("total", 0):,.0f}</td>
     <td style="text-align:right;color:#888;">{uio.get("num_facturas", 0)}</td>
-    <td style="text-align:right;">${(uio.get("total", 0) / uio.get("num_facturas", 1) if uio.get("num_facturas") else 0):,.0f}</td></tr>
+    <td style="text-align:right;">${uio_ticket:,.0f}</td></tr>
 <tr><td>Guayaquil (GYE)</td>
     <td style="text-align:right;">${gye.get("total", 0):,.0f}</td>
     <td style="text-align:right;color:#888;">{gye.get("num_facturas", 0)}</td>
-    <td style="text-align:right;">${(gye.get("total", 0) / gye.get("num_facturas", 1) if gye.get("num_facturas") else 0):,.0f}</td></tr>
+    <td style="text-align:right;">${gye_ticket:,.0f}</td></tr>
 <tr style="background:#f4faf6;font-weight:700;border-top:2px solid #0e7c39;">
     <td>TOTAL</td>
     <td style="text-align:right;color:#0e7c39;">${(uio.get("total", 0) + gye.get("total", 0)):,.0f}</td>
@@ -237,15 +333,59 @@ las proyecciones para {nombre_mes_next}.</p>
     <td style="text-align:right;">${((uio.get("total", 0) + gye.get("total", 0)) / (uio.get("num_facturas", 0) + gye.get("num_facturas", 0)) if (uio.get("num_facturas", 0) + gye.get("num_facturas", 0)) > 0 else 0):,.0f}</td></tr>
 </table>
 
-<h3>👥 Top 10 clientes del mes</h3>
+<h3>🍩 Clientes por rango de compra (sin IVA)</h3>
+<p style="color:#555;font-size:13px;margin:4px 0;">
+  Cada gajo de la dona es el <b>% de ventas</b> que aporta cada rango; entre
+  paréntesis, cuántos clientes hay en ese rango.</p>
+<div style="text-align:center;margin:8px 0;"><img src="cid:chart_dona" alt="Clientes por rango" style="max-width:420px;width:100%;"></div>
 <table>
-<tr><th>Cliente</th><th style="text-align:right;">Total</th><th style="text-align:right;">Facturas</th></tr>
-{clientes_rows or '<tr><td colspan="3" style="color:#888;">Sin datos</td></tr>'}
+<tr><th>Rango (compra del mes)</th><th style="text-align:right;">Clientes</th><th style="text-align:right;">Ventas</th><th style="text-align:right;">% ventas</th></tr>
+{rango_rows or '<tr><td colspan="4" style="color:#888;">Sin datos</td></tr>'}
 </table>
+
+<h3>🎯 Concentración de ventas</h3>
+<div class="kpi-box">
+  Nuestros <b>top 10 clientes</b> concentran el
+  <span style="font-size:20px;font-weight:700;color:#0e7c39;">{pct_top10:.1f}%</span>
+  de las ventas del mes.
+</div>
+
+<h3>👥 Top 10 clientes — Quito (UIO)</h3>
+<table>
+<tr><th>Cliente</th><th style="text-align:right;">Ventas</th><th style="text-align:right;">Facturas</th></tr>
+{cli_uio_rows}
+</table>
+
+<h3>👥 Top 10 clientes — Guayaquil (GYE)</h3>
+<table>
+<tr><th>Cliente</th><th style="text-align:right;">Ventas</th><th style="text-align:right;">Facturas</th></tr>
+{cli_gye_rows}
+</table>
+
+<h3>📦 Top 10 productos — Quito (UIO)</h3>
+<table>
+<tr><th>Producto</th><th style="text-align:right;">Unidades</th><th style="text-align:right;">Venta</th></tr>
+{prod_uio_rows}
+</table>
+
+<h3>📦 Top 10 productos — Guayaquil (GYE)</h3>
+<table>
+<tr><th>Producto</th><th style="text-align:right;">Unidades</th><th style="text-align:right;">Venta</th></tr>
+{prod_gye_rows}
+</table>
+
+<h3>🔄 Clientes activos / inactivos (últimos 3 meses)</h3>
+<div class="kpi-box">
+  ✅ <b style="color:#2e7d32;">{actividad.get("activos", 0)}</b> clientes activos
+  (facturaron en los últimos 3 meses) ·
+  ⚠️ <b style="color:#c62828;">{actividad.get("inactivos", 0)}</b> se enfriaron
+  (compraban antes, sin compras en los últimos 3 meses).
+  {f'<div style="font-size:12px;color:#777;margin-top:6px;">Inactivos: {inact_preview}</div>' if inact_preview else ''}
+</div>
 
 <h3>🏆 Top 5 vendedores</h3>
 <table>
-<tr><th>Vendedor</th><th style="text-align:right;">Total</th><th style="text-align:right;">Facturas</th></tr>
+<tr><th>Vendedor</th><th style="text-align:right;">Ventas</th><th style="text-align:right;">Facturas</th></tr>
 {vendedores_rows or '<tr><td colspan="3" style="color:#888;">Sin datos</td></tr>'}
 </table>
 
@@ -268,20 +408,81 @@ Recap mensual automático generado por el Activities Bot · {datetime.now(LOCAL_
 </body></html>"""
 
 
+def _generate_donut_png(rangos: list[dict]) -> bytes | None:
+    """Dona de % de ventas por rango de cliente. None si matplotlib no está
+    disponible o si no hay datos (el correo igual lleva la tabla)."""
+    data = [r for r in (rangos or []) if (r.get("ventas") or 0) > 0]
+    if not data:
+        return None
+    try:
+        import io
+
+        import matplotlib
+        matplotlib.use("Agg")  # sin GUI
+        import matplotlib.pyplot as plt
+
+        colors_map = {">$1000": "#0e7c39", "$500–1000": "#43a047",
+                      "$100–500": "#9ccc65", "<$100": "#bdbdbd"}
+        labels = [f'{r["rango"]} ({r["clientes"]} cli.)' for r in data]
+        sizes = [r["ventas"] for r in data]
+        colors = [colors_map.get(r["rango"], "#999999") for r in data]
+        fig, ax = plt.subplots(figsize=(5.4, 3.8), dpi=110)
+        wedges, _t, autotexts = ax.pie(
+            sizes, colors=colors, startangle=90, counterclock=False,
+            autopct=lambda p: f"{p:.0f}%", pctdistance=0.78,
+            wedgeprops=dict(width=0.42, edgecolor="white"),
+        )
+        for at in autotexts:
+            at.set_color("#222222")
+            at.set_fontsize(9)
+            at.set_fontweight("bold")
+        ax.legend(wedges, labels, loc="center left", bbox_to_anchor=(0.95, 0.5),
+                  fontsize=8, frameon=False)
+        ax.axis("equal")
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight")
+        plt.close(fig)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 def send_sales_recap(year: int | None = None, month: int | None = None) -> dict:
     """Envía el sales recap del mes especificado (default: mes anterior)."""
+    from calendar import monthrange
     if year is None or month is None:
         year, month = _previous_month()
     nombre_mes = MESES_ES[month - 1].capitalize()
     html = _build_sales_recap_html(year, month)
     subject = f"📊 Recap de ventas — {nombre_mes} {year}"
-    graph_mail.send(
+
+    # Dona de clientes por rango (mismo período = mes cerrado). Cache de
+    # get_documentos hace que este pull reuse el del HTML.
+    inline_images = None
+    try:
+        last_day = monthrange(year, month)[1]
+        rango = contifico_client.clientes_por_rango(
+            date(year, month, 1), date(year, month, last_day))
+        png = _generate_donut_png(rango.get("rangos", []))
+        if png:
+            inline_images = [{
+                "name": "dona_clientes.png",
+                "content_bytes": png,
+                "content_id": "chart_dona",
+                "content_type": "image/png",
+            }]
+    except Exception:
+        inline_images = None
+
+    graph_mail.send_email(
+        RECAP_TO,
+        subject,
+        html,
         from_user=RECAP_FROM,
-        to=RECAP_TO,
-        subject=subject,
-        html_body=html,
+        inline_images=inline_images,
     )
-    return {"ok": True, "to": RECAP_TO, "subject": subject, "period": f"{year}-{month:02d}"}
+    return {"ok": True, "to": RECAP_TO, "subject": subject, "period": f"{year}-{month:02d}",
+            "con_grafico": bool(inline_images)}
 
 
 # ===================== MIDMONTH STATUS (Quincenal — día 15) =====================
