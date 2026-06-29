@@ -1731,6 +1731,62 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
             f'<p style="margin:2px 0;font-size:12px;color:#666">Razón: {escape(razon)}</p>'
         )
 
+    # Actividades delegadas por gerencia (2026-06-25): que Daniel vea en el 6:30
+    # lo que José marcó de las tareas asignadas. Diarias (no cobranza) +
+    # semanales no finalizadas. Vacío si no tiene ninguna.
+    try:
+        _acts_jose = activity_state.get_week(JOSE_EMAIL_CONS).get("activities", {})
+    except Exception:
+        _acts_jose = {}
+    _diar = [(aid, a) for aid, a in _acts_jose.items()
+             if a.get("tipo") == "diaria" and not aid.startswith("cobranza-")]
+    _sem = [(aid, a) for aid, a in _acts_jose.items()
+            if a.get("tipo") != "diaria"
+            and activity_state.task_effective_status(a) != "finalizada"]
+    actividades_html = ""
+    if _diar or _sem:
+        _filas = ""
+        for aid, a in _diar:
+            rec = (a.get("log") or {}).get(today_iso)
+            meta = a.get("meta")
+            if rec is None:
+                ic, est, col, det = "⏳", "Sin marcar", "#999", "—"
+            else:
+                val = rec.get("valor", 0) or 0
+                nota = (rec.get("notas") or "").strip()
+                if val == 0:
+                    ic, est, col = "❌", "No hecha", "#c62828"
+                elif meta and val < meta:
+                    ic, est, col = "⚠️", "Parcial", "#ef6c00"
+                else:
+                    ic, est, col = "✅", "Hecha", "#2e7d32"
+                det = (f"{val:g}" + (f"/{meta}" if meta else "")) if val else ""
+                if nota:
+                    det += (" · " if det else "") + f'<i>"{escape(nota)}"</i>'
+                det = det or "—"
+            _filas += (
+                f'<tr><td style="padding:4px 6px">{escape(a.get("nombre", aid))}</td>'
+                f'<td style="padding:4px 6px;color:{col};font-weight:600;white-space:nowrap">{ic} {est}</td>'
+                f'<td style="padding:4px 6px;font-size:12px;color:#555">{det}</td></tr>'
+            )
+        for aid, a in _sem:
+            av = a.get("avance") or 0
+            col = "#2e7d32" if av >= 100 else "#ef6c00"
+            _filas += (
+                f'<tr><td style="padding:4px 6px">{escape(a.get("nombre", aid))}</td>'
+                f'<td style="padding:4px 6px;color:{col};font-weight:600;white-space:nowrap">📊 {av:.0f}%</td>'
+                f'<td style="padding:4px 6px;font-size:12px;color:#555">proyecto</td></tr>'
+            )
+        actividades_html = (
+            '<p style="margin:8px 0 4px;font-weight:600;color:#444">📋 Actividades asignadas</p>'
+            '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:10px">'
+            '<tr style="background:#f0f0f0">'
+            '<th style="padding:4px 6px;text-align:left">Actividad</th>'
+            '<th style="padding:4px 6px;text-align:left">Estado</th>'
+            '<th style="padding:4px 6px;text-align:left">Detalle</th></tr>'
+            + _filas + '</table>'
+        )
+
     # Phase V (2026-06-11): mismo estilo que _collaborator_block_html_v2
     # (header verde con bg sólido, body con bg suave, border 2px verde).
     header_color = "#0e7c39"  # mismo verde corporativo que los Asistentes 1
@@ -1746,6 +1802,7 @@ def _jose_consolidated_block_html(today_iso: str | None = None) -> str:
         f'<p style="margin:0 0 10px 0;font-size:13px;color:#555;">'
         f'{fecha_fmt}  ·  {summary_chips}</p>'
         f'{asistencia_html}'
+        f'{actividades_html}'
         f'{envios_html}'
         f'{caja_html}'
         f'</div>'
