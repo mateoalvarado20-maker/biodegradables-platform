@@ -500,14 +500,15 @@ def q_ventas_ayer() -> dict:
         lambda: contifico_client.ventas_dia(ayer_dt), {},
         label="Ventas de ayer (Contifico)", critical=True,
     )
-    return {"[VentasAyer]": data.get("total")}
+    # Ventas SIN IVA (subtotal) — pedido gerencia 2026-06-29.
+    return {"[VentasAyer]": data.get("subtotal")}
 
 
 def q_ventas_dia() -> dict:
     """Ventas del día actual (para el reporte EOD)."""
     data = _safe(lambda: contifico_client.ventas_dia(date.today()), {})
     return {
-        "[VentasDia]": data.get("total"),
+        "[VentasDia]": data.get("subtotal"),  # SIN IVA (subtotal)
         "[Ticket]": data.get("ticket_promedio"),
         "[Productos]": data.get("num_facturas"),
         "[Clientes]": data.get("clientes_unicos"),

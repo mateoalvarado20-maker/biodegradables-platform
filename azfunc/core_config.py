@@ -169,6 +169,161 @@ def holidays_for(year: int) -> set[date]:
     return set(days)
 
 
+# ===== Identidad de empresa y directorio de personas (Fase 1 demo/multiempresa) =====
+# Antes, todo esto vivía hardcodeado en ask_agent.py / daily_report.py /
+# news_brief.py (nombres reales de personas, empresa, sucursales). Ahora es
+# config: los valores DEFAULT son idénticos a los históricos de Biodegradables
+# (lo fija test_tenant_config_biodegradables), y se reemplazan por los del tenant
+# cuando TENANT_CONFIG_SOURCE=yaml (ver _maybe_load_from_tenant).
+COMPANY_NAME = os.environ.get("COMPANY_NAME", "Biodegradables Ecuador").strip()
+COMPANY_SECTOR = os.environ.get(
+    "COMPANY_SECTOR", "distribución de productos biodegradables"
+).strip()
+# Texto corto de sucursales para los prompts ("Quito (UIO) y Guayaquil (GYE)").
+COMPANY_SUCURSALES_DESC = os.environ.get(
+    "COMPANY_SUCURSALES_DESC", "Quito (UIO) y Guayaquil (GYE)"
+).strip()
+
+# Nombre legible de cada código de sucursal.
+SUCURSAL_NAMES: dict[str, str] = {"UIO": "Quito", "GYE": "Guayaquil"}
+
+# Forma canónica de una persona: todos los atributos presentes (con defaults).
+# Normalizar garantiza que el PEOPLE legacy y el cargado desde YAML tengan la
+# MISMA forma (lo verifica test_tenant_config_biodegradables).
+_PEOPLE_DEFAULTS: dict = {
+    "name": "", "role": "colaborador", "sucursal": None,
+    "asistente_num": None, "supervisor": False, "rotativo_sabado": False,
+}
+
+
+def _normalize_people(raw: dict[str, dict]) -> dict[str, dict]:
+    return {
+        e.strip().lower(): {**_PEOPLE_DEFAULTS, **attrs}
+        for e, attrs in raw.items()
+    }
+
+
+# Directorio de personas. Clave = email (lower). Atributos:
+#   name           nombre humano
+#   role           gerente_general | gerente_comercial | analista | asistente | chofer
+#   sucursal       "UIO" | "GYE" | None (oficina / sin sucursal)
+#   asistente_num  1 | 2 | None  (numeración del rótulo "Asistente N")
+#   supervisor     bool — supervisa al equipo, NO trackea actividades propias
+#   rotativo_sabado bool — entra en la rotación de sábados de su sucursal
+_PEOPLE_RAW: dict[str, dict] = {
+    "dsanchez@biodegradablesecuador.com": {
+        "name": "Daniel Sánchez", "role": "gerente_general",
+        "sucursal": None, "supervisor": True,
+    },
+    "gsanchez@biodegradablesecuador.com": {
+        "name": "Gabriela Sánchez", "role": "gerente_comercial", "sucursal": None,
+    },
+    "malvarado@biodegradablesecuador.com": {
+        "name": "Mateo Alvarado", "role": "analista", "sucursal": None,
+    },
+    "info@biodegradablesecuador.com": {
+        "name": "Gabriela Bravo", "role": "asistente", "sucursal": "GYE",
+        "asistente_num": 1, "rotativo_sabado": True,
+    },
+    "quito@biodegradablesecuador.com": {
+        "name": "Gladys López", "role": "asistente", "sucursal": "UIO",
+        "asistente_num": 1,
+    },
+    "jsolorzano@biodegradablesecuador.com": {
+        "name": "José Solórzano", "role": "chofer", "sucursal": "GYE",
+        "asistente_num": 2, "rotativo_sabado": True,
+    },
+}
+PEOPLE: dict[str, dict] = _normalize_people(_PEOPLE_RAW)
+
+
+def _person(email: str | None) -> dict:
+    return PEOPLE.get((email or "").strip().lower(), {})
+
+
+def display_name_for(email: str | None) -> str:
+    """Nombre con rótulo de asistente entre paréntesis, igual al EMAIL_TO_NAME
+    histórico: 'Gabriela Bravo (Asistente 1 GYE)'. Personas sin sucursal devuelven
+    el nombre a secas; emails desconocidos, ''."""
+    p = _person(email)
+    if not p:
+        return ""
+    name = p["name"]
+    num, suc = p.get("asistente_num"), p.get("sucursal")
+    if num and suc:
+        return f"{name} (Asistente {num} {suc})"
+    return name
+
+
+def sucursal_for(email: str | None) -> str | None:
+    return _person(email).get("sucursal")
+
+
+def sucursal_name_for(email: str | None) -> str:
+    return SUCURSAL_NAMES.get(sucursal_for(email) or "", "")
+
+
+def role_for(email: str | None) -> str | None:
+    return _person(email).get("role")
+
+
+def gerente_general_name() -> str:
+    for p in PEOPLE.values():
+        if p.get("role") == "gerente_general":
+            return p["name"]
+    return ""
+
+
+def email_by_role(role: str) -> str:
+    """Primer email con ese role ('gerente_general', 'gerente_comercial',
+    'analista'...). '' si no hay."""
+    return next((e for e, p in PEOPLE.items() if p.get("role") == role), "")
+
+
+def asistente_email_for_sucursal(sucursal: str) -> str:
+    """Email del asistente (num 1) de una sucursal ('UIO'/'GYE'). '' si no hay."""
+    return next(
+        (e for e, p in PEOPLE.items()
+         if p.get("role") == "asistente" and p.get("sucursal") == sucursal),
+        "",
+    )
+
+
+def chofer_email() -> str:
+    return next((e for e, p in PEOPLE.items() if p.get("role") == "chofer"), "")
+
+
+def email_domain() -> str:
+    """Dominio de correo del tenant, deducido de los destinatarios conocidos.
+    Para sufijar pseudo-emails de usuarios sin identificar con el dominio CORRECTO
+    (no el del cliente real). '' si no se puede deducir."""
+    for e in [*JEFE, MIO, *PEOPLE.keys()]:
+        if e and "@" in e:
+            return e.split("@", 1)[1]
+    return ""
+
+
+def _build_identity() -> None:
+    """(Re)deriva los conjuntos de identidad desde PEOPLE. Llamado al import y
+    después de cargar el tenant (yaml)."""
+    global EMAIL_TO_NAME, SUPERVISORS_ONLY_EMAILS, ASISTENTE_EMAILS
+    global CHOFER_EMAILS, ROTATIVOS_SABADO_EMAILS
+    EMAIL_TO_NAME = {e: display_name_for(e) for e in PEOPLE}
+    SUPERVISORS_ONLY_EMAILS = {e for e, p in PEOPLE.items() if p.get("supervisor")}
+    ASISTENTE_EMAILS = {e for e, p in PEOPLE.items() if p.get("role") == "asistente"}
+    CHOFER_EMAILS = {e for e, p in PEOPLE.items() if p.get("role") == "chofer"}
+    ROTATIVOS_SABADO_EMAILS = {e for e, p in PEOPLE.items() if p.get("rotativo_sabado")}
+
+
+# Inicializa los derivados (se recalculan en _maybe_load_from_tenant si yaml).
+EMAIL_TO_NAME: dict[str, str] = {}
+SUPERVISORS_ONLY_EMAILS: set[str] = set()
+ASISTENTE_EMAILS: set[str] = set()
+CHOFER_EMAILS: set[str] = set()
+ROTATIVOS_SABADO_EMAILS: set[str] = set()
+_build_identity()
+
+
 # ===== Switch multiempresa (opt-in, default LEGACY) ====================
 # Fase F0/F1 del plan multiempresa (ver PROPUESTA_ARQUITECTURA_MULTIEMPRESA.md).
 #
@@ -189,6 +344,7 @@ def _maybe_load_from_tenant() -> None:
     global CHECKIN_WEEKDAY_OFICINA, CHECKIN_WEEKDAY_SUCURSALES, CHECKIN_SATURDAY_SUCURSALES
     global META_FACTOR, PY_OVERRIDE, EC_HOLIDAYS
     global CUMPL_VERDE, CUMPL_AMARILLO, AYER_VERDE, AYER_AMARILLO, MORA_VERDE, MORA_AMARILLO
+    global COMPANY_NAME, COMPANY_SECTOR, COMPANY_SUCURSALES_DESC, SUCURSAL_NAMES, PEOPLE
 
     from core.config.loader import load_tenant_config
     from core.config.schema import parse_hhmm
@@ -226,6 +382,28 @@ def _maybe_load_from_tenant() -> None:
     MORA_AMARILLO = t.mora_amarillo
 
     EC_HOLIDAYS = {year: list(days) for year, days in cfg.holidays.items()}
+
+    # Identidad de empresa + directorio de personas (Fase 1).
+    COMPANY_NAME = cfg.display_name
+    if cfg.company.sector:
+        COMPANY_SECTOR = cfg.company.sector
+    if cfg.company.sucursales_desc:
+        COMPANY_SUCURSALES_DESC = cfg.company.sucursales_desc
+    if cfg.company.sucursal_names:
+        SUCURSAL_NAMES = dict(cfg.company.sucursal_names)
+    if cfg.people:
+        PEOPLE = _normalize_people({
+            p.email: {
+                "name": p.name,
+                "role": p.role,
+                "sucursal": p.sucursal,
+                "asistente_num": p.asistente_num,
+                "supervisor": p.supervisor,
+                "rotativo_sabado": p.rotativo_sabado,
+            }
+            for p in cfg.people
+        })
+    _build_identity()
     logger.info("core_config: valores cargados desde tenants/%s/config.yaml", slug)
 
 

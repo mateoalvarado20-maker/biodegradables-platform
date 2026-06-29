@@ -44,6 +44,104 @@ def _is_retriable_status(status: int) -> bool:
     return status == 408 or status == 429 or status >= 500
 
 
+# ===== Sandbox DEMO (Fase 0 anti-fuga) ===============================
+# Gated por DEMO_MODE=1. Cuando está activo, NINGÚN correo puede salir a una
+# dirección real: todos los destinatarios se redirigen a la bandeja demo, el
+# remitente se reescribe al buzón demo, y se ABORTA (fail-closed) si cualquier
+# dirección resuelta no pertenece al dominio demo permitido.
+#
+# Sin el flag (default en producción), TODO esto es no-op: `_apply_demo_sandbox`
+# devuelve sus argumentos sin tocar y el guard de `_send_with_retry` no corre.
+# Resultado: cero cambios de comportamiento cuando DEMO_MODE está ausente.
+#
+# Env vars:
+#   DEMO_MODE=1                       activa el sandbox
+#   DEMO_EMAIL_DOMAIN=andexdemo.com   único dominio permitido (fail-closed)
+#   DEMO_EMAIL_TO=demo@andexdemo.com  bandeja(s) destino (coma-separadas)
+#   DEMO_FROM_USER=demo@andexdemo.com buzón remitente del demo
+#   DEMO_SUBJECT_PREFIX="[DEMO] "     prefijo de asunto
+
+
+def is_demo_mode() -> bool:
+    return os.environ.get("DEMO_MODE", "").strip() == "1"
+
+
+def _demo_domain() -> str:
+    raw = os.environ.get("DEMO_EMAIL_DOMAIN", "andexdemo.com").strip().lower()
+    return raw.lstrip("@")
+
+
+def _demo_inbox() -> list[str]:
+    raw = os.environ.get("DEMO_EMAIL_TO", "demo@andexdemo.com")
+    return [e.strip() for e in raw.split(",") if e.strip()]
+
+
+def _demo_from_user() -> str:
+    return os.environ.get("DEMO_FROM_USER", "demo@andexdemo.com").strip()
+
+
+def _demo_subject_prefix() -> str:
+    return os.environ.get("DEMO_SUBJECT_PREFIX", "[DEMO] ")
+
+
+def _assert_demo_domain(addresses: list[str]) -> None:
+    """Fail-closed: aborta si alguna dirección no pertenece al dominio demo.
+
+    Es la última red de seguridad: aunque alguien configure mal DEMO_EMAIL_TO
+    con un dominio real, o un llamador construya un payload a mano, el envío se
+    aborta antes de tocar la red."""
+    domain = _demo_domain()
+    for addr in addresses:
+        a = (addr or "").strip().lower()
+        if not a:
+            continue
+        if not a.endswith("@" + domain):
+            raise RuntimeError(
+                f"[DEMO_MODE] Envío ABORTADO: el destino '{addr}' no pertenece "
+                f"al dominio demo '@{domain}'. Revisá DEMO_EMAIL_TO / "
+                "DEMO_FROM_USER. El sandbox falla cerrado para no filtrar datos "
+                "reales de ningún cliente."
+            )
+
+
+def _apply_demo_sandbox(
+    from_user: str, to: list[str], cc: list[str], subject: str
+) -> tuple[str, list[str], list[str], str]:
+    """Reescribe remitente + destinatarios + asunto para el sandbox demo.
+
+    Devuelve `(from_user, to, cc, subject)` seguros. No-op si DEMO_MODE off.
+    En DEMO_MODE: el remitente pasa a DEMO_FROM_USER, TODOS los destinatarios
+    (incluido CC) se reemplazan por DEMO_EMAIL_TO, y el asunto lleva el prefijo.
+    """
+    if not is_demo_mode():
+        return from_user, to, cc, subject
+    demo_from = _demo_from_user()
+    demo_to = _demo_inbox()
+    # Validar la config demo ANTES de reescribir (fail-closed ante mala config)
+    _assert_demo_domain([demo_from, *demo_to])
+    prefix = _demo_subject_prefix()
+    safe_subject = subject if subject.startswith(prefix) else f"{prefix}{subject}"
+    _logger.info(
+        "[DEMO_MODE] correo redirigido: from %s -> %s | to %s -> %s",
+        from_user, demo_from, to, demo_to,
+    )
+    return demo_from, list(demo_to), [], safe_subject
+
+
+def _assert_payload_demo_safe(payload: dict) -> None:
+    """Guard belt-and-suspenders en el chokepoint de red: escanea TODOS los
+    destinatarios del payload y aborta si alguno no es del dominio demo.
+
+    Cubre a cualquier llamador que arme el payload sin pasar por
+    `_apply_demo_sandbox` (p.ej. código futuro)."""
+    msg = payload.get("message", {})
+    addrs: list[str] = []
+    for key in ("toRecipients", "ccRecipients", "bccRecipients"):
+        for r in msg.get(key, []) or []:
+            addrs.append(r.get("emailAddress", {}).get("address", ""))
+    _assert_demo_domain(addrs)
+
+
 def _get_token(force_refresh: bool = False) -> str:
     """Obtiene un access token usando client_credentials. Cachea ~50 min.
     Reintenta hasta 4 veces en caso de error 5xx/timeout."""
@@ -124,6 +222,11 @@ def _send_with_retry(url: str, payload: dict, attempt_token_refresh: bool = True
     - 5xx/429/408 → backoff exponencial hasta RETRY_ATTEMPTS veces.
     - 4xx (no retriable) → falla inmediato con el error.
     """
+    # Fase 0 anti-fuga: en DEMO_MODE, ningún payload con un destino real puede
+    # llegar a la red. Corre ANTES de pedir token (falla cerrado, sin costo).
+    if is_demo_mode():
+        _assert_payload_demo_safe(payload)
+
     token = _get_token()
     last_err: str = ""
     for attempt in range(1, RETRY_ATTEMPTS + 1):
@@ -242,6 +345,8 @@ def send(
         cc = [cc]
     cc = cc or []
 
+    from_user, to, cc, subject = _apply_demo_sandbox(from_user, to, cc, subject)
+
     url = f"{GRAPH_BASE}/users/{from_user}/sendMail"
 
     message: dict[str, Any] = {
@@ -281,6 +386,8 @@ def send_email(
     if isinstance(cc, str):
         cc = [cc]
     cc = cc or []
+
+    from_user, to, cc, subject = _apply_demo_sandbox(from_user, to, cc, subject)
 
     url = f"{GRAPH_BASE}/users/{from_user}/sendMail"
 
