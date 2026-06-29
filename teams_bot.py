@@ -5098,13 +5098,15 @@ def _schedule_jobs() -> None:
         id="auto_assign_cobranzas",
         replace_existing=True,
     )
-    # Weekly summaries: viernes 17:00 EC (cierre de semana laboral)
-    scheduler.add_job(
-        _job_weekly_summaries,
-        CronTrigger(day_of_week="fri", hour=17, minute=0, timezone=EC_TZ),
-        id="weekly_summaries",
-        replace_existing=True,
-    )
+    # Weekly summaries: DESHABILITADO 2026-06-29 (pedido de Mateo: "llegan
+    # correos sin sentido"). El job y el endpoint /admin/trigger-weekly-summaries
+    # quedan para disparo manual si algún día se reactiva.
+    # scheduler.add_job(
+    #     _job_weekly_summaries,
+    #     CronTrigger(day_of_week="fri", hour=17, minute=0, timezone=EC_TZ),
+    #     id="weekly_summaries",
+    #     replace_existing=True,
+    # )
     # Confirmación de tareas: Lun-Vie 9:00 EC — pregunta por tareas no-diarias
     # que llegaron a su fecha límite y no están finalizadas (Feature 2026-06-15).
     scheduler.add_job(
@@ -5238,7 +5240,7 @@ def _schedule_jobs() -> None:
     logger.info(
         "Jobs: checkin oficina mon-fri 16:30, sucursales mon-fri 17:10 + "
         "sat 12:30 (domingo NADA), reminders */5min, "
-        "cobranzas mon-fri 7:30, weekly_summaries fri 17:00, "
+        "cobranzas mon-fri 7:30, "
         "news_brief daily 6:00, monthly_recaps day 1 9:00+10:00, "
         "consolidated_daily mon-fri 18:30, saturday_recap mon 8:00, "
         "jose_summary mon-sat 18:30 (card on-demand)"
@@ -5258,8 +5260,7 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
         # Recap del sábado: solo lunes (weekday 0), desde las 8:00.
         ("saturday_recap", _job_saturday_recap,
          lambda now: now.weekday() == 0 and (now.hour, now.minute) >= (8, 0)),
-        ("weekly_summaries", _job_weekly_summaries,
-         lambda now: now.weekday() == 4 and (now.hour, now.minute) >= (17, 0)),
+        # weekly_summaries DESHABILITADO 2026-06-29 (ver _schedule_jobs).
         ("task_confirmations", _job_task_confirmations,
          lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (9, 0)),
         ("monthly_sales_recap", _job_monthly_sales_recap,

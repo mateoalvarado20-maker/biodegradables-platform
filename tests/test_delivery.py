@@ -110,7 +110,7 @@ def test_horarios_de_jobs_configurados(bot):
         "checkin_saturday": ("day_of_week='sat'", "hour='12'", "minute='30'"),
         "deliver_reminders": ("minute='*/5'",),
         "auto_assign_cobranzas": ("day_of_week='mon-fri'", "hour='7'", "minute='30'"),
-        "weekly_summaries": ("day_of_week='fri'", "hour='17'", "minute='0'"),
+        # weekly_summaries DESHABILITADO 2026-06-29 (ya no se agenda)
         "daily_news_brief": ("hour='6'", "minute='0'"),
         "monthly_sales_recap_day1": ("day='1'", "hour='9'"),
         "monthly_activities_recap_day1": ("day='1'", "hour='10'"),
@@ -130,6 +130,8 @@ def test_horarios_de_jobs_configurados(bot):
     # El job legacy 17:00 NO debe existir — quedó unificado en
     # checkin_sucursales_weekday (un solo scheduler por grupo, sin conflictos)
     assert "checkin_info_weekday" not in jobs
+    # weekly_summaries DESHABILITADO 2026-06-29 — no debe estar agendado
+    assert "weekly_summaries" not in jobs
 
 
 def test_ningun_checkin_corre_domingo(bot):
@@ -252,14 +254,12 @@ def test_catchup_respeta_dias_y_horas(bot, monkeypatch):
     martes_0730 = datetime(2026, 6, 9, 7, 30)   # antes de las 8:00
     martes_0900 = datetime(2026, 6, 9, 9, 0)    # después
     domingo_0900 = datetime(2026, 6, 14, 9, 0)  # domingo
-    viernes_1701 = datetime(2026, 6, 12, 17, 1)
-    lunes_1701 = datetime(2026, 6, 8, 17, 1)
 
     assert specs["morning_sales"](martes_0730) is False
     assert specs["morning_sales"](martes_0900) is True
     assert specs["morning_sales"](domingo_0900) is False
-    assert specs["weekly_summaries"](viernes_1701) is True
-    assert specs["weekly_summaries"](lunes_1701) is False
+    # weekly_summaries DESHABILITADO 2026-06-29 — ya no está en el catch-up
+    assert "weekly_summaries" not in specs
     assert specs["consolidated_daily"](datetime(2026, 6, 9, 18, 29)) is False
     assert specs["consolidated_daily"](datetime(2026, 6, 9, 18, 31)) is True
     # Recap del sábado: solo lunes desde las 8:00.
