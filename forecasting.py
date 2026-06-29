@@ -32,7 +32,7 @@ _HISTORY_CACHE: dict[int, tuple[float, dict]] = {}
 _CACHE_TTL_SECONDS = 30 * 60
 
 
-def historical_monthly_sales(months_back: int = 12) -> dict[str, dict[str, Any]]:
+def historical_monthly_sales(months_back: int = 12, neto: bool = False) -> dict[str, dict[str, Any]]:
     """Ventas mensuales agregadas de los últimos N meses cerrados.
 
     Cacheado 30 min en memoria del proceso para que las queries del bot no
@@ -44,7 +44,8 @@ def historical_monthly_sales(months_back: int = 12) -> dict[str, dict[str, Any]]
     """
     import time
     now = time.time()
-    cached = _HISTORY_CACHE.get(months_back)
+    cache_key = (months_back, neto)
+    cached = _HISTORY_CACHE.get(cache_key)
     if cached:
         ts, data = cached
         if now - ts < _CACHE_TTL_SECONDS:
@@ -71,7 +72,10 @@ def historical_monthly_sales(months_back: int = 12) -> dict[str, dict[str, Any]]
         try:
             dia, mes, anio = fecha_str.split("/")
             ym = f"{anio}-{mes.zfill(2)}"
-            by_month_total[ym] += contifico_client._doc_total(d)
+            by_month_total[ym] += (
+                contifico_client._doc_subtotal(d) if neto
+                else contifico_client._doc_total(d)
+            )
             by_month_count[ym] += 1
         except (ValueError, AttributeError):
             pass
@@ -80,11 +84,11 @@ def historical_monthly_sales(months_back: int = 12) -> dict[str, dict[str, Any]]
         ym: {"total": round(v, 2), "num_facturas": by_month_count[ym]}
         for ym, v in sorted(by_month_total.items())
     }
-    _HISTORY_CACHE[months_back] = (now, result)
+    _HISTORY_CACHE[cache_key] = (now, result)
     return result
 
 
-def forecast_baseline(target_year: int, target_month: int) -> dict[str, Any]:
+def forecast_baseline(target_year: int, target_month: int, neto: bool = False) -> dict[str, Any]:
     """Proyección baseline para un mes futuro o actual.
 
     Método: same-month-last-year × (1 + YoY growth promedio últimos 12 meses).
@@ -101,7 +105,7 @@ def forecast_baseline(target_year: int, target_month: int) -> dict[str, Any]:
         }
     """
     # Usamos 18 meses (no 24) — más rápido y suficiente para YoY decent
-    history = historical_monthly_sales(months_back=18)
+    history = historical_monthly_sales(months_back=18, neto=neto)
     sorted_months = sorted(history.keys())
 
     target_key = f"{target_year:04d}-{target_month:02d}"

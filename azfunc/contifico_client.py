@@ -288,7 +288,7 @@ def ventas_dia(fecha: date) -> dict[str, Any]:
         "total": round(total, 2),
         "subtotal": round(subtotal, 2),
         "num_facturas": len(docs),
-        "ticket_promedio": round(total / len(docs), 2) if docs else 0.0,
+        "ticket_promedio": round(subtotal / len(docs), 2) if docs else 0.0,  # SIN IVA
         "clientes_unicos": len({c for c in clientes if c}),
     }
 
@@ -313,7 +313,7 @@ def ventas_rango(fecha_inicial: date, fecha_final: date) -> dict[str, Any]:
         "total": round(total, 2),
         "subtotal": round(subtotal, 2),
         "num_facturas": len(docs),
-        "ticket_promedio": round(total / len(docs), 2) if docs else 0.0,
+        "ticket_promedio": round(subtotal / len(docs), 2) if docs else 0.0,  # SIN IVA
         "clientes_unicos": len({c for c in clientes if c}),
     }
 
@@ -336,11 +336,143 @@ def ventas_por_ciudad(fecha: date, fecha_final: date | None = None) -> dict[str,
         agg[c]["total"] += _doc_subtotal(d)  # SIN IVA (subtotal)
         agg[c]["num_facturas"] += 1
     for k in agg:
+        nf = agg[k]["num_facturas"]
+        agg[k]["ticket_promedio"] = round(agg[k]["total"] / nf, 2) if nf else 0.0
         agg[k]["total"] = round(agg[k]["total"], 2)
     return {
         "fecha_inicial": fecha.isoformat(),
         "fecha_final": fecha_final.isoformat(),
         "por_ciudad": agg,
+    }
+
+
+# ===== Agregaciones para el recap mensual (2026-06-29) — todo SIN IVA =====
+
+def _es_linea_transporte(nombre_upper: str) -> bool:
+    """True si la línea de detalle es flete/transporte (no un producto real).
+    OJO: 'TRANSPARENTE' NO es transporte (ver gotcha 2026-06-18)."""
+    return "TRANSP." in nombre_upper or "TRANSPORTE" in nombre_upper
+
+
+def top_clientes_por_ciudad(
+    fecha_inicial: date, fecha_final: date, n: int = 10
+) -> dict[str, list[dict[str, Any]]]:
+    """Top N clientes de cada ciudad (UIO/GYE) por venta SIN IVA (subtotal)."""
+    docs = _filter_validas(get_documentos(fecha_inicial, fecha_final))
+    by: dict[str, dict[str, dict[str, Any]]] = {"UIO": {}, "GYE": {}}
+    for d in docs:
+        c = _doc_ciudad(d)
+        if c not in by:
+            continue
+        cli = _doc_cliente_nombre(d)
+        e = by[c].setdefault(cli, {"cliente": cli, "total": 0.0, "num_facturas": 0})
+        e["total"] += _doc_subtotal(d)
+        e["num_facturas"] += 1
+    out: dict[str, list[dict[str, Any]]] = {}
+    for city in ("UIO", "GYE"):
+        rows = sorted(by[city].values(), key=lambda r: r["total"], reverse=True)
+        for r in rows:
+            r["total"] = round(r["total"], 2)
+        out[city] = rows[:n]
+    return out
+
+
+def top_productos_por_ciudad(
+    fecha_inicial: date, fecha_final: date, n: int = 10
+) -> dict[str, list[dict[str, Any]]]:
+    """Top N productos de cada ciudad por monto vendido (cantidad×precio, SIN
+    IVA). Lee las líneas `detalles[]` de cada factura. Excluye fletes/transporte."""
+    docs = _filter_validas(get_documentos(fecha_inicial, fecha_final))
+    by: dict[str, dict[str, dict[str, Any]]] = {"UIO": {}, "GYE": {}}
+    for d in docs:
+        c = _doc_ciudad(d)
+        if c not in by:
+            continue
+        for det in (d.get("detalles") or []):
+            nombre = (det.get("producto_nombre") or "").strip()
+            if not nombre or _es_linea_transporte(nombre.upper()):
+                continue
+            cant = float(det.get("cantidad") or 0)
+            precio = float(det.get("precio") or 0)
+            e = by[c].setdefault(nombre, {"producto": nombre, "cantidad": 0.0, "revenue": 0.0})
+            e["cantidad"] += cant
+            e["revenue"] += cant * precio
+    out: dict[str, list[dict[str, Any]]] = {}
+    for city in ("UIO", "GYE"):
+        rows = sorted(by[city].values(), key=lambda r: r["revenue"], reverse=True)
+        for r in rows:
+            r["revenue"] = round(r["revenue"], 2)
+            r["cantidad"] = round(r["cantidad"], 2)
+        out[city] = rows[:n]
+    return out
+
+
+def unidades_vendidas(fecha_inicial: date, fecha_final: date) -> dict[str, Any]:
+    """Total de unidades vendidas + productos únicos en el rango (de detalles[],
+    excluyendo fletes)."""
+    docs = _filter_validas(get_documentos(fecha_inicial, fecha_final))
+    unidades = 0.0
+    productos: set[str] = set()
+    for d in docs:
+        for det in (d.get("detalles") or []):
+            nombre = (det.get("producto_nombre") or "").strip()
+            if not nombre or _es_linea_transporte(nombre.upper()):
+                continue
+            unidades += float(det.get("cantidad") or 0)
+            productos.add(nombre)
+    return {"unidades": round(unidades, 2), "productos_unicos": len(productos)}
+
+
+def _bucket_cliente(v: float) -> str:
+    if v > 1000:
+        return ">$1000"
+    if v >= 500:
+        return "$500–1000"
+    if v >= 100:
+        return "$100–500"
+    return "<$100"
+
+
+def clientes_por_rango(fecha_inicial: date, fecha_final: date) -> dict[str, Any]:
+    """Clasifica a cada cliente por su compra total (SIN IVA) en el rango, en
+    buckets, con cantidad de clientes y % de ventas por bucket. Para el dona."""
+    docs = _filter_validas(get_documentos(fecha_inicial, fecha_final))
+    por_cli: dict[str, float] = {}
+    for d in docs:
+        cli = _doc_cliente_nombre(d)
+        por_cli[cli] = por_cli.get(cli, 0.0) + _doc_subtotal(d)
+    orden = [">$1000", "$500–1000", "$100–500", "<$100"]
+    agg = {b: {"rango": b, "clientes": 0, "ventas": 0.0} for b in orden}
+    for v in por_cli.values():
+        a = agg[_bucket_cliente(v)]
+        a["clientes"] += 1
+        a["ventas"] += v
+    total = sum(por_cli.values()) or 0.0
+    rows = []
+    for b in orden:
+        a = agg[b]
+        a["ventas"] = round(a["ventas"], 2)
+        a["pct_ventas"] = round(a["ventas"] / total * 100, 1) if total else 0.0
+        rows.append(a)
+    return {"rangos": rows, "total_ventas": round(total, 2), "total_clientes": len(por_cli)}
+
+
+def clientes_actividad(fecha_referencia: date | None = None) -> dict[str, Any]:
+    """Activos = facturaron en los últimos 3 meses. Inactivos = NO en los
+    últimos 3 meses pero SÍ en los 3 meses previos (meses 4–6 atrás) — clientes
+    que se 'enfriaron'."""
+    hoy = fecha_referencia or date.today()
+    ini_3m = hoy - timedelta(days=90)
+    ini_6m = hoy - timedelta(days=180)
+    recientes = _filter_validas(get_documentos(ini_3m, hoy))
+    previos = _filter_validas(get_documentos(ini_6m, ini_3m - timedelta(days=1)))
+    activos = {_doc_cliente_nombre(d) for d in recientes}
+    previos_set = {_doc_cliente_nombre(d) for d in previos}
+    inactivos = sorted(previos_set - activos)
+    return {
+        "activos": len(activos),
+        "inactivos": len(inactivos),
+        "inactivos_lista": inactivos,
     }
 
 
@@ -355,7 +487,7 @@ def top_vendedores(
     for d in docs:
         v = _doc_vendedor_nombre(d)
         by_vend[v]["vendedor"] = v
-        by_vend[v]["total"] += _doc_total(d)
+        by_vend[v]["total"] += _doc_subtotal(d)  # SIN IVA
         by_vend[v]["num_facturas"] += 1
     rows = sorted(by_vend.values(), key=lambda r: r["total"], reverse=True)
     for r in rows:
@@ -374,7 +506,7 @@ def top_clientes(
     for d in docs:
         c = _doc_cliente_nombre(d)
         by_cli[c]["cliente"] = c
-        by_cli[c]["total"] += _doc_total(d)
+        by_cli[c]["total"] += _doc_subtotal(d)  # SIN IVA
         by_cli[c]["num_facturas"] += 1
     rows = sorted(by_cli.values(), key=lambda r: r["total"], reverse=True)
     for r in rows:
