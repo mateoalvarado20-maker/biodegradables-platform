@@ -65,8 +65,9 @@ def test_ciudades_suman_el_total_del_dia(demo):
     cc, _ = demo
     v = cc.ventas_dia(AYER)
     pc = cc.ventas_por_ciudad(AYER)["por_ciudad"]
+    # ventas_por_ciudad usa el subtotal (SIN IVA, 2026-06-29) → suma == subtotal
     suma = round(pc["UIO"]["total"] + pc["GYE"]["total"] + pc["?"]["total"], 2)
-    assert suma == pytest.approx(v["total"], abs=0.05)
+    assert suma == pytest.approx(v["subtotal"], abs=0.05)
 
 
 def test_cartera_coherente(demo):

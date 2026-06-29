@@ -319,7 +319,11 @@ def ventas_rango(fecha_inicial: date, fecha_final: date) -> dict[str, Any]:
 
 
 def ventas_por_ciudad(fecha: date, fecha_final: date | None = None) -> dict[str, Any]:
-    """Ventas separadas por ciudad (UIO vs GYE) en un día o rango."""
+    """Ventas separadas por ciudad (UIO vs GYE) en un día o rango.
+
+    El campo `total` es la venta SIN IVA (subtotal de cada factura) — pedido de
+    gerencia 2026-06-29 para que el resumen comercial muestre ventas netas.
+    """
     fecha_final = fecha_final or fecha
     docs = _filter_validas(get_documentos(fecha, fecha_final))
     agg: dict[str, dict[str, Any]] = {
@@ -329,7 +333,7 @@ def ventas_por_ciudad(fecha: date, fecha_final: date | None = None) -> dict[str,
     }
     for d in docs:
         c = _doc_ciudad(d)
-        agg[c]["total"] += _doc_total(d)
+        agg[c]["total"] += _doc_subtotal(d)  # SIN IVA (subtotal)
         agg[c]["num_facturas"] += 1
     for k in agg:
         agg[k]["total"] = round(agg[k]["total"], 2)
@@ -389,10 +393,12 @@ def cumplimiento_mes(fecha_referencia: date | None = None) -> dict[str, Any]:
     today = fecha_referencia or date.today()
     year, month = today.year, today.month
 
-    # Ventas MTD (mes actual hasta hoy)
+    # Ventas MTD (mes actual hasta hoy). SIN IVA: usamos el subtotal de cada
+    # factura (2026-06-29, pedido gerencia). MTD y PY usan el mismo criterio
+    # (neto) para que el % de cumplimiento sea consistente.
     primer_dia_mes = date(year, month, 1)
     docs_mtd = _filter_validas(get_documentos(primer_dia_mes, today))
-    mtd = sum(_doc_total(d) for d in docs_mtd)
+    mtd = sum(_doc_subtotal(d) for d in docs_mtd)
 
     # Ventas mismo mes año anterior (PY)
     primer_dia_py = date(year - 1, month, 1)
@@ -402,9 +408,9 @@ def cumplimiento_mes(fecha_referencia: date | None = None) -> dict[str, Any]:
     py_dax = core_config.py_override_for(year, month)
     if py_dax is None:
         docs_py = _filter_validas(get_documentos(primer_dia_py, ultimo_dia_py))
-        py = sum(_doc_total(d) for d in docs_py)
+        py = sum(_doc_subtotal(d) for d in docs_py)  # SIN IVA (subtotal)
     else:
-        py = py_dax
+        py = py_dax  # OJO: PY_OVERRIDE en core_config debe ser NETO (sin IVA)
 
     # Días hábiles
     wd_total = _workdays_in_month(year, month)
@@ -854,6 +860,29 @@ def envios_dia_gye(
         })
     envios.sort(key=lambda e: e["documento"])
     return envios
+
+
+# ============ Hook DEMO (Fase 2) ============
+# Con DEMO_MODE=1, las funciones públicas se sirven desde demo_contifico (dataset
+# sintético coherente) en vez de la API real de Contifico. Las funciones de
+# ventas/cumplimiento/top/saldos/envíos agregan sobre get_documentos, así que con
+# sólo reemplazar get_documentos ya operan sobre datos demo; demo_contifico ademas
+# reescribe las de cartera (que dependen de condiciones_credito reales). CERO
+# cambios en los reportes ni en el Data Bot.
+if os.environ.get("DEMO_MODE") == "1":
+    try:
+        import demo_contifico as _demo_contifico
+        for _name in _demo_contifico.__all__:
+            globals()[_name] = getattr(_demo_contifico, _name)
+        print(
+            "[contifico_client] DEMO_MODE: servido por demo_contifico (datos sintéticos)",
+            file=sys.stderr,
+        )
+    except Exception as _e:  # noqa: BLE001
+        print(
+            f"[contifico_client] DEMO_MODE: no se pudo cargar demo_contifico: {_e}",
+            file=sys.stderr,
+        )
 
 
 # ============ CLI para debugging ============
