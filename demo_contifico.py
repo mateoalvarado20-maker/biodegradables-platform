@@ -117,7 +117,7 @@ def cartera_vencida_por_ciudad(
 
 
 def clientes_sin_credito_con_saldo(
-    ciudad: str, n: int = 5, *, meses_atras: int = 6,
+    ciudad: str, n: int | None = None, *, meses_atras: int = 6,
     fecha_referencia: date | None = None,
 ) -> list[dict[str, Any]]:
     """Demo: clientes contado (plazo<=0) con saldo pendiente por ciudad.
@@ -154,7 +154,7 @@ def clientes_sin_credito_con_saldo(
     rows = sorted(by_cli.values(), key=lambda r: r["saldo_pendiente"], reverse=True)
     for r in rows:
         r["saldo_pendiente"] = round(r["saldo_pendiente"], 2)
-    return rows[:n]
+    return rows if n is None else rows[:n]
 
 
 def cartera_kpis(

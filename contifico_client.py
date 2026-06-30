@@ -780,12 +780,15 @@ def cartera_vencida_por_ciudad(
 
 def clientes_sin_credito_con_saldo(
     ciudad: str,
-    n: int = 5,
+    n: int | None = None,
     *,
     meses_atras: int = 6,
     fecha_referencia: date | None = None,
 ) -> list[dict[str, Any]]:
-    """Top N clientes SIN crédito aprobado que igual tienen saldo pendiente.
+    """Clientes SIN crédito aprobado que igual tienen saldo pendiente (> $1).
+
+    Por defecto (`n=None`) devuelve TODOS los que superen $1, no solo un top —
+    todos deben gestionarse. Pasar `n` para limitar.
 
     Son el COMPLEMENTO de `cartera_vencida_por_ciudad`: clientes que NO están en
     el Excel de crédito de SharePoint (condiciones_credito.json) — o sea, no
@@ -846,7 +849,7 @@ def clientes_sin_credito_con_saldo(
     rows = sorted(by_cli.values(), key=lambda r: r["saldo_pendiente"], reverse=True)
     for r in rows:
         r["saldo_pendiente"] = round(r["saldo_pendiente"], 2)
-    return rows[:n]
+    return rows if n is None else rows[:n]
 
 
 def _cartera_facturas_iter(

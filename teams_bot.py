@@ -2348,8 +2348,9 @@ async def auto_assign_cobranzas() -> None:
         #    cobranza; el sub-prefijo `sc-` lo distingue). El colaborador debe
         #    poner una observación de por qué el cliente no ha pagado.
         try:
+            # n=None → TODOS los clientes sin crédito con saldo > $1 (no solo top).
             sin_cred = await asyncio.to_thread(
-                contifico_client.clientes_sin_credito_con_saldo, ciudad, n=5
+                contifico_client.clientes_sin_credito_con_saldo, ciudad
             )
         except Exception as e:
             logger.exception("Cobranza sin-crédito pull falló para %s: %s", ciudad, e)
