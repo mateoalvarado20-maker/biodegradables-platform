@@ -23,6 +23,7 @@ import demo_seed
 __all__ = [
     "get_documentos",
     "cartera_vencida_por_ciudad",
+    "clientes_sin_credito_con_saldo",
     "cartera_kpis",
     "cartera_antiguedad_buckets",
 ]
@@ -113,6 +114,47 @@ def cartera_vencida_por_ciudad(
     for r in rows:
         r["saldo_vencido"] = round(r["saldo_vencido"], 2)
     return rows[:n]
+
+
+def clientes_sin_credito_con_saldo(
+    ciudad: str, n: int | None = None, *, meses_atras: int = 6,
+    fecha_referencia: date | None = None,
+) -> list[dict[str, Any]]:
+    """Demo: clientes contado (plazo<=0) con saldo pendiente por ciudad.
+    Complemento de cartera_vencida_por_ciudad (que solo mira los con plazo)."""
+    today = _parse(fecha_referencia) if fecha_referencia else demo_seed.dataset()["today"]
+    ciudad = (ciudad or "").upper()
+    fi = today - timedelta(days=meses_atras * 30)
+    by_cli: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "cliente": "", "saldo_pendiente": 0.0, "facturas_pendientes": 0,
+            "factura_mas_antigua": "", "dias_desde_emision_max": 0,
+            "fecha_emision": None,
+        }
+    )
+    for inv in demo_seed.dataset()["invoices"]:
+        if inv["anulado"] or inv["_ciudad"] != ciudad:
+            continue
+        saldo = float(inv.get("saldo") or 0.0)
+        if saldo <= CARTERA_SALDO_MIN:
+            continue
+        if not (fi <= inv["_fecha"] <= today):
+            continue
+        if int(inv.get("plazo_dias") or 0) > 0:
+            continue  # tiene crédito → va a cartera_vencida, no acá
+        dias = (today - inv["_fecha"]).days
+        e = by_cli[inv["persona"]["razon_social"]]
+        e["cliente"] = inv["persona"]["razon_social"]
+        e["saldo_pendiente"] += saldo
+        e["facturas_pendientes"] += 1
+        if dias > e["dias_desde_emision_max"]:
+            e["dias_desde_emision_max"] = dias
+            e["factura_mas_antigua"] = inv["documento"]
+            e["fecha_emision"] = inv["_fecha"].strftime("%d/%m/%Y")
+    rows = sorted(by_cli.values(), key=lambda r: r["saldo_pendiente"], reverse=True)
+    for r in rows:
+        r["saldo_pendiente"] = round(r["saldo_pendiente"], 2)
+    return rows if n is None else rows[:n]
 
 
 def cartera_kpis(

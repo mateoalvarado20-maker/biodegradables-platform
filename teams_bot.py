@@ -933,6 +933,7 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
             co_prefix = "⚠️ PENDIENTE DE AYER · " if is_co else ""
             color = "Attention" if is_co else "Default"
             es_cobranza = aid.startswith("cobranza-")
+            es_sin_credito = aid.startswith("cobranza-sc-")
             diarias_items.append({
                 "type": "TextBlock",
                 "text": f"{co_prefix}{prio_badge}**{a['nombre']}**{meta_txt}",
@@ -940,6 +941,17 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
                 "spacing": "Medium",
                 "color": color,
             })
+            if es_sin_credito:
+                # Cliente sin crédito aprobado al que se facturó sin registrar el
+                # pago: avisar y pedir el motivo del no-pago como observación.
+                diarias_items.append({
+                    "type": "TextBlock",
+                    "text": ("ℹ️ Este cliente **no tiene crédito aprobado**. "
+                             "Indica por qué no ha pagado."),
+                    "wrap": True,
+                    "spacing": "None",
+                    "isSubtle": True,
+                })
             if es_cobranza:
                 diarias_items.append({
                     "type": "Input.ChoiceSet",
@@ -955,6 +967,9 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
                     "type": "Input.Text",
                     "id": f"razon__{aid}",
                     "placeholder": (
+                        "¿Por qué no ha pagado? "
+                        "(ej. 'paga el lunes', 'se facturó sin registrar el pago')"
+                        if es_sin_credito else
                         "¿Qué te dijo el cliente? "
                         "(ej. 'paga el viernes', 'no contesta', 'pidió plazo de 15 días')"
                     ),
@@ -2270,11 +2285,39 @@ async def auto_assign_cobranzas() -> None:
     Idempotente: si una cobranza para el mismo cliente ya se asignó hoy,
     no la duplica.
     """
-    today_str = activity_state._today().isoformat()  # TZ Ecuador (A9)
     asignadas = 0
     errores = 0
 
+    def _asignar(activity_id: str, nombre: str, target_user: str) -> None:
+        """Crea (idempotente) una cobranza diaria. tipo="diaria" (NO "unica"):
+        el check-in renderiza el UI de cobranza (Contactado/No contactado +
+        observación) SOLO para activities diarias (ver _build_checkin_card,
+        loop `diarias`), y el submit usa mark_daily (que exige tipo diaria).
+        Con "unica" caían en `semanales` y nunca mostraban el UI. (fix 2026-06-19)
+        aid ESTABLE por cliente (2026-06-25): re-asignar el mismo cliente en la
+        semana es idempotente (add_adhoc lanza ValueError → skip)."""
+        nonlocal asignadas, errores
+        try:
+            activity_state.add_adhoc(
+                activity_id, nombre,
+                user_email=target_user,
+                tipo="diaria",
+                meta=1,
+                unidad="cliente contactado",
+            )
+            asignadas += 1
+        except ValueError:
+            pass  # Ya existe — idempotente, skip
+        except Exception as e:
+            logger.exception(
+                "Error asignando cobranza %s a %s: %s",
+                activity_id, target_user, e,
+            )
+            errores += 1
+
     for ciudad, target_user in COBRANZA_COLABORADORES.items():
+        # 1) Cartera VENCIDA — clientes CON crédito aprobado que se pasaron del
+        #    plazo. aid `cobranza-<slug>`.
         try:
             # to_thread (fix 2026-06-23): la consulta a Contifico es síncrona y
             # tarda ~2 min; llamarla directo bloqueaba el event loop más allá del
@@ -2287,50 +2330,45 @@ async def auto_assign_cobranzas() -> None:
         except Exception as e:
             logger.exception("Cobranza pull falló para %s: %s", ciudad, e)
             errores += 1
-            continue
-
-        if not top:
-            logger.info("Cobranza %s: sin clientes vencidos hoy", ciudad)
-            continue
+            top = []
 
         for c in top:
             cliente_slug = _slugify(c["cliente"])
-            # aid ESTABLE por cliente (2026-06-25): antes era
-            # `cobranza-<cliente>-<fecha>`, lo que creaba una activity NUEVA por
-            # día y acumulaba el mismo cliente toda la semana (se repetía en el
-            # check-in y en el reporte). Con aid estable, re-asignar el mismo
-            # cliente en la semana es idempotente (add_adhoc lanza ValueError →
-            # skip) y el cliente queda como UNA sola cobranza con marca por día.
             activity_id = f"cobranza-{cliente_slug}"
             nombre = (
                 f"📞 Cobranza: {c['cliente']} — "
                 f"${c['saldo_vencido']:,.0f} "
                 f"({c['dias_atraso_max']}d atraso)"
             )
-            try:
-                # tipo="diaria" (NO "unica"): el check-in renderiza el UI de
-                # cobranza (Contactado/No contactado + observación) SOLO para
-                # activities diarias (ver _build_checkin_card, loop `diarias`),
-                # y el submit usa mark_daily (que exige tipo diaria). Con "unica"
-                # caían en `semanales` y nunca mostraban el UI → asistentes no
-                # veían las cobranzas. (fix 2026-06-19)
-                activity_state.add_adhoc(
-                    activity_id, nombre,
-                    user_email=target_user,
-                    tipo="diaria",
-                    meta=1,
-                    unidad="cliente contactado",
-                )
-                asignadas += 1
-            except ValueError:
-                # Ya existe — idempotente, skip
-                pass
-            except Exception as e:
-                logger.exception(
-                    "Error asignando cobranza %s a %s: %s",
-                    activity_id, target_user, e,
-                )
-                errores += 1
+            _asignar(activity_id, nombre, target_user)
+
+        # 2) SIN crédito — clientes que NO están en el Excel de crédito pero
+        #    igual tienen saldo (se facturó sin registrar el pago). aid
+        #    `cobranza-sc-<slug>` (mismo prefijo `cobranza-` → hereda el UI de
+        #    cobranza; el sub-prefijo `sc-` lo distingue). El colaborador debe
+        #    poner una observación de por qué el cliente no ha pagado.
+        try:
+            # n=None → TODOS los clientes sin crédito con saldo > $1 (no solo top).
+            sin_cred = await asyncio.to_thread(
+                contifico_client.clientes_sin_credito_con_saldo, ciudad
+            )
+        except Exception as e:
+            logger.exception("Cobranza sin-crédito pull falló para %s: %s", ciudad, e)
+            errores += 1
+            sin_cred = []
+
+        for c in sin_cred:
+            cliente_slug = _slugify(c["cliente"])
+            activity_id = f"cobranza-sc-{cliente_slug}"
+            nombre = (
+                f"⚠️ Sin crédito: {c['cliente']} — "
+                f"${c['saldo_pendiente']:,.0f} "
+                f"(facturado sin registrar pago)"
+            )
+            _asignar(activity_id, nombre, target_user)
+
+        if not top and not sin_cred:
+            logger.info("Cobranza %s: sin clientes vencidos ni sin-crédito hoy", ciudad)
 
     logger.info(
         "auto_assign_cobranzas: %d asignadas, %d errores", asignadas, errores

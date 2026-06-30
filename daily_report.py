@@ -461,6 +461,27 @@ def q_top_deudores_ciudad(ciudad: str, n: int = 7) -> list[dict]:
     ]
 
 
+def q_sin_credito_ciudad(ciudad: str) -> list[dict]:
+    """TODOS los clientes SIN crédito aprobado con saldo > $1 en la ciudad.
+
+    Facturados sin registrar el pago — no están en el Excel de crédito. n=None
+    (sin tope): se listan todos, no solo un top.
+    """
+    rows = _safe(
+        lambda: contifico_client.clientes_sin_credito_con_saldo(
+            ciudad, meses_atras=12
+        ),
+        [],
+    )
+    return [
+        {"[Cliente]": r["cliente"], "[Saldo]": r["saldo_pendiente"],
+         "[Facturas]": r.get("facturas_pendientes", 0),
+         "[Dias]": r.get("dias_desde_emision_max", 0),
+         "[FechaEmision]": r.get("fecha_emision") or "—"}
+        for r in rows
+    ]
+
+
 def q_ventas_ayer_ciudad() -> list[dict]:
     """Ventas de ayer comercial divididas por ciudad (UIO/GYE)."""
     ayer_dt = previous_workday(date.today())
@@ -1025,7 +1046,12 @@ def _cobranza_gestiones_por_ciudad(dias_recientes: int = 4) -> dict:
                 if not aid.startswith("cobranza-"):
                     continue
                 nombre = a.get("nombre", "")
-                after = nombre.split("Cobranza:", 1)[1] if "Cobranza:" in nombre else nombre
+                # Soporta "📞 Cobranza: X — ..." y "⚠️ Sin crédito: X — ..."
+                after = nombre
+                for marker in ("Cobranza:", "Sin crédito:"):
+                    if marker in after:
+                        after = after.split(marker, 1)[1]
+                        break
                 cliente = after.split("—")[0].strip()
                 cn = _norm_cliente(cliente)
                 if not cn:
@@ -1119,6 +1145,34 @@ def html_morning() -> str:
     _gestiones = _cobranza_gestiones_por_ciudad()
     top_uio_rows = _top_rows(top_uio, _gestiones.get("UIO"))
     top_gye_rows = _top_rows(top_gye, _gestiones.get("GYE"))
+
+    # Clientes facturados SIN crédito aprobado pero con saldo (pago no registrado)
+    sc_uio = q_sin_credito_ciudad("UIO")
+    sc_gye = q_sin_credito_ciudad("GYE")
+
+    def _sc_rows(rows: list[dict], gestiones: dict | None = None) -> str:
+        gestiones = gestiones or {}
+        if not rows:
+            return ('<tr><td colspan="6" class="muted-text">'
+                    'Sin clientes sin crédito con saldo pendiente.</td></tr>')
+        out = []
+        for r in rows:
+            dias = r.get("[Dias]", 0)
+            out.append(
+                f'<tr><td>{r.get("[Cliente]","—")}</td>'
+                f'<td class="right" style="color:#c62828;font-weight:600">'
+                f'{fmt_money(r.get("[Saldo]"))}</td>'
+                f'<td class="right">{r.get("[FechaEmision]","—")}</td>'
+                f'<td class="right">{dias}</td>'
+                f'<td class="right">{r.get("[Facturas]",0)}</td>'
+                f'<td>{_gestion_cell(r.get("[Cliente]",""), gestiones)}</td></tr>'
+            )
+        return "".join(out)
+
+    sc_uio_total = sum(r.get("[Saldo]") or 0 for r in sc_uio)
+    sc_gye_total = sum(r.get("[Saldo]") or 0 for r in sc_gye)
+    sc_uio_rows = _sc_rows(sc_uio, _gestiones.get("UIO"))
+    sc_gye_rows = _sc_rows(sc_gye, _gestiones.get("GYE"))
 
     # KPIs de ventas ayer por ciudad
     ciudad_kpis = []
@@ -1401,6 +1455,24 @@ te comparto el estado de la operación al inicio del día.<br>
 <table>
 <tr><th>Cliente</th><th class="right">Deuda</th><th class="right">F. emisión</th><th class="right">Días créd.</th><th class="right">F. vencimiento</th><th class="right">Estado</th><th>Gestión de cobranza</th></tr>
 {top_gye_rows}
+</table>
+
+<h3>🚩 Clientes sin crédito con saldo pendiente</h3>
+<p class="muted-text" style="margin-top:0">
+Clientes que <b>no tienen crédito aprobado</b> (no están en el Excel de crédito)
+pero se les facturó sin registrar el pago. Los asistentes de cada plaza deben
+contactarlos y registrar el motivo del no-pago.</p>
+
+<h4 style="margin-top:14px;margin-bottom:6px;color:#444">Quito (UIO) — {fmt_money(sc_uio_total)}</h4>
+<table>
+<tr><th>Cliente</th><th class="right">Saldo</th><th class="right">F. emisión</th><th class="right">Días sin pagar</th><th class="right">Facturas</th><th>Gestión de cobranza</th></tr>
+{sc_uio_rows}
+</table>
+
+<h4 style="margin-top:14px;margin-bottom:6px;color:#444">Guayaquil (GYE) — {fmt_money(sc_gye_total)}</h4>
+<table>
+<tr><th>Cliente</th><th class="right">Saldo</th><th class="right">F. emisión</th><th class="right">Días sin pagar</th><th class="right">Facturas</th><th>Gestión de cobranza</th></tr>
+{sc_gye_rows}
 </table>
 
 <div class="footer">
