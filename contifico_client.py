@@ -778,6 +778,77 @@ def cartera_vencida_por_ciudad(
     return rows[:n]
 
 
+def clientes_sin_credito_con_saldo(
+    ciudad: str,
+    n: int = 5,
+    *,
+    meses_atras: int = 6,
+    fecha_referencia: date | None = None,
+) -> list[dict[str, Any]]:
+    """Top N clientes SIN crédito aprobado que igual tienen saldo pendiente.
+
+    Son el COMPLEMENTO de `cartera_vencida_por_ciudad`: clientes que NO están en
+    el Excel de crédito de SharePoint (condiciones_credito.json) — o sea, no
+    tienen crédito aprobado — pero a los que se les facturó a crédito de todos
+    modos (el colaborador facturó sin registrar el pago, por varias razones).
+    Como no tienen plazo, cualquier saldo > $1 es una venta que debió ser de
+    contado y quedó sin cobrar.
+
+    Mismo criterio de ciudad/saldo que `cartera_vencida_por_ciudad`, pero la
+    condición de crédito está INVERTIDA (incluye solo clientes sin plazo). No
+    hay "días de atraso" porque no hay plazo; se reporta `dias_desde_emision_max`
+    de la factura más antigua sin pagar.
+
+    Devuelve lista de dicts:
+        [{"cliente": "X SA", "saldo_pendiente": 1234.56, "facturas_pendientes": 3,
+          "factura_mas_antigua": "001-002-...", "dias_desde_emision_max": 45,
+          "fecha_emision": "02/05/2026"}, ...]
+    """
+    today = fecha_referencia or date.today()
+    fecha_inicial = today - timedelta(days=meses_atras * 30)
+    ciudad = (ciudad or "").upper()
+
+    docs = _filter_validas(get_documentos(fecha_inicial, today))
+    by_cli: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "cliente": "",
+            "saldo_pendiente": 0.0,
+            "facturas_pendientes": 0,
+            "factura_mas_antigua": "",
+            "dias_desde_emision_max": 0,
+            "fecha_emision": None,
+        }
+    )
+    for d in docs:
+        if _doc_ciudad(d) != ciudad:
+            continue
+        saldo = _doc_saldo(d)
+        if saldo <= CARTERA_SALDO_MIN:
+            continue  # excluye centavos / saldos triviales
+        cli = _doc_cliente_nombre(d)
+        # SOLO clientes SIN crédito aprobado (no están en el Excel). Es el
+        # complemento exacto de cartera_vencida_por_ciudad (que solo mira los
+        # que SÍ tienen plazo). Mutuamente excluyentes → no hay doble conteo.
+        if _get_plazo_cliente(cli) is not None:
+            continue
+        emis = _parse_fecha_emision(d.get("fecha_emision"))
+        dias = (today - emis).days if emis else 0
+
+        entry = by_cli[cli]
+        entry["cliente"] = cli
+        entry["saldo_pendiente"] += saldo
+        entry["facturas_pendientes"] += 1
+        if dias > entry["dias_desde_emision_max"]:
+            entry["dias_desde_emision_max"] = dias
+            entry["factura_mas_antigua"] = d.get("documento", "")
+            entry["fecha_emision"] = emis.strftime("%d/%m/%Y") if emis else None
+
+    rows = sorted(by_cli.values(), key=lambda r: r["saldo_pendiente"], reverse=True)
+    for r in rows:
+        r["saldo_pendiente"] = round(r["saldo_pendiente"], 2)
+    return rows[:n]
+
+
 def _cartera_facturas_iter(
     fecha_inicial: date,
     fecha_final: date,
