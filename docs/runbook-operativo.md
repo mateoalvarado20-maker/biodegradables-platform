@@ -64,8 +64,27 @@ az webapp config appsettings set -n biodegradables-bot-app -g rg-biodegradables-
 |---|---|---|
 | MSAL refresh token (PC) | 90 días | `python pbi_cloud.py` interactivo (device-code). Síntomas de vencido: ApolloNotifier deja de mandar correos. |
 | Secret del bot (`MICROSOFT_APP_PASSWORD`) | según App Registration | Azure Portal → rotar → actualizar App Service + scripts. |
-| `ADMIN_API_TOKEN` | recomendado setear YA | App Service settings; separa el admin del secret OAuth. |
+| `ADMIN_API_TOKEN` | **OBLIGATORIO desde F0 (2026-07-02)** | App Service settings. El código ya NO cae al secret OAuth: sin este setting, TODOS los `/admin/*` responden 401. Generar 32+ bytes aleatorios y setearlo ANTES de deployar la versión F0. |
 | `CONTIFICO_API_TOKEN`, `HUBSPOT_TOKEN`, `APOLLO_API_KEY`, `ANTHROPIC_API_KEY` | no vencen solos | rotar en el proveedor → actualizar env (User-scope local + App Service + Function App). |
+
+## Dead-man switch de entregas (F0, 2026-07-02)
+
+- `GET /health/deliveries` devuelve **200** si todo lo que debía salir hoy
+  (hora EC, con 30 min de gracia) está confirmado en el ledger, y **503** con
+  la lista `missing` si falta algo. Cubre reportes, check-ins, cobranzas,
+  news brief y cards matinales — las mismas condiciones del catch-up.
+- Monitoreo externo recomendado: **Azure Monitor availability test** (standard
+  test, URL ping) contra `/health/deliveries` cada 5-15 min + alert rule al
+  correo del operador. Detecta proceso caído Y "proceso vivo pero el correo
+  no salió".
+- Auto-recuperación: el job `catchup_retry` re-corre el catch-up a los :35 de
+  8-12 y 17-19 EC — un outage de un proveedor a la hora de un reporte se
+  reintenta solo durante la mañana; el ledger evita duplicados.
+- Alertas de jobs: `ALERT_EMAIL` acepta lista separada por comas (el primero
+  es el buzón emisor). Throttle: máximo UNA alerta por (job, día) — claves
+  `alert_<job>` en el ledger.
+- Endpoint admin de email: `/admin/schedule-one-time-email` solo acepta
+  `from_user` de gerencia/operador (ampliable con `ADMIN_EMAIL_FROM_ALLOWLIST`).
 
 ## Mantenimiento recurrente
 

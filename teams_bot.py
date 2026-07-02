@@ -79,11 +79,12 @@ DATA_APP_PWD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 APP_TENANT_ID = os.environ.get("MICROSOFT_APP_TENANT_ID", "")
 APP_TYPE = os.environ.get("MICROSOFT_APP_TYPE", "SingleTenant")
 
-# Fase 2 (auditoría C5): token admin PROPIO, separado del secret OAuth del
-# bot. Mientras ADMIN_API_TOKEN no esté seteado en el App Service, cae al
-# password del bot (compat con los scripts de testing existentes) — setearlo
-# y rotar es la migración recomendada.
-ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "") or DATA_APP_PWD
+# Fase 2 (auditoría C5) + F0 VER-IA (2026-07-02): token admin PROPIO, separado
+# del secret OAuth del bot, SIN fallback: una sola credencial no puede abrir
+# mensajería Y /admin/* a la vez. Si ADMIN_API_TOKEN no está seteado,
+# _require_admin rechaza todo (fail-closed) — setear el app setting ANTES de
+# deployar esta versión.
+ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 
 
 def _require_admin(request: "Request") -> None:
@@ -2216,13 +2217,13 @@ async def generate_daily_news_brief() -> None:
     Corre 6 AM EC para que esté listo antes de daily_report (8 AM) y antes
     que Daniel/Gabriela hagan queries de proyección.
     """
-    try:
-        logger.info("generate_daily_news_brief: arrancando")
-        # Correr en thread porque la API call es sync
-        await asyncio.to_thread(news_brief.generate_brief)
-        logger.info("generate_daily_news_brief: brief generado OK")
-    except Exception as e:
-        logger.exception("generate_daily_news_brief falló: %s", e)
+    logger.info("generate_daily_news_brief: arrancando")
+    # Correr en thread porque la API call es sync. Sin try/except (F0
+    # 2026-07-02): el fallo propaga a _job_news_brief (_reliable_job) para
+    # retry + alerta — antes se tragaba y el Data Bot operaba días sin brief
+    # sin que nadie se enterara.
+    await asyncio.to_thread(news_brief.generate_brief)
+    logger.info("generate_daily_news_brief: brief generado OK")
 
 
 # ===== Weekly summaries (Phase G.2) =====
@@ -2244,7 +2245,12 @@ async def send_weekly_summaries() -> None:
         if email.lower().startswith("unidentified-"):
             continue
         try:
-            result = _send_weekly_summary_email(user_email=email)
+            # to_thread (F0 2026-07-02): graph_mail.send reintenta con
+            # time.sleep exponencial — llamarlo directo bloqueaba el event
+            # loop (mismo mecanismo del incidente de cobranzas 2026-06-23).
+            result = await asyncio.to_thread(
+                _send_weekly_summary_email, user_email=email
+            )
             logger.info("Weekly summary enviado para %s → %s",
                         email, result.get("to"))
             enviados += 1
@@ -2373,6 +2379,14 @@ async def auto_assign_cobranzas() -> None:
     logger.info(
         "auto_assign_cobranzas: %d asignadas, %d errores", asignadas, errores
     )
+    # F0 (2026-07-02): un fallo TOTAL (solo errores, cero asignadas) debe subir
+    # a _reliable_job para retry + alerta — era el modo de fallo del incidente
+    # 2026-06-23 (0 cobranzas asignadas, 0 avisos). Un día legítimamente sin
+    # vencidos (0 errores, 0 asignadas) NO es error.
+    if errores and not asignadas:
+        raise RuntimeError(
+            f"auto_assign_cobranzas: fallo total ({errores} errores, 0 asignadas)"
+        )
 
 
 # ===== Reminders proactivos (de gerencia a colaboradores) =====
@@ -4295,18 +4309,17 @@ async def send_jose_asistencia_card_job() -> None:
     if not ref_dict:
         logger.warning("send_jose_asistencia_card_job: no hay ref para %s", JOSE_EMAIL)
         return
-    try:
-        ref = ConversationReference().deserialize(ref_dict)
+    # Sin try/except (F0 2026-07-02): el fallo propaga a _job_jose_asistencia
+    # (_reliable_job) para retry + alerta.
+    ref = ConversationReference().deserialize(ref_dict)
 
-        async def cb(turn_context: TurnContext) -> None:
-            await turn_context.send_activity(_build_jose_asistencia_card(JOSE_EMAIL))
+    async def cb(turn_context: TurnContext) -> None:
+        await turn_context.send_activity(_build_jose_asistencia_card(JOSE_EMAIL))
 
-        await activities_adapter.continue_conversation(
-            ref, cb, bot_id=ACTIVITIES_APP_ID
-        )
-        logger.info("Card de asistencia enviado a José")
-    except Exception as e:
-        logger.exception("Falló send_jose_asistencia_card_job: %s", e)
+    await activities_adapter.continue_conversation(
+        ref, cb, bot_id=ACTIVITIES_APP_ID
+    )
+    logger.info("Card de asistencia enviado a José")
 
 
 def _jose_summary_html(fecha: str | None = None) -> str:
@@ -4508,17 +4521,48 @@ async def send_jose_summary_email_job() -> None:
 # ============================================================
 JOB_RETRY_ATTEMPTS = 3
 JOB_RETRY_WAIT = 60  # segundos entre intentos
-ALERT_EMAIL = os.environ.get("ALERT_EMAIL", core_config.MIO).strip()
+# F0 (2026-07-02): ALERT_EMAIL acepta lista separada por comas — la alerta de
+# un job caído no puede depender de que UNA persona lea su correo. El primer
+# email de la lista es además el buzón emisor (from_user de graph_mail).
+ALERT_EMAILS = [
+    e.strip()
+    for e in os.environ.get("ALERT_EMAIL", core_config.MIO).split(",")
+    if e.strip()
+] or [core_config.MIO]
+ALERT_EMAIL = ALERT_EMAILS[0]  # compat: emisor + destino principal
+
+
+def _allowed_email_senders() -> set[str]:
+    """Buzones desde los que /admin/schedule-one-time-email puede enviar.
+    F0 (2026-07-02, auditoría ALTA-1): sin allowlist el endpoint era un motor
+    de spoofing — permitía cualquier buzón del tenant como remitente."""
+    extra = os.environ.get("ADMIN_EMAIL_FROM_ALLOWLIST", "")
+    return {
+        e.strip().lower()
+        for e in [*core_config.JEFE, core_config.MIO, *ALERT_EMAILS,
+                  *extra.split(",")]
+        if e.strip()
+    }
 
 
 def _send_job_failure_alert(job_name: str, error_msg: str, attempts: int) -> None:
     """Alerta por correo cuando un job agotó todos los reintentos.
-    NO falla si la alerta falla (best effort + log)."""
+    NO falla si la alerta falla (best effort + log). Throttle: máximo UNA
+    alerta por (job, día) vía ledger — un job recurrente caído (p.ej.
+    deliver_reminders cada 5 min) no puede volverse spam de alertas."""
+    fecha = send_ledger.today_iso()
+    throttle_key = f"alert_{job_name}"
+    try:
+        if not send_ledger.claim(throttle_key, fecha):
+            logger.warning("Alerta de %s ya enviada hoy — throttled", job_name)
+            return
+    except Exception:
+        logger.exception("Throttle de alerta falló — se intenta enviar igual")
     try:
         import graph_mail as _gm
         _gm.send(
             from_user=ALERT_EMAIL,
-            to=ALERT_EMAIL,
+            to=ALERT_EMAILS,
             subject=f"⚠️ Job {job_name} FALLÓ tras {attempts} intentos",
             html_body=(
                 f"<h2 style='color:#c53030'>⚠️ {job_name} falló</h2>"
@@ -4531,9 +4575,17 @@ def _send_job_failure_alert(job_name: str, error_msg: str, attempts: int) -> Non
                 f"endpoint admin correspondiente.</p>"
             ),
         )
-        logger.warning("Alerta de fallo de %s enviada a %s", job_name, ALERT_EMAIL)
+        logger.warning("Alerta de fallo de %s enviada a %s", job_name, ALERT_EMAILS)
+        try:
+            send_ledger.confirm(throttle_key, fecha)
+        except Exception:
+            logger.exception("No se pudo confirmar el throttle de %s", job_name)
     except Exception as alert_err:
         logger.exception("La alerta de %s también falló: %s", job_name, alert_err)
+        try:
+            send_ledger.release(throttle_key, fecha)
+        except Exception:
+            logger.debug("release del throttle de %s falló", job_name)
 
 
 async def _reliable_job(
@@ -5080,6 +5132,50 @@ async def _job_logistics_morning() -> None:
     )
 
 
+# ===== F0 VER-IA (2026-07-02): jobs que estaban registrados SIN _reliable_job
+# y fallaban en silencio (auditoría H6). Ahora todos los jobs del scheduler
+# pasan por el mismo contrato: retry + alerta (+ ledger donde aplica). =====
+
+async def _job_deliver_reminders() -> None:
+    # Corre cada 5 min — sin ledger (recurrente), retry corto. La alerta va
+    # throttled a 1/día por _send_job_failure_alert.
+    await _reliable_job(
+        "deliver_reminders", deliver_due_reminders, retries=2, wait=15,
+    )
+
+
+async def _job_auto_assign_cobranzas() -> None:
+    # Ledger key propia → participa del catch-up: un outage de Contifico a las
+    # 7:30 se recupera solo con el re-catch-up de la mañana.
+    await _reliable_job(
+        "auto_assign_cobranzas", auto_assign_cobranzas,
+        ledger_key="auto_assign_cobranzas",
+    )
+
+
+async def _job_news_brief() -> None:
+    await _reliable_job(
+        "daily_news_brief", generate_daily_news_brief,
+        ledger_key="daily_news_brief", retries=2,
+    )
+
+
+async def _job_apertura_caja_matinal() -> None:
+    await _reliable_job(
+        "apertura_caja_matinal", send_apertura_caja_matinal_job,
+        ledger_key="apertura_caja_matinal",
+    )
+
+
+async def _job_jose_asistencia() -> None:
+    # Una sola key diaria: en un día dado solo aplica uno de los dos triggers
+    # (mon-fri 17:10 o sat 12:30), no chocan entre sí.
+    await _reliable_job(
+        "jose_asistencia", send_jose_asistencia_card_job,
+        ledger_key="jose_asistencia",
+    )
+
+
 def _schedule_jobs() -> None:
     # ===== Check-in cards — config única en core_config.CHECKIN_* =====
     # Lun-Vie: oficina 16:30, sucursales 17:10. Sáb: SOLO sucursales 12:30.
@@ -5124,14 +5220,14 @@ def _schedule_jobs() -> None:
             )
     # Reminders: cada 5 min, chequea si hay reminders vencidos para entregar
     scheduler.add_job(
-        deliver_due_reminders,
+        _job_deliver_reminders,
         CronTrigger(minute="*/5", timezone=EC_TZ),
         id="deliver_reminders",
         replace_existing=True,
     )
     # Auto-asignación de cobranzas: Lun-Vie 7:30 AM EC (antes del daily report)
     scheduler.add_job(
-        auto_assign_cobranzas,
+        _job_auto_assign_cobranzas,
         CronTrigger(day_of_week="mon-fri", hour=7, minute=30, timezone=EC_TZ),
         id="auto_assign_cobranzas",
         replace_existing=True,
@@ -5168,7 +5264,7 @@ def _schedule_jobs() -> None:
         logger.info("calendar_sync programado (CALENDAR_SYNC_ENABLED=1)")
     # Daily news brief: 6 AM EC, antes del daily report y de queries de gerencia
     scheduler.add_job(
-        generate_daily_news_brief,
+        _job_news_brief,
         CronTrigger(hour=6, minute=0, timezone=EC_TZ),
         id="daily_news_brief",
         replace_existing=True,
@@ -5192,7 +5288,7 @@ def _schedule_jobs() -> None:
 
     # Phase S (2026-06-08): apertura de caja matinal Lun-Vie 8:15 AM EC
     scheduler.add_job(
-        send_apertura_caja_matinal_job,
+        _job_apertura_caja_matinal,
         CronTrigger(day_of_week="mon-fri", hour=8, minute=15, timezone=EC_TZ),
         id="apertura_caja_matinal",
         replace_existing=True,
@@ -5238,14 +5334,14 @@ def _schedule_jobs() -> None:
     # dedicado — 17:10 Lun-Vie y 12:30 Sáb, igual que el Asistente 1 UIO/GYE.
     jh, jm = core_config.CHECKIN_WEEKDAY_SUCURSALES
     scheduler.add_job(
-        send_jose_asistencia_card_job,
+        _job_jose_asistencia,
         CronTrigger(day_of_week="mon-fri", hour=jh, minute=jm, timezone=EC_TZ),
         id="jose_asistencia_weekday",
         replace_existing=True,
     )
     jbh, jbm = core_config.CHECKIN_SATURDAY_SUCURSALES
     scheduler.add_job(
-        send_jose_asistencia_card_job,
+        _job_jose_asistencia,
         CronTrigger(day_of_week="sat", hour=jbh, minute=jbm, timezone=EC_TZ),
         id="jose_asistencia_saturday",
         replace_existing=True,
@@ -5275,13 +5371,26 @@ def _schedule_jobs() -> None:
         )
         logger.info("logistics_morning programado EN EL BOT (LOGISTICS_IN_BOT=1)")
 
+    # F0 (2026-07-02, auditoría H8): re-catch-up periódico. Si un job agotó
+    # sus reintentos (p.ej. outage de 20 min de Contifico a las 8:00), el
+    # ledger quedó en release y nadie reintentaba hasta el próximo restart.
+    # Este job re-corre el catch-up en horario hábil; el ledger garantiza que
+    # lo ya enviado no se duplica.
+    scheduler.add_job(
+        _catchup_missed_sends,
+        CronTrigger(hour="8-12,17-19", minute=35, timezone=EC_TZ),
+        id="catchup_retry",
+        replace_existing=True,
+    )
+
     logger.info(
         "Jobs: checkin oficina mon-fri 16:30, sucursales mon-fri 17:10 + "
         "sat 12:30 (domingo NADA), reminders */5min, "
         "cobranzas mon-fri 7:30, "
         "news_brief daily 6:00, monthly_recaps day 1 8:00+10:00, "
         "consolidated_daily mon-fri 18:30, saturday_recap mon 8:00, "
-        "jose_summary mon-sat 18:30 (card on-demand)"
+        "jose_summary mon-sat 18:30 (card on-demand), "
+        "catchup_retry 8-12+17-19 :35"
     )
 
 
@@ -5301,6 +5410,18 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
         # weekly_summaries DESHABILITADO 2026-06-29 (ver _schedule_jobs).
         ("task_confirmations", _job_task_confirmations,
          lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (9, 0)),
+        # F0 (2026-07-02): jobs que estaban fuera del catch-up (auditoría H6).
+        ("auto_assign_cobranzas", _job_auto_assign_cobranzas,
+         lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (7, 30)),
+        ("daily_news_brief", _job_news_brief,
+         lambda now: (now.hour, now.minute) >= (6, 0)),
+        ("apertura_caja_matinal", _job_apertura_caja_matinal,
+         lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (8, 15)),
+        ("jose_asistencia", _job_jose_asistencia,
+         lambda now: (now.weekday() <= 4
+                      and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES)
+         or (now.weekday() == 5
+             and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES)),
         ("monthly_sales_recap", _job_monthly_sales_recap,
          lambda now: now.day == 1 and (now.hour, now.minute) >= (8, 0)),
         ("monthly_activities_recap", _job_monthly_activities_recap,
@@ -5494,6 +5615,43 @@ async def health() -> dict[str, Any]:
     }
 
 
+def _missing_deliveries(now: datetime, grace_minutes: int = 30) -> list[str]:
+    """Claves del ledger que YA debían estar confirmadas hoy (con margen de
+    gracia) y no lo están. Base del dead-man switch externo (F0 2026-07-02):
+    reusa las mismas condiciones día/hora del catch-up."""
+    from datetime import timedelta
+    ref = now - timedelta(minutes=grace_minutes)
+    hoy = send_ledger.today_iso()
+    faltantes: list[str] = []
+    for key, _fn, due in _catchup_specs():
+        try:
+            if due(ref) and not send_ledger.already_sent(key, hoy):
+                faltantes.append(key)
+        except Exception:
+            logger.exception("_missing_deliveries: spec %s falló", key)
+    return faltantes
+
+
+@app.get("/health/deliveries")
+async def health_deliveries():
+    """Dead-man switch de ENTREGAS (F0 2026-07-02, auditoría H11): devuelve
+    200 si todo lo que debía salir hoy está confirmado en el ledger; 503 con
+    el detalle si falta algo. Pensado para un availability test externo
+    (Azure Monitor cada 5 min + alert rule) — detecta tanto "proceso caído"
+    como "proceso vivo pero el reporte no salió y la alerta interna falló"."""
+    from fastapi.responses import JSONResponse
+    now = datetime.now(EC_TZ)
+    faltantes = _missing_deliveries(now)
+    return JSONResponse(
+        status_code=503 if faltantes else 200,
+        content={
+            "status": "missing_deliveries" if faltantes else "ok",
+            "missing": faltantes,
+            "checked_at": now.isoformat(timespec="seconds"),
+        },
+    )
+
+
 @app.post("/admin/trigger-checkin")
 async def trigger_checkin(request: Request) -> dict[str, Any]:
     _require_admin(request)
@@ -5525,7 +5683,17 @@ async def trigger_cobranzas(request: Request) -> dict[str, Any]:
     al toque; el resultado se ve en el Log stream ('auto_assign_cobranzas: N
     asignadas') y en el check-in del colaborador. Fix 2026-06-23."""
     _require_admin(request)
-    asyncio.create_task(auto_assign_cobranzas())
+
+    # F0 (2026-07-02): auto_assign_cobranzas ahora LANZA en fallo total (para
+    # que _reliable_job alerte) — el trigger manual la envuelve para no dejar
+    # una task con excepción sin recoger.
+    async def _run() -> None:
+        try:
+            await auto_assign_cobranzas()
+        except Exception:
+            logger.exception("trigger-cobranzas manual falló")
+
+    asyncio.create_task(_run())
     return {"status": "started", "nota": "corre en background ~1-2 min"}
 
 
@@ -6137,6 +6305,15 @@ async def schedule_one_time_email(request: Request) -> dict[str, Any]:
         raise HTTPException(
             status_code=400,
             detail="from_user, to, subject, html_body y send_at_iso son requeridos",
+        )
+
+    # F0 (2026-07-02): remitente restringido — sin esto el endpoint permitía
+    # enviar desde CUALQUIER buzón del tenant (spoofing interno).
+    if from_user.lower() not in _allowed_email_senders():
+        raise HTTPException(
+            status_code=403,
+            detail="from_user no permitido (gerencia/operador; ampliar con "
+                   "ADMIN_EMAIL_FROM_ALLOWLIST)",
         )
 
     try:
