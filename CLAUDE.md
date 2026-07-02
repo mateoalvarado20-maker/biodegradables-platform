@@ -30,7 +30,7 @@ testean), `docs/onboarding.md`, `docs/runbook-operativo.md` (incidentes).
 **Pendientes operativos del refactor (acción humana, ver runbook):**
 1. ✅ **HECHO (2026-06-22):** repo conectado a GitHub (`mateoalvarado20-maker/biodegradables-platform`), 6 PRs mergeados. Falta solo confirmar branch protection en `master`.
 2. Deploy del bot (`tools/build_bot_package.py` → `az webapp deploy`) y del azfunc sincronizado.
-3. ⚠️ **PENDIENTE (confirmado 2026-06-22):** setear `ADMIN_API_TOKEN` en el App Service (separa admin del secret OAuth). En el backup 2026-06-12 NO está seteado → los endpoints `/admin/*` usan `MICROSOFT_APP_PASSWORD`.
+3. ✅ **HECHO (2026-07-02, F0 VER-IA):** `ADMIN_API_TOKEN` propio seteado en el App Service (random 32 bytes; también en env var User de esta PC para scripts de testing). El código además eliminó el fallback al secret OAuth (fail-closed). Dead-man switch desplegado: webtest `webtest-bot-deadman` + action group `ag-veria-alertas` + alerta en `rg-biodegradables-prod` — tras deployar F0, cambiar la URL del webtest de `/health` a `/health/deliveries`.
 4. Cutover de logística al bot (`LOGISTICS_IN_BOT=1` + disable del timer azfunc, en la misma ventana — runbook §Cutover).
 5. (Opcional) `DISPATCH_TABLE_CONN` en la PC para que `dispatch.py` escriba a la tabla de producción.
 
