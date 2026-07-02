@@ -31,7 +31,11 @@ import outlook_client
 MODEL = "claude-sonnet-4-6"
 MAX_TOKENS = 2000
 
-OWN_DOMAIN = "biodegradablesecuador.com"
+# F2.4 (VER-IA 2026-07-02): identidad del tenant desde core_config — nada de
+# marca ni firmante horneado en el prompt (un tenant nuevo firma con SU gente).
+import core_config
+
+OWN_DOMAIN = core_config.COMPANY_DOMAIN
 NO_REPLY_PATTERNS = re.compile(
     r"(no.?reply|noreply|mailer.daemon|postmaster|notifications?|automated|donotreply|news)@",
     re.IGNORECASE,
@@ -77,9 +81,14 @@ def _load_context() -> str:
 
 
 def _system_prompt(company_context: str) -> str:
-    return f"""Eres un asistente comercial de Biodegradables Ecuador. Tu trabajo es
+    company = core_config.COMPANY_NAME
+    signer_name = core_config.outbound_signer_name()
+    signer_email = core_config.OUTBOUND_SIGNER_EMAIL
+    website = core_config.COMPANY_WEBSITE
+    website_label = website.replace("https://", "").replace("http://", "").strip("/")
+    return f"""Eres un asistente comercial de {company}. Tu trabajo es
 generar borradores de respuesta a correos de prospectos que llegan al inbox
-de Mateo Alvarado (malvarado@biodegradablesecuador.com).
+de {signer_name} ({signer_email}).
 
 CONTEXTO COMPLETO DE LA EMPRESA (catálogo, diferenciadores, reglas):
 ========================================================================
@@ -100,10 +109,10 @@ INSTRUCCIONES PARA GENERAR LA RESPUESTA:
 3. Sigue ESTRICTAMENTE las reglas del contexto:
    - No inventes precios, MOQ, tiempos, certificaciones, ni productos
    - No ofrezcas muestras
-   - No menciones a Gabriela Sánchez ni a ningún tercero (Mateo maneja personalmente el primer contacto)
+   - No menciones a terceros de la empresa ({signer_name} maneja personalmente el primer contacto)
    - No uses emojis
    - Máximo 8-10 líneas
-   - Cierra con disposición personal de Mateo a coordinar siguientes pasos
+   - Cierra con disposición personal de {signer_name} a coordinar siguientes pasos
 
 4. Responde en el mismo idioma del correo entrante.
 
@@ -128,8 +137,8 @@ El body_html debe ser HTML válido y conservador (solo <p>, <br>, <strong>, <a>,
 complicados. Saltos de línea con <br> o párrafos con <p>.
 
 Firma sugerida al final (incluir tal cual):
-<p>Saludos,<br>Mateo Alvarado<br>Biodegradables Ecuador<br>
-<a href="https://www.biodegradablesecuador.com/">www.biodegradablesecuador.com</a></p>
+<p>Saludos,<br>{signer_name}<br>{company}<br>
+<a href="{website}">{website_label}</a></p>
 """
 
 

@@ -1041,13 +1041,15 @@ CAJA_DENOMINACIONES_MONEDAS: tuple[tuple[str, float], ...] = (
     ("m005", 0.05),
     ("m001", 0.01),
 )
-CAJA_FONDO_FIJO: float = 50.00  # fallback si no se conoce sucursal
+# F2.4 (2026-07-02): el fondo fijo vive en core_config (tenant-overridable
+# vía caja.fondo_default / caja.fondo_por_sucursal del config.yaml). Import
+# perezoso-seguro: core_config no depende de nada nuestro.
+import core_config as _core_config
+
+CAJA_FONDO_FIJO: float = _core_config.CAJA_FONDO_DEFAULT  # fallback sin sucursal
 
 # Phase R (2026-06-05): fondo de caja distinto por sucursal
-CAJA_FONDO_POR_SUCURSAL: dict[str, float] = {
-    "Guayaquil": 100.00,
-    "Quito": 50.00,
-}
+CAJA_FONDO_POR_SUCURSAL: dict[str, float] = _core_config.CAJA_FONDO_POR_SUCURSAL
 
 
 def get_fondo_caja(sucursal: str | None) -> float:

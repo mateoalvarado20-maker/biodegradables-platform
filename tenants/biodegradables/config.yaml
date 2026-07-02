@@ -35,6 +35,24 @@ company:                                   # core_config.COMPANY_* (prompts/repo
   sucursal_names:                          # core_config.SUCURSAL_NAMES (código -> ciudad)
     UIO: Quito
     GYE: Guayaquil
+  domain: biodegradablesecuador.com        # filtra correos internos (reply agent)
+  website: "https://www.biodegradablesecuador.com/"
+  outbound_signer: malvarado@biodegradablesecuador.com  # firma correos a prospectos
+
+erp:                                       # F2.4 — core_config.DOC_PREFIXES
+  document_prefixes:                       # sucursal -> prefijo de documento Contifico
+    GYE: "001-001"
+    UIO: "001-002"
+
+caja:                                      # F2.4 — fondo fijo del cierre de caja
+  fondo_default: 50.00
+  fondo_por_sucursal:
+    Guayaquil: 100.00
+    Quito: 50.00
+
+# logistics.provincia_keywords: ausente = dataset default de Ecuador
+# (daily_logistics_report.PROVINCIA_KEYWORDS_EC). Solo se declara para
+# tenants de otro país.
 
 people:                                    # core_config.PEOPLE (directorio identidad/roles)
   - email: dsanchez@biodegradablesecuador.com
@@ -76,6 +94,7 @@ commercial:
     ayer_amarillo: 0.80
     mora_verde: 0.05
     mora_amarillo: 0.10
+  dashboard_url: "https://app.powerbi.com/groups/me/reports/de5387d4-8203-4a93-8eaf-04212041fece"
 
 checkin:                                   # core_config CHECKIN_* (hora local del tenant)
   oficina:

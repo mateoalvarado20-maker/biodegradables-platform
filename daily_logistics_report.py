@@ -53,10 +53,11 @@ MIO = core_config.MIO
 
 LOCAL_TZ = timezone(timedelta(hours=-5))  # Ecuador (UTC-5)
 
-# Map prefijo documento → ciudad origen (sucursal)
+# Map prefijo documento → ciudad origen (F2.4: derivado de core_config —
+# erp.document_prefixes + company.sucursal_names del config.yaml del tenant).
 ORIGEN_POR_PREFIJO: dict[str, str] = {
-    "001-001": "Guayaquil",
-    "001-002": "Quito",
+    prefijo: core_config.SUCURSAL_NAMES.get(suc, suc)
+    for suc, prefijo in core_config.DOC_PREFIXES.items()
 }
 
 
@@ -107,7 +108,10 @@ def _strip_accents(s: str) -> str:
 # ===== Provincias Ecuador (keyword → provincia) =====
 # Orden importa: keywords más específicos primero. Lowercase, SIN acentos
 # (porque normalizamos la dirección antes de buscar).
-PROVINCIA_KEYWORDS: list[tuple[str, str, str]] = [
+# F2.4: este es el DATASET DEFAULT de Ecuador. Un tenant de otro país lo
+# reemplaza completo desde su YAML (logistics.provincia_keywords →
+# core_config.LOGISTICS_PROVINCIA_KEYWORDS). Ver PROVINCIA_KEYWORDS más abajo.
+PROVINCIA_KEYWORDS_EC: list[tuple[str, str, str]] = [
     # (keyword sin acentos lowercase, provincia, ciudad)
     # Phrases largas/compuestas primero
     ("santo domingo", "Santo Domingo", "Santo Domingo"),
@@ -210,6 +214,11 @@ PROVINCIA_KEYWORDS: list[tuple[str, str, str]] = [
     ("ponce carrasco", "Pichincha", "Quito"),
     ("irlanda", "Pichincha", "Quito"),
 ]
+
+# La lista efectiva: el override del tenant si existe, si no el dataset EC.
+PROVINCIA_KEYWORDS: list[tuple[str, str, str]] = (
+    core_config.LOGISTICS_PROVINCIA_KEYWORDS or PROVINCIA_KEYWORDS_EC
+)
 
 
 def _provincia_y_ciudad(direccion: str, *, origen: str | None = None) -> tuple[str, str]:
