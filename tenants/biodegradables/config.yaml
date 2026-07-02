@@ -1,10 +1,12 @@
-# Configuración del tenant: Biodegradables Ecuador (tenant 0 / piloto).
+# Configuración del tenant: Biodegradables Ecuador (tenant #1 de VER-IA).
 #
-# Estos valores ESPEJAN los de core_config.py. El test
-# tests/test_tenant_config_biodegradables.py verifica que sean idénticos, así que
-# este archivo todavía NO es la fuente de verdad en producción — es la red de
-# seguridad para el switch futuro (cuando core_config lea desde aquí).
-# Cambiar un valor aquí NO afecta a los bots hoy; primero hay que cablear el switch.
+# ⚡ EN PRODUCCIÓN desde 2026-07-02 (F2.1): el App Service corre con
+# TENANT_CONFIG_SOURCE=yaml + TENANT_SLUG=biodegradables, así que ESTE archivo
+# ES la fuente de verdad de destinatarios, horarios, metas, umbrales, feriados,
+# identidad y directorio de personas. core_config.py conserva los mismos
+# valores como defaults legacy (los usa azfunc/, que no incluye core/); la
+# equivalencia la fijan tests/test_tenant_config_biodegradables.py y
+# tests/test_core_config_switch.py.
 
 slug: biodegradables
 display_name: "Biodegradables Ecuador"
@@ -87,6 +89,23 @@ checkin:                                   # core_config CHECKIN_* (hora local d
       - quito@biodegradablesecuador.com
     weekday_time: "17:10"                  # CHECKIN_WEEKDAY_SUCURSALES
     saturday_time: "12:30"                 # CHECKIN_SATURDAY_SUCURSALES
+
+# Horarios de los jobs del scheduler (F2.2 — core_config.JOB_SCHEDULES).
+# Cambiar un horario aquí mueve a la vez el cron, el catch-up y el dead-man
+# switch (/health/deliveries). days: "mon-fri" | "mon-sat" | "mon" | "daily".
+# Los jobs mensuales usan day_of_month (1-28) en lugar de days.
+schedules:
+  morning_sales:            { time: "08:00", days: mon-sat }   # reporte comercial
+  logistics_morning:        { time: "08:00", days: mon-sat }   # reporte logística
+  auto_assign_cobranzas:    { time: "07:30", days: mon-fri }   # antes del comercial
+  task_confirmations:       { time: "09:00", days: mon-fri }
+  calendar_sync:            { time: "08:45", days: mon-fri }
+  daily_news_brief:         { time: "06:00", days: daily }
+  apertura_caja_matinal:    { time: "08:15", days: mon-fri }   # recordatorio matinal
+  consolidated_daily:       { time: "18:30", days: mon-fri }   # resumen del equipo
+  saturday_recap:           { time: "08:00", days: mon }       # lunes, recap del sábado
+  monthly_sales_recap:      { time: "08:00", day_of_month: 1 }
+  monthly_activities_recap: { time: "10:00", day_of_month: 1 }
 
 # Feriados Ecuador (core_config.EC_HOLIDAYS). YAML parsea las fechas sin comillas
 # como date nativo. Mantener al menos el año actual + el siguiente.

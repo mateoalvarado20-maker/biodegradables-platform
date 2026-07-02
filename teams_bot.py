@@ -4919,7 +4919,47 @@ async def send_saturday_recap_summary_job() -> None:
 
 
 # ===== Scheduler =====
-EC_TZ = pytz.timezone("America/Guayaquil")
+# F2.2 (VER-IA 2026-07-02): timezone del TENANT, no de Ecuador — un cliente en
+# otro huso solo cambia `timezone:` en su config.yaml. (El nombre EC_TZ se
+# conserva por los ~90 usos existentes; semánticamente es "TZ del tenant".)
+EC_TZ = pytz.timezone(core_config.TIMEZONE_NAME)
+
+
+def _dow_match(now: datetime, days: str) -> bool:
+    """¿`now` cae en la especificación de días? ("mon-fri", "mon-sat", "mon",
+    "daily", "mon,wed"). Mismo vocabulario que CronTrigger day_of_week."""
+    if days in ("daily", "*", "", None):
+        return True
+    names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    if "-" in days:
+        a, b = days.split("-")
+        return names.index(a) <= now.weekday() <= names.index(b)
+    return names[now.weekday()] in {d.strip() for d in days.split(",")}
+
+
+def _cron_for(job_key: str) -> "CronTrigger":
+    """CronTrigger de un job desde core_config.JOB_SCHEDULES (F2.2). La misma
+    fuente alimenta el catch-up (_due_after) y el dead-man — no pueden divergir."""
+    s = core_config.JOB_SCHEDULES[job_key]
+    h, m = s["time"]
+    if s.get("day_of_month"):
+        return CronTrigger(day=s["day_of_month"], hour=h, minute=m, timezone=EC_TZ)
+    days = s.get("days")
+    if days in ("daily", "*", "", None):
+        return CronTrigger(hour=h, minute=m, timezone=EC_TZ)
+    return CronTrigger(day_of_week=days, hour=h, minute=m, timezone=EC_TZ)
+
+
+def _due_after(job_key: str):
+    """Condición día/hora del catch-up para un job de JOB_SCHEDULES."""
+    def due(now: datetime) -> bool:
+        s = core_config.JOB_SCHEDULES[job_key]
+        if s.get("day_of_month") is not None and now.day != s["day_of_month"]:
+            return False
+        if s.get("days") and not _dow_match(now, s["days"]):
+            return False
+        return (now.hour, now.minute) >= s["time"]
+    return due
 # Fase 3 (auditoría S2): misfire_grace_time era el default de 1 segundo — un
 # deploy/restart a la hora exacta de un job perdía la ejecución en silencio.
 # Con 1h de gracia + coalesce, una ejecución atrasada corre apenas el
@@ -5225,10 +5265,10 @@ def _schedule_jobs() -> None:
         id="deliver_reminders",
         replace_existing=True,
     )
-    # Auto-asignación de cobranzas: Lun-Vie 7:30 AM EC (antes del daily report)
+    # Auto-asignación de cobranzas: antes del reporte comercial (config tenant)
     scheduler.add_job(
         _job_auto_assign_cobranzas,
-        CronTrigger(day_of_week="mon-fri", hour=7, minute=30, timezone=EC_TZ),
+        _cron_for("auto_assign_cobranzas"),
         id="auto_assign_cobranzas",
         replace_existing=True,
     )
@@ -5245,7 +5285,7 @@ def _schedule_jobs() -> None:
     # que llegaron a su fecha límite y no están finalizadas (Feature 2026-06-15).
     scheduler.add_job(
         _job_task_confirmations,
-        CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=EC_TZ),
+        _cron_for("task_confirmations"),
         id="task_confirmations",
         replace_existing=True,
     )
@@ -5257,28 +5297,28 @@ def _schedule_jobs() -> None:
     if os.environ.get("CALENDAR_SYNC_ENABLED", "0").strip() == "1":
         scheduler.add_job(
             _job_calendar_sync,
-            CronTrigger(day_of_week="mon-fri", hour=8, minute=45, timezone=EC_TZ),
+            _cron_for("calendar_sync"),
             id="calendar_sync",
             replace_existing=True,
         )
         logger.info("calendar_sync programado (CALENDAR_SYNC_ENABLED=1)")
-    # Daily news brief: 6 AM EC, antes del daily report y de queries de gerencia
+    # Daily news brief: antes del daily report y de queries de gerencia
     scheduler.add_job(
         _job_news_brief,
-        CronTrigger(hour=6, minute=0, timezone=EC_TZ),
+        _cron_for("daily_news_brief"),
         id="daily_news_brief",
         replace_existing=True,
     )
     # Phase M — Monthly recaps día 1: full recap mes anterior + proyección
     scheduler.add_job(
         _job_monthly_sales_recap,
-        CronTrigger(day=1, hour=8, minute=0, timezone=EC_TZ),
+        _cron_for("monthly_sales_recap"),
         id="monthly_sales_recap_day1",
         replace_existing=True,
     )
     scheduler.add_job(
         _job_monthly_activities_recap,
-        CronTrigger(day=1, hour=10, minute=0, timezone=EC_TZ),
+        _cron_for("monthly_activities_recap"),
         id="monthly_activities_recap_day1",
         replace_existing=True,
     )
@@ -5286,10 +5326,10 @@ def _schedule_jobs() -> None:
     # ("no me gustó el quincenal, ahorita no es necesario"). El endpoint
     # /admin/trigger-midmonth-status sigue disponible para disparo manual.
 
-    # Phase S (2026-06-08): apertura de caja matinal Lun-Vie 8:15 AM EC
+    # Phase S (2026-06-08): recordatorio matinal de actividades (config tenant)
     scheduler.add_job(
         _job_apertura_caja_matinal,
-        CronTrigger(day_of_week="mon-fri", hour=8, minute=15, timezone=EC_TZ),
+        _cron_for("apertura_caja_matinal"),
         id="apertura_caja_matinal",
         replace_existing=True,
     )
@@ -5309,7 +5349,7 @@ def _schedule_jobs() -> None:
     # Reemplaza los emails individuales que se mandaban al hacer check-in.
     scheduler.add_job(
         _job_consolidated_daily,
-        CronTrigger(day_of_week="mon-fri", hour=18, minute=30, timezone=EC_TZ),
+        _cron_for("consolidated_daily"),
         id="consolidated_daily_summary",
         replace_existing=True,
     )
@@ -5320,7 +5360,7 @@ def _schedule_jobs() -> None:
     # días distintos, sin duplicación (ledger key `saturday_recap` separada).
     scheduler.add_job(
         _job_saturday_recap,
-        CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=EC_TZ),
+        _cron_for("saturday_recap"),
         id="saturday_recap",
         replace_existing=True,
     )
@@ -5351,7 +5391,7 @@ def _schedule_jobs() -> None:
     # Reemplaza el timer del azfunc (que se dormía en Consumption Plan).
     scheduler.add_job(
         send_morning_sales_report_job,
-        CronTrigger(day_of_week="mon-sat", hour=8, minute=0, timezone=EC_TZ),
+        _cron_for("morning_sales"),
         id="morning_sales_report",
         replace_existing=True,
     )
@@ -5365,7 +5405,7 @@ def _schedule_jobs() -> None:
     if os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
         scheduler.add_job(
             _job_logistics_morning,
-            CronTrigger(day_of_week="mon-sat", hour=8, minute=0, timezone=EC_TZ),
+            _cron_for("logistics_morning"),
             id="logistics_morning",
             replace_existing=True,
         )
@@ -5399,33 +5439,37 @@ def _schedule_jobs() -> None:
 # arrancar revisa el ledger del día y dispara lo que no salió. El ledger
 # evita duplicados si sí había salido.
 def _catchup_specs() -> list[tuple[str, Any, Any]]:
+    # F2.2 (2026-07-02): las condiciones día/hora salen de _due_after →
+    # core_config.JOB_SCHEDULES — la MISMA fuente que registra los crons y que
+    # evalúa el dead-man (/health/deliveries). Cambiar un horario en el YAML
+    # del tenant mueve las tres superficies a la vez.
     specs: list[tuple[str, Any, Any]] = [
         ("morning_sales", send_morning_sales_report_job,
-         lambda now: now.weekday() <= 5 and (now.hour, now.minute) >= (8, 0)),
+         _due_after("morning_sales")),
         ("consolidated_daily", _job_consolidated_daily,
-         lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (18, 30)),
-        # Recap del sábado: solo lunes (weekday 0), desde las 8:00.
+         _due_after("consolidated_daily")),
         ("saturday_recap", _job_saturday_recap,
-         lambda now: now.weekday() == 0 and (now.hour, now.minute) >= (8, 0)),
+         _due_after("saturday_recap")),
         # weekly_summaries DESHABILITADO 2026-06-29 (ver _schedule_jobs).
         ("task_confirmations", _job_task_confirmations,
-         lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (9, 0)),
-        # F0 (2026-07-02): jobs que estaban fuera del catch-up (auditoría H6).
+         _due_after("task_confirmations")),
         ("auto_assign_cobranzas", _job_auto_assign_cobranzas,
-         lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (7, 30)),
+         _due_after("auto_assign_cobranzas")),
         ("daily_news_brief", _job_news_brief,
-         lambda now: (now.hour, now.minute) >= (6, 0)),
+         _due_after("daily_news_brief")),
         ("apertura_caja_matinal", _job_apertura_caja_matinal,
-         lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (8, 15)),
+         _due_after("apertura_caja_matinal")),
+        # Asistencia del chofer: sigue los horarios de check-in de sucursales
+        # (config del tenant), no un schedule propio.
         ("jose_asistencia", _job_jose_asistencia,
          lambda now: (now.weekday() <= 4
                       and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES)
          or (now.weekday() == 5
              and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES)),
         ("monthly_sales_recap", _job_monthly_sales_recap,
-         lambda now: now.day == 1 and (now.hour, now.minute) >= (8, 0)),
+         _due_after("monthly_sales_recap")),
         ("monthly_activities_recap", _job_monthly_activities_recap,
-         lambda now: now.day == 1 and (now.hour, now.minute) >= (10, 0)),
+         _due_after("monthly_activities_recap")),
         # Check-ins: lun-vie oficina y sucursales; sáb solo sucursales.
         # Domingo (weekday 6) ninguna condición aplica — no hay catch-up.
         ("checkin_oficina", _job_checkin_oficina,
@@ -5451,12 +5495,12 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
     if os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
         specs.append(
             ("logistics_morning", _job_logistics_morning,
-             lambda now: now.weekday() <= 5 and (now.hour, now.minute) >= (8, 0))
+             _due_after("logistics_morning"))
         )
     if os.environ.get("CALENDAR_SYNC_ENABLED", "0").strip() == "1":
         specs.append(
             ("calendar_sync", _job_calendar_sync,
-             lambda now: now.weekday() <= 4 and (now.hour, now.minute) >= (8, 45))
+             _due_after("calendar_sync"))
         )
     return specs
 

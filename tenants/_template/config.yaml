@@ -40,6 +40,20 @@ checkin:
     weekday_time: "17:10"
     saturday_time: "12:30"
 
+# Horarios de los jobs del scheduler (opcional — sin este bloque aplican los
+# defaults de core_config.JOB_SCHEDULES). Un horario declarado aquí mueve a la
+# vez el cron, el catch-up y el dead-man switch. days: "mon-fri" | "mon-sat" |
+# "mon" | "daily" | "mon,wed". Jobs mensuales: day_of_month (1-28) sin days.
+# Claves válidas: morning_sales, logistics_morning, auto_assign_cobranzas,
+# task_confirmations, calendar_sync, daily_news_brief, apertura_caja_matinal,
+# consolidated_daily, saturday_recap, monthly_sales_recap,
+# monthly_activities_recap.
+schedules: {}
+# schedules:
+#   morning_sales:       { time: "07:30", days: mon-fri }
+#   consolidated_daily:  { time: "19:00", days: mon-sat }
+#   monthly_sales_recap: { time: "09:00", day_of_month: 2 }
+
 holidays:                             # feriados del PAÍS del cliente (no de Ecuador)
   2026: []
   2027: []
