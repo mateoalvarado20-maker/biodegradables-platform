@@ -73,6 +73,67 @@ CHECKIN_SATURDAY_SUCURSALES = (12, 30)  # Sáb → SOLO sucursales
 CHECKIN_DATE_OVERRIDES: dict[str, list[tuple[tuple[int, int], list[str]]]] = {}
 
 
+# ===== Timezone y horarios de jobs del scheduler (F2.2 VER-IA, 2026-07-02) =====
+# ÚNICA fuente de verdad de CUÁNDO corre cada job del bot. La consumen tres
+# superficies que antes podían divergir: el registro de crons en
+# teams_bot._schedule_jobs, las condiciones del catch-up y el dead-man switch
+# (/health/deliveries). Un tenant con otro huso u horario laboral solo edita
+# el bloque `schedules:` de su config.yaml — nunca el código.
+#
+# Formato: {job_key: {"time": (HH, MM), "days": <dow>}} con <dow> en
+# "mon-fri" | "mon-sat" | "mon" | "daily" | "mon,wed"; jobs mensuales usan
+# {"time": (HH, MM), "day_of_month": N} (sin "days").
+# NOTA: sin dependencias nuevas — azfunc/ comparte este módulo y no incluye
+# core/ (el schema pydantic solo se importa en la rama yaml, más abajo).
+TIMEZONE_NAME = os.environ.get("TENANT_TIMEZONE", "America/Guayaquil").strip()
+
+JOB_SCHEDULES: dict[str, dict] = {
+    "morning_sales":            {"time": (8, 0),   "days": "mon-sat"},
+    "logistics_morning":        {"time": (8, 0),   "days": "mon-sat"},
+    "auto_assign_cobranzas":    {"time": (7, 30),  "days": "mon-fri"},
+    "task_confirmations":       {"time": (9, 0),   "days": "mon-fri"},
+    "calendar_sync":            {"time": (8, 45),  "days": "mon-fri"},
+    "daily_news_brief":         {"time": (6, 0),   "days": "daily"},
+    "apertura_caja_matinal":    {"time": (8, 15),  "days": "mon-fri"},
+    "consolidated_daily":       {"time": (18, 30), "days": "mon-fri"},
+    "saturday_recap":           {"time": (8, 0),   "days": "mon"},
+    "monthly_sales_recap":      {"time": (8, 0),   "day_of_month": 1},
+    "monthly_activities_recap": {"time": (10, 0),  "day_of_month": 1},
+}
+
+
+def _apply_schedule_overrides(cfg_schedules: dict) -> None:
+    """Aplica el bloque `schedules:` del tenant sobre JOB_SCHEDULES.
+
+    Fail-closed: una clave desconocida o una combinación inválida
+    (days en un job mensual y viceversa) es un error de onboarding que debe
+    detener el arranque, no ignorarse. Cada entry expone .time ("HH:MM"),
+    .days y .day_of_month (el schema pydantic de core/config/schema.py).
+    """
+    for key, entry in cfg_schedules.items():
+        if key not in JOB_SCHEDULES:
+            raise ValueError(
+                f"schedules.{key} no es un job conocido; válidos: "
+                f"{sorted(JOB_SCHEDULES)}"
+            )
+        sched = dict(JOB_SCHEDULES[key])
+        hh_mm = str(entry.time).split(":")
+        sched["time"] = (int(hh_mm[0]), int(hh_mm[1]))
+        if entry.days is not None:
+            if "day_of_month" in sched:
+                raise ValueError(
+                    f"schedules.{key}: es un job mensual (day_of_month), no acepta days"
+                )
+            sched["days"] = entry.days
+        if entry.day_of_month is not None:
+            if "day_of_month" not in sched:
+                raise ValueError(
+                    f"schedules.{key}: no es un job mensual, no acepta day_of_month"
+                )
+            sched["day_of_month"] = entry.day_of_month
+        JOB_SCHEDULES[key] = sched
+
+
 # ===== Meta comercial =====
 # Meta del mes = ventas del mismo mes año anterior × META_FACTOR
 META_FACTOR = float(os.environ.get("META_FACTOR", "1.20"))
@@ -345,6 +406,7 @@ def _maybe_load_from_tenant() -> None:
     global META_FACTOR, PY_OVERRIDE, EC_HOLIDAYS
     global CUMPL_VERDE, CUMPL_AMARILLO, AYER_VERDE, AYER_AMARILLO, MORA_VERDE, MORA_AMARILLO
     global COMPANY_NAME, COMPANY_SECTOR, COMPANY_SUCURSALES_DESC, SUCURSAL_NAMES, PEOPLE
+    global TIMEZONE_NAME
 
     from core.config.loader import load_tenant_config
     from core.config.schema import parse_hhmm
@@ -382,6 +444,10 @@ def _maybe_load_from_tenant() -> None:
     MORA_AMARILLO = t.mora_amarillo
 
     EC_HOLIDAYS = {year: list(days) for year, days in cfg.holidays.items()}
+
+    # Timezone + horarios de jobs (F2.2).
+    TIMEZONE_NAME = cfg.timezone or TIMEZONE_NAME
+    _apply_schedule_overrides(cfg.schedules)
 
     # Identidad de empresa + directorio de personas (Fase 1).
     COMPANY_NAME = cfg.display_name

@@ -68,6 +68,30 @@ class Branding(_Strict):
     logo_url: str | None = None
 
 
+class JobSchedule(_Strict):
+    """Horario de UN job del scheduler (F2.2, 2026-07-02).
+
+    Las claves válidas del bloque `schedules:` son las de
+    `core_config.JOB_SCHEDULES` (morning_sales, logistics_morning,
+    auto_assign_cobranzas, task_confirmations, calendar_sync,
+    daily_news_brief, apertura_caja_matinal, consolidated_daily,
+    saturday_recap, monthly_sales_recap, monthly_activities_recap).
+    Una clave desconocida falla al cargar (fail-closed, no typos silenciosos).
+    """
+
+    time: str                        # "HH:MM" en hora local del tenant
+    days: str | None = None          # "mon-fri" | "mon-sat" | "mon" | "daily" | "mon,wed"
+    day_of_month: int | None = Field(None, ge=1, le=28)  # jobs mensuales
+
+    @field_validator("time")
+    @classmethod
+    def _valid_time(cls, v: str) -> str:
+        hh, mm = parse_hhmm(v) or (None, None)
+        if hh is None or not (0 <= hh <= 23 and 0 <= mm <= 59):
+            raise ValueError(f"time inválido: {v!r} (esperado 'HH:MM')")
+        return v
+
+
 class Company(_Strict):
     """Identidad de negocio que aparece en prompts y reportes."""
 
@@ -101,6 +125,7 @@ class TenantConfig(_Strict):
     people: list[Person] = Field(default_factory=list)
     commercial: Commercial = Field(default_factory=Commercial)
     checkin: Checkin = Field(default_factory=Checkin)
+    schedules: dict[str, JobSchedule] = Field(default_factory=dict)
     holidays: dict[int, list[date]] = Field(default_factory=dict)
 
     @field_validator("holidays", mode="before")
