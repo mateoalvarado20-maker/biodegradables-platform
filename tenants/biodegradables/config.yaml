@@ -90,6 +90,19 @@ checkin:                                   # core_config CHECKIN_* (hora local d
     weekday_time: "17:10"                  # CHECKIN_WEEKDAY_SUCURSALES
     saturday_time: "12:30"                 # CHECKIN_SATURDAY_SUCURSALES
 
+# Módulos contratados (F2.3 — core_config.MODULES). Biodegradables usa el
+# catálogo completo. Apagar un módulo quita sus jobs, su lugar en el catch-up
+# y el dead-man, y sus tools de los bots — todo a la vez.
+modules:
+  commercial: true      # reporte comercial 8AM + recap mensual + forecasting
+  logistics: true       # reporte de logística (con LOGISTICS_IN_BOT=1)
+  cobranzas: true       # auto-asignación de cartera (requiere activities)
+  activities: true      # check-ins, tareas, reminders, consolidado
+  chofer: true          # ruta/asistencia del chofer (requiere activities)
+  news_brief: true      # brief de noticias del Data Bot
+  calendar: true        # sync a calendario (con CALENDAR_SYNC_ENABLED=1)
+  marketing: true       # KPIs de HubSpot
+
 # Horarios de los jobs del scheduler (F2.2 — core_config.JOB_SCHEDULES).
 # Cambiar un horario aquí mueve a la vez el cron, el catch-up y el dead-man
 # switch (/health/deliveries). days: "mon-fri" | "mon-sat" | "mon" | "daily".

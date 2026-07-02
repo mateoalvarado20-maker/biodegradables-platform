@@ -102,6 +102,43 @@ JOB_SCHEDULES: dict[str, dict] = {
 }
 
 
+# ===== Módulos activables por tenant (F2.3 VER-IA, 2026-07-02) =====
+# Qué capacidades tiene contratadas el tenant. Gatean a la vez: el registro de
+# jobs del scheduler, el catch-up, el dead-man (/health/deliveries) y las
+# tools de los bots (ask_agent.MODULE_TOOL_NAMES). Default: TODO encendido
+# (compat legacy — Biodegradables usa el catálogo completo).
+#
+# Dependencias entre módulos: `cobranzas` y `chofer` asientan su trabajo en el
+# state de actividades y sus cards — requieren `activities` encendido (el
+# registro de sus jobs exige ambos). Los endpoints /admin/trigger-* siguen
+# funcionando aunque el módulo esté apagado (override manual del operador).
+MODULES: dict[str, bool] = {
+    "commercial": True,   # reporte comercial 8AM + recap mensual de ventas + forecasting
+    "logistics":  True,   # reporte de logística (además requiere LOGISTICS_IN_BOT=1)
+    "cobranzas":  True,   # auto-asignación diaria de cartera + tools de saldos
+    "activities": True,   # check-ins, tareas, reminders, consolidado, recaps de actividades
+    "chofer":     True,   # ruta/asistencia del chofer
+    "news_brief": True,   # brief diario de noticias para el Data Bot
+    "calendar":   True,   # sync de tareas a calendario (además requiere CALENDAR_SYNC_ENABLED=1)
+    "marketing":  True,   # KPIs de HubSpot en el Data Bot
+}
+
+
+def module_enabled(name: str) -> bool:
+    """¿El tenant tiene este módulo? Nombre desconocido = error de programa."""
+    return MODULES[name]
+
+
+def _apply_module_overrides(cfg_modules: dict) -> None:
+    """Aplica el bloque `modules:` del tenant sobre MODULES (fail-closed)."""
+    for key, enabled in cfg_modules.items():
+        if key not in MODULES:
+            raise ValueError(
+                f"modules.{key} no es un módulo conocido; válidos: {sorted(MODULES)}"
+            )
+        MODULES[key] = bool(enabled)
+
+
 def _apply_schedule_overrides(cfg_schedules: dict) -> None:
     """Aplica el bloque `schedules:` del tenant sobre JOB_SCHEDULES.
 
@@ -445,9 +482,10 @@ def _maybe_load_from_tenant() -> None:
 
     EC_HOLIDAYS = {year: list(days) for year, days in cfg.holidays.items()}
 
-    # Timezone + horarios de jobs (F2.2).
+    # Timezone + horarios de jobs (F2.2) y módulos contratados (F2.3).
     TIMEZONE_NAME = cfg.timezone or TIMEZONE_NAME
     _apply_schedule_overrides(cfg.schedules)
+    _apply_module_overrides(cfg.modules)
 
     # Identidad de empresa + directorio de personas (Fase 1).
     COMPANY_NAME = cfg.display_name

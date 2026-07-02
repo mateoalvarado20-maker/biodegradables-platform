@@ -3763,6 +3763,40 @@ DATA_TOOL_NAMES = {
     "analyze_product_mix",
 }
 
+# F2.3 (VER-IA 2026-07-02): tools que pertenecen a un MÓDULO del catálogo del
+# tenant (core_config.MODULES). Módulo apagado = sus tools desaparecen de
+# TODOS los modos (el bot ni siquiera le cuenta a Claude que existen).
+# `list_team_collaborators` (directorio) y `web_search` quedan sin gatear.
+MODULE_TOOL_NAMES = {
+    "commercial": {
+        "get_ventas_dia", "get_ventas_rango", "get_ventas_por_ciudad",
+        "get_top_vendedores", "get_top_clientes", "get_cumplimiento_mes",
+        "forecast_sales_for_month", "analyze_product_mix",
+    },
+    "cobranzas": {"get_saldos_pendientes_clientes"},
+    "marketing": {
+        "get_hubspot_leads_ayer", "get_hubspot_leads_promedio_7d",
+        "get_hubspot_deals_ganados_ayer", "get_hubspot_pipeline_abierto",
+    },
+    "activities": TRACKER_TOOL_NAMES | {
+        "list_team_workload",
+        "add_activity_for_collaborator",
+        "set_activity_priority_for_collaborator",
+        "schedule_reminder_for_collaborator",
+        "list_pending_reminders",
+    },
+    "calendar": {"create_calendar_meeting_for_collaborator"},
+}
+
+
+def _disabled_tool_names() -> set:
+    """Tools de módulos apagados en la config del tenant."""
+    out: set = set()
+    for mod, names in MODULE_TOOL_NAMES.items():
+        if not core_config.module_enabled(mod):
+            out |= names
+    return out
+
 
 def _missing_args(args: dict, required: tuple[str, ...]) -> list[str]:
     """Devuelve los nombres de args requeridos que faltan o vienen vacíos.
@@ -4214,8 +4248,13 @@ def _tools_for_mode(mode: str, user_email: str | None = None) -> list:
     Bot le da acceso a tools de gerencia (`add_activity_for_collaborator`).
     Así Daniel puede asignar actividades a OTROS desde su chat del bot.
     """
+    # F2.3: los módulos apagados del tenant quitan sus tools de TODOS los modos.
+    disabled = _disabled_tool_names()
     if mode == "data":
-        base = [t for t in TOOLS if t["name"] in DATA_TOOL_NAMES]
+        base = [
+            t for t in TOOLS
+            if t["name"] in DATA_TOOL_NAMES and t["name"] not in disabled
+        ]
         # Web search nativo de Anthropic — Claude puede investigar noticias
         # actuales para responder preguntas de proyección/escenarios.
         base.append(WEB_SEARCH_TOOL_DEF)
@@ -4229,8 +4268,8 @@ def _tools_for_mode(mode: str, user_email: str | None = None) -> list:
         # agendar reuniones y recordatorios aunque no sea "supervisor puro".
         if email_l in {e.lower() for e in core_config.CALENDAR_SYNC_USERS}:
             allowed |= SCHEDULING_TOOLS
-        return [t for t in TOOLS if t["name"] in allowed]
-    return TOOLS  # full (CLI debug)
+        return [t for t in TOOLS if t["name"] in allowed - disabled]
+    return [t for t in TOOLS if t["name"] not in disabled]  # full (CLI debug)
 
 
 def ask(

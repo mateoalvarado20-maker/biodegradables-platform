@@ -68,6 +68,16 @@ class Branding(_Strict):
     logo_url: str | None = None
 
 
+# Catálogo de módulos activables (F2.3). Debe espejar core_config.MODULES —
+# la igualdad la fija tests/test_modules_config.py. Vive duplicado porque
+# core/ no puede importar core_config (pureza del núcleo) ni al revés (azfunc
+# no incluye core/).
+KNOWN_MODULES = frozenset({
+    "commercial", "logistics", "cobranzas", "activities",
+    "chofer", "news_brief", "calendar", "marketing",
+})
+
+
 class JobSchedule(_Strict):
     """Horario de UN job del scheduler (F2.2, 2026-07-02).
 
@@ -126,7 +136,21 @@ class TenantConfig(_Strict):
     commercial: Commercial = Field(default_factory=Commercial)
     checkin: Checkin = Field(default_factory=Checkin)
     schedules: dict[str, JobSchedule] = Field(default_factory=dict)
+    modules: dict[str, bool] = Field(default_factory=dict)
     holidays: dict[int, list[date]] = Field(default_factory=dict)
+
+    @field_validator("modules")
+    @classmethod
+    def _known_modules(cls, v: dict[str, bool]) -> dict[str, bool]:
+        """Un typo en el nombre de un módulo falla en validate_tenant, no en
+        producción al arrancar."""
+        unknown = set(v) - KNOWN_MODULES
+        if unknown:
+            raise ValueError(
+                f"módulos desconocidos: {sorted(unknown)}; "
+                f"válidos: {sorted(KNOWN_MODULES)}"
+            )
+        return v
 
     @field_validator("holidays", mode="before")
     @classmethod

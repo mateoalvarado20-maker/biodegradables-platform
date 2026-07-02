@@ -5217,61 +5217,71 @@ async def _job_jose_asistencia() -> None:
 
 
 def _schedule_jobs() -> None:
+    # F2.3 (2026-07-02): cada job pertenece a un MÓDULO del catálogo del
+    # tenant (core_config.MODULES). Módulo apagado = el job NO se registra,
+    # NO entra al catch-up y NO cuenta en el dead-man (las 3 superficies
+    # comparten condición vía _catchup_specs).
+    _mod = core_config.module_enabled
+
     # ===== Check-in cards — config única en core_config.CHECKIN_* =====
     # Lun-Vie: oficina 16:30, sucursales 17:10. Sáb: SOLO sucursales 12:30.
     # Domingo: NINGÚN envío (ningún trigger lo cubre).
-    oh, om = core_config.CHECKIN_WEEKDAY_OFICINA
-    scheduler.add_job(
-        _job_checkin_oficina,
-        CronTrigger(day_of_week="mon-fri", hour=oh, minute=om, timezone=EC_TZ),
-        id="checkin_weekday",
-        replace_existing=True,
-    )
-    sh, sm = core_config.CHECKIN_WEEKDAY_SUCURSALES
-    scheduler.add_job(
-        _job_checkin_sucursales,
-        CronTrigger(day_of_week="mon-fri", hour=sh, minute=sm, timezone=EC_TZ),
-        id="checkin_sucursales_weekday",
-        replace_existing=True,
-    )
-    bh, bm = core_config.CHECKIN_SATURDAY_SUCURSALES
-    scheduler.add_job(
-        _job_checkin_sucursales,
-        CronTrigger(day_of_week="sat", hour=bh, minute=bm, timezone=EC_TZ),
-        id="checkin_saturday",
-        replace_existing=True,
-    )
-    # Overrides puntuales por fecha (solo hoy en adelante). Ese día el job
-    # regular omite a los usuarios del override (_checkin_override_users_hoy).
-    _hoy_iso = send_ledger.today_iso()
-    for _fecha_iso, _entries in core_config.CHECKIN_DATE_OVERRIDES.items():
-        if _fecha_iso < _hoy_iso:
-            continue
-        _y, _mo, _d = (int(p) for p in _fecha_iso.split("-"))
-        for (_h, _m), _users in _entries:
-            scheduler.add_job(
-                _job_checkin_override,
-                CronTrigger(
-                    year=_y, month=_mo, day=_d, hour=_h, minute=_m, timezone=EC_TZ
-                ),
-                id=f"checkin_override_{_fecha_iso}_{_h:02d}{_m:02d}",
-                replace_existing=True,
-                args=[f"{_h:02d}{_m:02d}", list(_users)],
-            )
-    # Reminders: cada 5 min, chequea si hay reminders vencidos para entregar
-    scheduler.add_job(
-        _job_deliver_reminders,
-        CronTrigger(minute="*/5", timezone=EC_TZ),
-        id="deliver_reminders",
-        replace_existing=True,
-    )
-    # Auto-asignación de cobranzas: antes del reporte comercial (config tenant)
-    scheduler.add_job(
-        _job_auto_assign_cobranzas,
-        _cron_for("auto_assign_cobranzas"),
-        id="auto_assign_cobranzas",
-        replace_existing=True,
-    )
+    if _mod("activities"):
+        oh, om = core_config.CHECKIN_WEEKDAY_OFICINA
+        scheduler.add_job(
+            _job_checkin_oficina,
+            CronTrigger(day_of_week="mon-fri", hour=oh, minute=om, timezone=EC_TZ),
+            id="checkin_weekday",
+            replace_existing=True,
+        )
+        sh, sm = core_config.CHECKIN_WEEKDAY_SUCURSALES
+        scheduler.add_job(
+            _job_checkin_sucursales,
+            CronTrigger(day_of_week="mon-fri", hour=sh, minute=sm, timezone=EC_TZ),
+            id="checkin_sucursales_weekday",
+            replace_existing=True,
+        )
+        bh, bm = core_config.CHECKIN_SATURDAY_SUCURSALES
+        scheduler.add_job(
+            _job_checkin_sucursales,
+            CronTrigger(day_of_week="sat", hour=bh, minute=bm, timezone=EC_TZ),
+            id="checkin_saturday",
+            replace_existing=True,
+        )
+        # Overrides puntuales por fecha (solo hoy en adelante). Ese día el job
+        # regular omite a los usuarios del override (_checkin_override_users_hoy).
+        _hoy_iso = send_ledger.today_iso()
+        for _fecha_iso, _entries in core_config.CHECKIN_DATE_OVERRIDES.items():
+            if _fecha_iso < _hoy_iso:
+                continue
+            _y, _mo, _d = (int(p) for p in _fecha_iso.split("-"))
+            for (_h, _m), _users in _entries:
+                scheduler.add_job(
+                    _job_checkin_override,
+                    CronTrigger(
+                        year=_y, month=_mo, day=_d, hour=_h, minute=_m, timezone=EC_TZ
+                    ),
+                    id=f"checkin_override_{_fecha_iso}_{_h:02d}{_m:02d}",
+                    replace_existing=True,
+                    args=[f"{_h:02d}{_m:02d}", list(_users)],
+                )
+        # Reminders: cada 5 min, chequea si hay reminders vencidos para entregar
+        scheduler.add_job(
+            _job_deliver_reminders,
+            CronTrigger(minute="*/5", timezone=EC_TZ),
+            id="deliver_reminders",
+            replace_existing=True,
+        )
+    # Auto-asignación de cobranzas: antes del reporte comercial (config tenant).
+    # Requiere `activities`: las cobranzas se asientan como actividades y se
+    # gestionan desde el check-in card.
+    if _mod("cobranzas") and _mod("activities"):
+        scheduler.add_job(
+            _job_auto_assign_cobranzas,
+            _cron_for("auto_assign_cobranzas"),
+            id="auto_assign_cobranzas",
+            replace_existing=True,
+        )
     # Weekly summaries: DESHABILITADO 2026-06-29 (pedido de Mateo: "llegan
     # correos sin sentido"). El job y el endpoint /admin/trigger-weekly-summaries
     # quedan para disparo manual si algún día se reactiva.
@@ -5283,18 +5293,19 @@ def _schedule_jobs() -> None:
     # )
     # Confirmación de tareas: Lun-Vie 9:00 EC — pregunta por tareas no-diarias
     # que llegaron a su fecha límite y no están finalizadas (Feature 2026-06-15).
-    scheduler.add_job(
-        _job_task_confirmations,
-        _cron_for("task_confirmations"),
-        id="task_confirmations",
-        replace_existing=True,
-    )
+    if _mod("activities"):
+        scheduler.add_job(
+            _job_task_confirmations,
+            _cron_for("task_confirmations"),
+            id="task_confirmations",
+            replace_existing=True,
+        )
     # Sync de calendario: Lun-Vie 8:45 EC. Detrás de CALENDAR_SYNC_ENABLED=1
     # porque necesita el admin consent del permiso Application Calendars.ReadWrite
     # (ver azure_setup_checklist.md). Hasta entonces no se registra para no
     # fallar/alertar a diario. El endpoint /admin/trigger-calendar-sync queda
     # disponible para pruebas manuales aunque el flag esté apagado.
-    if os.environ.get("CALENDAR_SYNC_ENABLED", "0").strip() == "1":
+    if _mod("calendar") and os.environ.get("CALENDAR_SYNC_ENABLED", "0").strip() == "1":
         scheduler.add_job(
             _job_calendar_sync,
             _cron_for("calendar_sync"),
@@ -5303,36 +5314,40 @@ def _schedule_jobs() -> None:
         )
         logger.info("calendar_sync programado (CALENDAR_SYNC_ENABLED=1)")
     # Daily news brief: antes del daily report y de queries de gerencia
-    scheduler.add_job(
-        _job_news_brief,
-        _cron_for("daily_news_brief"),
-        id="daily_news_brief",
-        replace_existing=True,
-    )
+    if _mod("news_brief"):
+        scheduler.add_job(
+            _job_news_brief,
+            _cron_for("daily_news_brief"),
+            id="daily_news_brief",
+            replace_existing=True,
+        )
     # Phase M — Monthly recaps día 1: full recap mes anterior + proyección
-    scheduler.add_job(
-        _job_monthly_sales_recap,
-        _cron_for("monthly_sales_recap"),
-        id="monthly_sales_recap_day1",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _job_monthly_activities_recap,
-        _cron_for("monthly_activities_recap"),
-        id="monthly_activities_recap_day1",
-        replace_existing=True,
-    )
+    if _mod("commercial"):
+        scheduler.add_job(
+            _job_monthly_sales_recap,
+            _cron_for("monthly_sales_recap"),
+            id="monthly_sales_recap_day1",
+            replace_existing=True,
+        )
+    if _mod("activities"):
+        scheduler.add_job(
+            _job_monthly_activities_recap,
+            _cron_for("monthly_activities_recap"),
+            id="monthly_activities_recap_day1",
+            replace_existing=True,
+        )
     # Phase M Quincenal — DESHABILITADO 2026-06-02 por feedback de Mateo
     # ("no me gustó el quincenal, ahorita no es necesario"). El endpoint
     # /admin/trigger-midmonth-status sigue disponible para disparo manual.
 
     # Phase S (2026-06-08): recordatorio matinal de actividades (config tenant)
-    scheduler.add_job(
-        _job_apertura_caja_matinal,
-        _cron_for("apertura_caja_matinal"),
-        id="apertura_caja_matinal",
-        replace_existing=True,
-    )
+    if _mod("activities"):
+        scheduler.add_job(
+            _job_apertura_caja_matinal,
+            _cron_for("apertura_caja_matinal"),
+            id="apertura_caja_matinal",
+            replace_existing=True,
+        )
 
     # Phase P (2026-06-05): recordatorio de confirmación de cierre Lun-Vie 8:30 AM EC.
     # Phase V (2026-06-11): DESHABILITADO. Mateo pidió quitar todo el flujo
@@ -5347,23 +5362,25 @@ def _schedule_jobs() -> None:
     # Phase O (2026-06-02): consolidated daily summary Lun-Vie 18:30 EC
     # — un solo correo a Daniel+Gabriela con TODOS los colaboradores.
     # Reemplaza los emails individuales que se mandaban al hacer check-in.
-    scheduler.add_job(
-        _job_consolidated_daily,
-        _cron_for("consolidated_daily"),
-        id="consolidated_daily_summary",
-        replace_existing=True,
-    )
+    if _mod("activities"):
+        scheduler.add_job(
+            _job_consolidated_daily,
+            _cron_for("consolidated_daily"),
+            id="consolidated_daily_summary",
+            replace_existing=True,
+        )
 
     # Recap del sábado (2026-06-15): LUNES 8:00 EC. Un solo correo con las
     # actividades del SÁBADO anterior (José + asistente GYE de turno). El job
     # 18:30 sigue corriendo el lunes con las actividades del propio lunes — son
     # días distintos, sin duplicación (ledger key `saturday_recap` separada).
-    scheduler.add_job(
-        _job_saturday_recap,
-        _cron_for("saturday_recap"),
-        id="saturday_recap",
-        replace_existing=True,
-    )
+    if _mod("activities"):
+        scheduler.add_job(
+            _job_saturday_recap,
+            _cron_for("saturday_recap"),
+            id="saturday_recap",
+            replace_existing=True,
+        )
 
     # Phase U (2026-06-09): José — card de RUTA on-demand cuando él escribe al
     # bot, NO en horario fijo.
@@ -5372,29 +5389,31 @@ def _schedule_jobs() -> None:
     # como bloque "📦 ASISTENTE 2 GYE — José Solórzano".
     # (2026-06-23): José marca su ASISTENCIA una sola vez al día en un card
     # dedicado — 17:10 Lun-Vie y 12:30 Sáb, igual que el Asistente 1 UIO/GYE.
-    jh, jm = core_config.CHECKIN_WEEKDAY_SUCURSALES
-    scheduler.add_job(
-        _job_jose_asistencia,
-        CronTrigger(day_of_week="mon-fri", hour=jh, minute=jm, timezone=EC_TZ),
-        id="jose_asistencia_weekday",
-        replace_existing=True,
-    )
-    jbh, jbm = core_config.CHECKIN_SATURDAY_SUCURSALES
-    scheduler.add_job(
-        _job_jose_asistencia,
-        CronTrigger(day_of_week="sat", hour=jbh, minute=jbm, timezone=EC_TZ),
-        id="jose_asistencia_saturday",
-        replace_existing=True,
-    )
+    if _mod("chofer") and _mod("activities"):
+        jh, jm = core_config.CHECKIN_WEEKDAY_SUCURSALES
+        scheduler.add_job(
+            _job_jose_asistencia,
+            CronTrigger(day_of_week="mon-fri", hour=jh, minute=jm, timezone=EC_TZ),
+            id="jose_asistencia_weekday",
+            replace_existing=True,
+        )
+        jbh, jbm = core_config.CHECKIN_SATURDAY_SUCURSALES
+        scheduler.add_job(
+            _job_jose_asistencia,
+            CronTrigger(day_of_week="sat", hour=jbh, minute=jbm, timezone=EC_TZ),
+            id="jose_asistencia_saturday",
+            replace_existing=True,
+        )
 
     # Phase U+ (2026-06-10): morning_sales_report al bot 24/7 (Lun-Sáb 8:00 EC).
     # Reemplaza el timer del azfunc (que se dormía en Consumption Plan).
-    scheduler.add_job(
-        send_morning_sales_report_job,
-        _cron_for("morning_sales"),
-        id="morning_sales_report",
-        replace_existing=True,
-    )
+    if _mod("commercial"):
+        scheduler.add_job(
+            send_morning_sales_report_job,
+            _cron_for("morning_sales"),
+            id="morning_sales_report",
+            replace_existing=True,
+        )
 
     # Fase 3 (auditoría S5): logística migrada al bot, como se hizo con el
     # comercial — sale del Consumption Plan que se dormía y gana ledger +
@@ -5402,7 +5421,7 @@ def _schedule_jobs() -> None:
     # SOLO junto con AzureWebJobs.logistics_morning.Disabled=true en el
     # Function App (si ambos corren, los ledgers viven en universos
     # distintos y Gabriela recibiría dos correos).
-    if os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
+    if _mod("logistics") and os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
         scheduler.add_job(
             _job_logistics_morning,
             _cron_for("logistics_morning"),
@@ -5443,61 +5462,81 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
     # core_config.JOB_SCHEDULES — la MISMA fuente que registra los crons y que
     # evalúa el dead-man (/health/deliveries). Cambiar un horario en el YAML
     # del tenant mueve las tres superficies a la vez.
-    specs: list[tuple[str, Any, Any]] = [
-        ("morning_sales", send_morning_sales_report_job,
-         _due_after("morning_sales")),
-        ("consolidated_daily", _job_consolidated_daily,
-         _due_after("consolidated_daily")),
-        ("saturday_recap", _job_saturday_recap,
-         _due_after("saturday_recap")),
-        # weekly_summaries DESHABILITADO 2026-06-29 (ver _schedule_jobs).
-        ("task_confirmations", _job_task_confirmations,
-         _due_after("task_confirmations")),
-        ("auto_assign_cobranzas", _job_auto_assign_cobranzas,
-         _due_after("auto_assign_cobranzas")),
-        ("daily_news_brief", _job_news_brief,
-         _due_after("daily_news_brief")),
-        ("apertura_caja_matinal", _job_apertura_caja_matinal,
-         _due_after("apertura_caja_matinal")),
+    # F2.3: y solo participan los jobs de MÓDULOS encendidos — mismas
+    # condiciones que _schedule_jobs.
+    _mod = core_config.module_enabled
+    specs: list[tuple[str, Any, Any]] = []
+    if _mod("commercial"):
+        specs += [
+            ("morning_sales", send_morning_sales_report_job,
+             _due_after("morning_sales")),
+            ("monthly_sales_recap", _job_monthly_sales_recap,
+             _due_after("monthly_sales_recap")),
+        ]
+    if _mod("activities"):
+        specs += [
+            ("consolidated_daily", _job_consolidated_daily,
+             _due_after("consolidated_daily")),
+            ("saturday_recap", _job_saturday_recap,
+             _due_after("saturday_recap")),
+            # weekly_summaries DESHABILITADO 2026-06-29 (ver _schedule_jobs).
+            ("task_confirmations", _job_task_confirmations,
+             _due_after("task_confirmations")),
+            ("apertura_caja_matinal", _job_apertura_caja_matinal,
+             _due_after("apertura_caja_matinal")),
+            ("monthly_activities_recap", _job_monthly_activities_recap,
+             _due_after("monthly_activities_recap")),
+        ]
+    if _mod("cobranzas") and _mod("activities"):
+        specs.append(
+            ("auto_assign_cobranzas", _job_auto_assign_cobranzas,
+             _due_after("auto_assign_cobranzas"))
+        )
+    if _mod("news_brief"):
+        specs.append(
+            ("daily_news_brief", _job_news_brief,
+             _due_after("daily_news_brief"))
+        )
+    if _mod("chofer") and _mod("activities"):
         # Asistencia del chofer: sigue los horarios de check-in de sucursales
         # (config del tenant), no un schedule propio.
-        ("jose_asistencia", _job_jose_asistencia,
-         lambda now: (now.weekday() <= 4
-                      and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES)
-         or (now.weekday() == 5
-             and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES)),
-        ("monthly_sales_recap", _job_monthly_sales_recap,
-         _due_after("monthly_sales_recap")),
-        ("monthly_activities_recap", _job_monthly_activities_recap,
-         _due_after("monthly_activities_recap")),
-        # Check-ins: lun-vie oficina y sucursales; sáb solo sucursales.
-        # Domingo (weekday 6) ninguna condición aplica — no hay catch-up.
-        ("checkin_oficina", _job_checkin_oficina,
-         lambda now: now.weekday() <= 4
-         and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_OFICINA),
-        ("checkin_sucursales", _job_checkin_sucursales,
-         lambda now: (now.weekday() <= 4
-                      and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES)
-         or (now.weekday() == 5
-             and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES)),
-    ]
-    # Overrides de check-in de HOY: si el bot estuvo caído a esa hora, el
-    # catch-up los dispara al arrancar (el ledger evita duplicados).
-    for (_h, _m), _users in core_config.CHECKIN_DATE_OVERRIDES.get(
-        send_ledger.today_iso(), []
-    ):
-        _hhmm = f"{_h:02d}{_m:02d}"
-        specs.append((
-            f"checkin_override_{_hhmm}",
-            lambda _hh=_hhmm, _us=_users: _job_checkin_override(_hh, list(_us)),
-            lambda now, _h=_h, _m=_m: (now.hour, now.minute) >= (_h, _m),
-        ))
-    if os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
+        specs.append(
+            ("jose_asistencia", _job_jose_asistencia,
+             lambda now: (now.weekday() <= 4
+                          and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES)
+             or (now.weekday() == 5
+                 and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES))
+        )
+    if _mod("activities"):
+        specs += [
+            # Check-ins: lun-vie oficina y sucursales; sáb solo sucursales.
+            # Domingo (weekday 6) ninguna condición aplica — no hay catch-up.
+            ("checkin_oficina", _job_checkin_oficina,
+             lambda now: now.weekday() <= 4
+             and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_OFICINA),
+            ("checkin_sucursales", _job_checkin_sucursales,
+             lambda now: (now.weekday() <= 4
+                          and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES)
+             or (now.weekday() == 5
+                 and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES)),
+        ]
+        # Overrides de check-in de HOY: si el bot estuvo caído a esa hora, el
+        # catch-up los dispara al arrancar (el ledger evita duplicados).
+        for (_h, _m), _users in core_config.CHECKIN_DATE_OVERRIDES.get(
+            send_ledger.today_iso(), []
+        ):
+            _hhmm = f"{_h:02d}{_m:02d}"
+            specs.append((
+                f"checkin_override_{_hhmm}",
+                lambda _hh=_hhmm, _us=_users: _job_checkin_override(_hh, list(_us)),
+                lambda now, _h=_h, _m=_m: (now.hour, now.minute) >= (_h, _m),
+            ))
+    if _mod("logistics") and os.environ.get("LOGISTICS_IN_BOT", "0").strip() == "1":
         specs.append(
             ("logistics_morning", _job_logistics_morning,
              _due_after("logistics_morning"))
         )
-    if os.environ.get("CALENDAR_SYNC_ENABLED", "0").strip() == "1":
+    if _mod("calendar") and os.environ.get("CALENDAR_SYNC_ENABLED", "0").strip() == "1":
         specs.append(
             ("calendar_sync", _job_calendar_sync,
              _due_after("calendar_sync"))
