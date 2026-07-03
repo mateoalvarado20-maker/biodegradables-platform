@@ -50,6 +50,7 @@ class Commercial(_Strict):
     meta_factor: float = 1.20
     py_override: dict[str, float] = Field(default_factory=dict)  # "YYYY-MM" -> monto
     thresholds: Thresholds = Field(default_factory=Thresholds)
+    dashboard_url: str = ""        # link en el footer del reporte comercial
 
 
 class CheckinGroup(_Strict):
@@ -108,6 +109,31 @@ class Company(_Strict):
     sector: str = ""               # "distribución de productos biodegradables"
     sucursales_desc: str = ""      # "Quito (UIO) y Guayaquil (GYE)"
     sucursal_names: dict[str, str] = Field(default_factory=dict)  # {"UIO": "Quito"}
+    domain: str = ""               # "empresa.com" (filtra correos internos)
+    website: str = ""              # URL pública (firma de correos outbound)
+    outbound_signer: str = ""      # email del firmante de correos a prospectos
+
+
+class ERP(_Strict):
+    """Parámetros del ERP del tenant (F2.4)."""
+
+    document_prefixes: dict[str, str] = Field(default_factory=dict)  # {"GYE": "001-001"}
+
+
+class Logistics(_Strict):
+    """Parámetros del módulo de logística (F2.4)."""
+
+    # Lista de [keyword, provincia, ciudad] para parsear direcciones de
+    # despacho. VACÍA = dataset default de Ecuador. Un tenant de otro país
+    # la reemplaza completa.
+    provincia_keywords: list[tuple[str, str, str]] = Field(default_factory=list)
+
+
+class Caja(_Strict):
+    """Fondo fijo de caja por sucursal (F2.4)."""
+
+    fondo_default: float | None = None
+    fondo_por_sucursal: dict[str, float] = Field(default_factory=dict)
 
 
 class Person(_Strict):
@@ -137,6 +163,9 @@ class TenantConfig(_Strict):
     checkin: Checkin = Field(default_factory=Checkin)
     schedules: dict[str, JobSchedule] = Field(default_factory=dict)
     modules: dict[str, bool] = Field(default_factory=dict)
+    erp: ERP = Field(default_factory=ERP)
+    logistics: Logistics = Field(default_factory=Logistics)
+    caja: Caja = Field(default_factory=Caja)
     holidays: dict[int, list[date]] = Field(default_factory=dict)
 
     @field_validator("modules")

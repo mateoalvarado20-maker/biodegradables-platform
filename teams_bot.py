@@ -594,7 +594,8 @@ async def _on_turn_data(context: TurnContext) -> None:
     # Saludos simples → respuesta fija (no toca Claude, ahorra créditos)
     if _is_greeting(text):
         await context.send_activity(
-            "¡Hola! 👋 Soy el Data Bot. Preguntame sobre ventas, cobranzas, "
+            f"¡Hola! 👋 Soy el asistente de datos de {core_config.COMPANY_NAME}. "
+            "Preguntame sobre ventas, cobranzas, "
             "clientes o proyecciones. Ejemplos:\n"
             "• *cuánto vendimos hoy*\n"
             "• *top 5 deudores de Quito*\n"

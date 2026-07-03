@@ -18,16 +18,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import apollo_rest
+import core_config
 from pbi_cloud import send_email
 
 LOCAL_TZ = timezone(timedelta(hours=-5))  # Ecuador UTC-5
-NOTIFY_TO = "malvarado@biodegradablesecuador.com"
+# F2.4: destinatario y marca desde core_config (antes hardcodeados).
+NOTIFY_TO = os.environ.get("APOLLO_NOTIFY_TO", core_config.MIO).strip()
 STATE_PATH = Path.home() / ".claude-agent" / "apollo_completion_state.json"
 CONTEXT_PATH = Path(__file__).parent / "company_context.md"
 CLAUDE_MODEL = "claude-sonnet-4-6"
@@ -74,7 +77,7 @@ def suggest_apollo_filters(seq_name: str) -> dict | None:
         import anthropic
         client = anthropic.Anthropic()
         ctx = _load_company_context()
-        prompt = f"""Empresa: Biodegradables Ecuador (distribución de empaques biodegradables en Ecuador).
+        prompt = f"""Empresa: {core_config.COMPANY_NAME} ({core_config.COMPANY_SECTOR}).
 
 Contexto de la empresa:
 {ctx}

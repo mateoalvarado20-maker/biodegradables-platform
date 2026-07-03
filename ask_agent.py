@@ -2950,8 +2950,10 @@ TOOLS = [
     {
         "name": "get_ventas_por_ciudad",
         "description": (
-            "Desglose de ventas por ciudad (Quito UIO vs Guayaquil GYE) en un día o rango. "
-            "La ciudad se deduce del prefijo del documento: 001-001=GYE, 001-002=UIO."
+            f"Desglose de ventas por sucursal ({core_config.COMPANY_SUCURSALES_DESC}) "
+            "en un día o rango. La sucursal se deduce del prefijo del documento: "
+            + ", ".join(f"{p}={s}" for s, p in core_config.DOC_PREFIXES.items())
+            + "."
         ),
         "input_schema": {
             "type": "object",

@@ -54,15 +54,15 @@ MAX_RETRIES = 3  # intentos por página ante timeouts/errores de transporte tran
 _DOCS_CACHE: dict[tuple, tuple[float, list[dict[str, Any]]]] = {}
 CACHE_TTL_SECONDS = int(os.environ.get("CONTIFICO_CACHE_TTL", "600"))  # 10 min
 
-# Prefijos de documento por sucursal de emisión.
-# Fuente: CLAUDE.md Issue #11.
-PREFIJO_GYE = "001-001"
-PREFIJO_UIO = "001-002"
-
 # ===== Feriados + override PY: centralizados en core_config (Fase 5) =====
 # Antes este dict estaba duplicado a mano con daily_report.py ("mantener
 # sincronizado") — y el PY_OVERRIDE estaba keyed por mes sin año.
 import core_config
+
+# Prefijos de documento por sucursal de emisión (F2.4: desde core_config,
+# tenant-overridable vía erp.document_prefixes del config.yaml).
+PREFIJO_GYE = core_config.DOC_PREFIXES.get("GYE", "001-001")
+PREFIJO_UIO = core_config.DOC_PREFIXES.get("UIO", "001-002")
 EC_HOLIDAYS = core_config.EC_HOLIDAYS  # alias legacy
 PY_OVERRIDE = core_config.PY_OVERRIDE  # alias legacy (key = (año, mes))
 

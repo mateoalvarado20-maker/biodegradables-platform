@@ -285,6 +285,47 @@ COMPANY_SUCURSALES_DESC = os.environ.get(
 # Nombre legible de cada código de sucursal.
 SUCURSAL_NAMES: dict[str, str] = {"UIO": "Quito", "GYE": "Guayaquil"}
 
+# ===== Identidad outbound + parámetros de negocio (F2.4 VER-IA, 2026-07-02) =====
+# Valores que estaban horneados en reply_agent, apollo_completion_notifier,
+# contifico_client, daily_logistics_report, activity_state y daily_report.
+# Defaults = Biodegradables (legacy); el YAML del tenant los reemplaza.
+COMPANY_DOMAIN = os.environ.get("COMPANY_DOMAIN", "biodegradablesecuador.com").strip()
+COMPANY_WEBSITE = os.environ.get(
+    "COMPANY_WEBSITE", "https://www.biodegradablesecuador.com/"
+).strip()
+# Quién firma los correos salientes a prospectos (reply agent).
+OUTBOUND_SIGNER_EMAIL = os.environ.get(
+    "OUTBOUND_SIGNER_EMAIL", "malvarado@biodegradablesecuador.com"
+).strip()
+
+
+def outbound_signer_name() -> str:
+    """Nombre humano del firmante outbound, desde el directorio PEOPLE."""
+    p = PEOPLE.get(OUTBOUND_SIGNER_EMAIL.lower(), {})
+    return p.get("name") or OUTBOUND_SIGNER_EMAIL.split("@")[0].title()
+
+
+# Prefijos de documento del ERP por sucursal de emisión (Contifico:
+# "001-001-000123" → GYE). Los usan contifico_client, daily_logistics_report
+# y los prompts del Data Bot.
+DOC_PREFIXES: dict[str, str] = {"GYE": "001-001", "UIO": "001-002"}
+
+# Link al dashboard del cliente en el footer del reporte comercial.
+DASHBOARD_URL = os.environ.get(
+    "DASHBOARD_URL",
+    "https://app.powerbi.com/groups/me/reports/de5387d4-8203-4a93-8eaf-04212041fece",
+).strip()
+
+# Fondo fijo de caja por sucursal (cierre de caja de asistentes).
+CAJA_FONDO_DEFAULT: float = 50.00
+CAJA_FONDO_POR_SUCURSAL: dict[str, float] = {"Guayaquil": 100.00, "Quito": 50.00}
+
+# Keywords de provincia/ciudad para parsear direcciones en logística.
+# VACÍO = usar el dataset default de Ecuador que vive en
+# daily_logistics_report.PROVINCIA_KEYWORDS_EC. Un tenant de otro país lo
+# reemplaza completo desde su YAML (logistics.provincia_keywords).
+LOGISTICS_PROVINCIA_KEYWORDS: list[tuple[str, str, str]] = []
+
 # Forma canónica de una persona: todos los atributos presentes (con defaults).
 # Normalizar garantiza que el PEOPLE legacy y el cargado desde YAML tengan la
 # MISMA forma (lo verifica test_tenant_config_biodegradables).
@@ -444,6 +485,9 @@ def _maybe_load_from_tenant() -> None:
     global CUMPL_VERDE, CUMPL_AMARILLO, AYER_VERDE, AYER_AMARILLO, MORA_VERDE, MORA_AMARILLO
     global COMPANY_NAME, COMPANY_SECTOR, COMPANY_SUCURSALES_DESC, SUCURSAL_NAMES, PEOPLE
     global TIMEZONE_NAME
+    global COMPANY_DOMAIN, COMPANY_WEBSITE, OUTBOUND_SIGNER_EMAIL
+    global DOC_PREFIXES, DASHBOARD_URL
+    global CAJA_FONDO_DEFAULT, CAJA_FONDO_POR_SUCURSAL, LOGISTICS_PROVINCIA_KEYWORDS
 
     from core.config.loader import load_tenant_config
     from core.config.schema import parse_hhmm
@@ -486,6 +530,29 @@ def _maybe_load_from_tenant() -> None:
     TIMEZONE_NAME = cfg.timezone or TIMEZONE_NAME
     _apply_schedule_overrides(cfg.schedules)
     _apply_module_overrides(cfg.modules)
+
+    # Identidad outbound + parámetros de negocio (F2.4).
+    if cfg.company.domain:
+        COMPANY_DOMAIN = cfg.company.domain
+    if cfg.company.website:
+        COMPANY_WEBSITE = cfg.company.website
+    if cfg.company.outbound_signer:
+        OUTBOUND_SIGNER_EMAIL = cfg.company.outbound_signer
+    if cfg.erp.document_prefixes:
+        DOC_PREFIXES = dict(cfg.erp.document_prefixes)
+    if cfg.commercial.dashboard_url:
+        DASHBOARD_URL = cfg.commercial.dashboard_url
+    if cfg.caja.fondo_default is not None:
+        CAJA_FONDO_DEFAULT = float(cfg.caja.fondo_default)
+    if cfg.caja.fondo_por_sucursal:
+        CAJA_FONDO_POR_SUCURSAL = {
+            k: float(v) for k, v in cfg.caja.fondo_por_sucursal.items()
+        }
+    if cfg.logistics.provincia_keywords:
+        LOGISTICS_PROVINCIA_KEYWORDS = [
+            (str(kw), str(prov), str(ciudad))
+            for kw, prov, ciudad in cfg.logistics.provincia_keywords
+        ]
 
     # Identidad de empresa + directorio de personas (Fase 1).
     COMPANY_NAME = cfg.display_name

@@ -20,6 +20,25 @@ branding:
   brand_color: "#2E7D32"              # color corporativo del cliente
   logo_url: null
 
+company:
+  sector: "TODO sector del cliente"   # aparece en prompts de los agentes
+  sucursales_desc: ""                 # ej. "Quito (UIO) y Guayaquil (GYE)"
+  sucursal_names: {}                  # ej. {UIO: Quito, GYE: Guayaquil}
+  domain: "TODO-empresa.com"          # dominio de correo (filtra internos)
+  website: ""                         # URL pública (firma de correos outbound)
+  outbound_signer: ""                 # email de quien firma correos a prospectos
+
+erp:
+  document_prefixes: {}               # sucursal -> prefijo doc del ERP (ej. GYE: "001-001")
+
+caja:                                 # solo si contrata cierre de caja
+  fondo_default: 50.00
+  fondo_por_sucursal: {}
+
+logistics:
+  provincia_keywords: []              # vacío = dataset de Ecuador; otro país lo reemplaza
+                                      # formato: [["keyword", "Provincia", "Ciudad"], ...]
+
 commercial:
   meta_factor: 1.20                   # crecimiento sobre el mismo mes del año anterior
   py_override: {}                     # overrides "YYYY-MM": monto (si el ERP difiere)

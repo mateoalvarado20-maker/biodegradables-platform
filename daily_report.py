@@ -185,10 +185,9 @@ def _as_ratio(v) -> float | None:
     except (TypeError, ValueError):
         return None
 
-REPORT_URL = (
-    "https://app.powerbi.com/groups/me/reports/"
-    "de5387d4-8203-4a93-8eaf-04212041fece"
-)
+# F2.4: link del dashboard desde core_config (tenant-overridable vía
+# commercial.dashboard_url del config.yaml). El default legacy es el mismo.
+REPORT_URL = core_config.DASHBOARD_URL
 # Fase 5: destinatarios centralizados y env-overridable (core_config).
 # Cambiar un destinatario = env var REPORT_COMERCIAL_TO / REPORT_CC, o
 # editar core_config.py (UN solo lugar — antes eran 4 archivos).
