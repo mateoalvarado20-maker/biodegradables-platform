@@ -28,10 +28,11 @@ BOT_FILES = [
     # entrypoint + agentes
     "teams_bot.py",
     "ask_agent.py",
-    # infraestructura (Fases 1-5)
+    # infraestructura (Fases 1-5 + F3 VER-IA)
     "safe_json.py",
     "send_ledger.py",
     "core_config.py",
+    "llm_usage.py",
     # state y dominio
     "activity_state.py",
     "conversation_history.py",
@@ -52,6 +53,11 @@ BOT_FILES = [
     "monthly_recap.py",
     "news_brief.py",
     "forecasting.py",
+    # demo (Fase 5: DEMO_MODE=1 en el App Service sirve datos sintéticos;
+    # sin estos archivos el flag caía en fail-soft a datos REALES)
+    "demo_contifico.py",
+    "demo_hubspot.py",
+    "demo_seed.py",
     # config / templates
     "requirements.txt",
     "company_context.md",
@@ -75,6 +81,49 @@ def _iter_dir_files(base: Path):
             yield p
 
 
+# Módulos raíz que un módulo empaquetado puede importar SIN viajar en el zip.
+# Solo entra aquí un import que sea genuinamente opcional en el App Service
+# (guardado por flag/try-except) — justificar cada entrada.
+IMPORT_ALLOWLIST: set[str] = set()
+
+
+def _check_imports() -> list[str]:
+    """Gate F4 (VER-IA 2026-07-03): ningún módulo empaquetado puede importar
+    un módulo RAÍZ que no viaje en el zip. Detecta imports top-level Y lazy
+    (dentro de funciones) vía AST — el incidente del 2026-07-03 fue exactamente
+    esto: ask_agent ganó `import llm_usage` y el empaquetador no lo supo.
+    Devuelve lista de errores 'modulo <- importador'."""
+    import ast
+    root_modules = {p.stem for p in ROOT.glob("*.py")}
+    packaged_py = [n for n in BOT_FILES if n.endswith(".py")]
+    packaged_mods = {Path(n).stem for n in packaged_py}
+    # Los paquetes (core/, connectors/) viajan como directorios completos.
+    packaged_pkgs = set(BOT_DIRS)
+    errores: list[str] = []
+    for name in packaged_py:
+        try:
+            tree = ast.parse((ROOT / name).read_text(encoding="utf-8"))
+        except SyntaxError as e:
+            errores.append(f"{name}: no parsea ({e})")
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                mods = [node.module.split(".")[0]]
+            else:
+                continue
+            for m in mods:
+                if (
+                    m in root_modules
+                    and m not in packaged_mods
+                    and m not in packaged_pkgs
+                    and m not in IMPORT_ALLOWLIST
+                ):
+                    errores.append(f"{m}.py <- importado por {name} (agregar a BOT_FILES)")
+    return sorted(set(errores))
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -88,6 +137,14 @@ def main() -> int:
     missing += [d for d in BOT_DIRS if not (ROOT / d).is_dir()]
     if missing:
         print(f"ERROR: faltan archivos/directorios: {missing}", file=sys.stderr)
+        return 1
+
+    import_errs = _check_imports()
+    if import_errs:
+        print("ERROR: el paquete importa módulos raíz que NO viajan en el zip "
+              "(ModuleNotFoundError en producción):", file=sys.stderr)
+        for e in import_errs:
+            print(f"  - {e}", file=sys.stderr)
         return 1
 
     out = ROOT / args.out
