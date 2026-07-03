@@ -46,3 +46,12 @@ jobs:
 
       - name: El paquete del bot se puede construir
         run: python tools/build_bot_package.py --out /tmp/bot_deploy_ci.zip
+
+      # F4.5: la imagen Docker es el artefacto de deploy del futuro (una
+      # instancia por tenant). Construirla + smoke de imports en cada PR
+      # garantiza que el árbol completo es empaquetable — sin listas manuales.
+      - name: La imagen Docker se puede construir
+        run: docker build -t veria-platform:ci .
+
+      - name: Smoke de la imagen (imports del entrypoint)
+        run: docker run --rm veria-platform:ci python -c "import teams_bot, ask_agent, team_reports, llm_usage, core_config; print('imagen OK')"
