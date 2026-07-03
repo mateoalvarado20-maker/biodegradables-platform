@@ -67,6 +67,30 @@ az webapp config appsettings set -n biodegradables-bot-app -g rg-biodegradables-
 | `ADMIN_API_TOKEN` | **OBLIGATORIO desde F0 (2026-07-02)** | App Service settings. El código ya NO cae al secret OAuth: sin este setting, TODOS los `/admin/*` responden 401. Generar 32+ bytes aleatorios y setearlo ANTES de deployar la versión F0. |
 | `CONTIFICO_API_TOKEN`, `HUBSPOT_TOKEN`, `APOLLO_API_KEY`, `ANTHROPIC_API_KEY` | no vencen solos | rotar en el proveedor → actualizar env (User-scope local + App Service + Function App). |
 
+## Cutover de prospección al bot (F4.3 — una sola vez, retira azfunc y la schtask)
+
+**Reply agent** (hoy: timer `reply_agent_tick` del Function App, cada 15 min):
+```powershell
+# 1. Copiar del Function App al App Service los settings: MSAL_CACHE_B64,
+#    AzureWebJobsStorage (y verificar APOLLO_API_KEY ya presente).
+# 2. Deploy del bot con esta versión (jobs gateados).
+# 3. En la MISMA ventana:
+az webapp config appsettings set -g rg-biodegradables-prod -n biodegradables-bot-app --settings REPLY_AGENT_IN_BOT=1
+az functionapp config appsettings set -g rg-biodegradables-prod -n func-biodegradables-ec --settings AzureWebJobs.reply_agent_tick.Disabled=true
+# 4. Validar: POST /admin/trigger-reply-agent (X-Admin-Token) → resumen del inbox.
+```
+
+**Apollo notifier** (hoy: schtask `BiodegradablesEcuador-ApolloNotifier-2hrs` en la PC):
+```powershell
+# 1. Verificar APOLLO_API_KEY + ANTHROPIC_API_KEY en el App Service.
+# 2. En la MISMA ventana:
+az webapp config appsettings set -g rg-biodegradables-prod -n biodegradables-bot-app --settings APOLLO_NOTIFIER_IN_BOT=1
+schtasks /change /tn "BiodegradablesEcuador-ApolloNotifier-2hrs" /disable
+# 3. Validar: POST /admin/trigger-apollo-notifier?dry=1 → exit_code 0.
+```
+Tras 1 semana estable: eliminar el Function App y la carpeta azfunc/ del repo
+(el reply agent era su último timer activo), y borrar la schtask.
+
 ## Dead-man switch de entregas (F0, 2026-07-02)
 
 - `GET /health/deliveries` devuelve **200** si todo lo que debía salir hoy

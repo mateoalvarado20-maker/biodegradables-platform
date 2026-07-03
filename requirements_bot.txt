@@ -37,3 +37,7 @@ matplotlib>=3.8
 # Config multiempresa: core_config lee tenants/<slug>/config.yaml si
 # TENANT_CONFIG_SOURCE=yaml (con el flag ausente/legacy no se importa).
 pyyaml>=6.0
+
+# F4.3: reply agent en el bot — reply_state usa Azure Table Storage cuando
+# AzureWebJobsStorage está seteado (la misma tabla que usaba el Function App).
+azure-data-tables>=12.4

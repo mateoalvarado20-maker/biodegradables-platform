@@ -121,6 +121,10 @@ MODULES: dict[str, bool] = {
     "news_brief": True,   # brief diario de noticias para el Data Bot
     "calendar":   True,   # sync de tareas a calendario (además requiere CALENDAR_SYNC_ENABLED=1)
     "marketing":  True,   # KPIs de HubSpot en el Data Bot
+    # F4.3: prospección outbound (reply agent + notificador de secuencias
+    # Apollo). Los jobs además requieren sus flags de cutover
+    # (REPLY_AGENT_IN_BOT / APOLLO_NOTIFIER_IN_BOT).
+    "prospecting": True,
 }
 
 

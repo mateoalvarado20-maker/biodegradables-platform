@@ -54,6 +54,10 @@ BOT_FILES = [
     "monthly_recap.py",
     "news_brief.py",
     "forecasting.py",
+    # prospección outbound (F4.3: migrada de azfunc/PC al bot)
+    "reply_agent.py",
+    "outlook_client.py",
+    "apollo_completion_notifier.py",
     # demo (Fase 5: DEMO_MODE=1 en el App Service sirve datos sintéticos;
     # sin estos archivos el flag caía en fail-soft a datos REALES)
     "demo_contifico.py",

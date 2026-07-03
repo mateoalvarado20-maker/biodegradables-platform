@@ -31,7 +31,12 @@ from pbi_cloud import send_email
 LOCAL_TZ = timezone(timedelta(hours=-5))  # Ecuador UTC-5
 # F2.4: destinatario y marca desde core_config (antes hardcodeados).
 NOTIFY_TO = os.environ.get("APOLLO_NOTIFY_TO", core_config.MIO).strip()
-STATE_PATH = Path.home() / ".claude-agent" / "apollo_completion_state.json"
+# F4.3: STATE_DIR-aware — en el App Service el state persistente vive en
+# /home/.claude-agent (Path.home() crudo caía fuera del storage persistente).
+STATE_PATH = (
+    Path(os.environ.get("STATE_DIR") or str(Path.home() / ".claude-agent"))
+    / "apollo_completion_state.json"
+)
 CONTEXT_PATH = Path(__file__).parent / "company_context.md"
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
@@ -276,6 +281,21 @@ def cmd_reset(seq_id: str) -> int:
     return 1
 
 
+def _send_notify_email(subject: str, body_html: str) -> None:
+    """F4.3: en el App Service envía vía graph_mail (Service Principal
+    app-only — sin refresh token que expire a los 90 días). En la PC, sin
+    los secrets del SP, cae al camino MSAL delegado de siempre (pbi_cloud)."""
+    if os.environ.get("MICROSOFT_APP_ID", "").strip():
+        import graph_mail
+        graph_mail.send(
+            from_user=NOTIFY_TO, to=NOTIFY_TO,
+            subject=subject, html_body=body_html,
+        )
+        return
+    send_email(to=NOTIFY_TO, subject=subject, body_html=body_html,
+               interactive_ok=False)
+
+
 def cmd_tick(dry_run: bool, verbose: bool = False) -> int:
     seqs = apollo_rest.list_sequences()
     state = load_state()
@@ -298,12 +318,7 @@ def cmd_tick(dry_run: bool, verbose: bool = False) -> int:
         try:
             filters = suggest_apollo_filters(name)  # None si falla — se omite el bloque
             html = build_email_html(seq, filters)
-            send_email(
-                to=NOTIFY_TO,
-                subject=f"✅ Secuencia '{name}' completada",
-                body_html=html,
-                interactive_ok=False,
-            )
+            _send_notify_email(f"✅ Secuencia '{name}' completada", html)
             print(f"{prefix} OK  NOTIFY  {name}  (delivered={delivered})")
             state[seq["id"]] = {
                 "notified_at": now_local().isoformat(),

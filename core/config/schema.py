@@ -75,7 +75,7 @@ class Branding(_Strict):
 # no incluye core/).
 KNOWN_MODULES = frozenset({
     "commercial", "logistics", "cobranzas", "activities",
-    "chofer", "news_brief", "calendar", "marketing",
+    "chofer", "news_brief", "calendar", "marketing", "prospecting",
 })
 
 
