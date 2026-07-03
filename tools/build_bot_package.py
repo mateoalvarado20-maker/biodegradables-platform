@@ -28,6 +28,7 @@ BOT_FILES = [
     # entrypoint + agentes
     "teams_bot.py",
     "ask_agent.py",
+    "team_reports.py",
     # infraestructura (Fases 1-5 + F3 VER-IA)
     "safe_json.py",
     "send_ledger.py",
