@@ -99,6 +99,9 @@ Devolvé ÚNICAMENTE un JSON válido con esta estructura (sin texto adicional, s
             system="Eres asistente experto en prospección B2B con Apollo. Respondes en español neutro, devuelves SOLO JSON válido.",
             messages=[{"role": "user", "content": prompt}],
         )
+        # F3 (VER-IA): metering de consumo — nunca lanza.
+        import llm_usage
+        llm_usage.record("apollo_notifier", CLAUDE_MODEL, msg.usage)
         text = msg.content[0].text
         m = re.search(r"\{.*\}", text, re.DOTALL)
         if not m:

@@ -41,6 +41,7 @@ SHARED = [
     "dispatch_state.py",
     "graph_mail.py",
     "hubspot_client.py",
+    "llm_usage.py",
     "pbi_cloud.py",
     "reply_agent.py",
     "reply_state.py",

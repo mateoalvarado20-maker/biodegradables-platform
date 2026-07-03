@@ -4306,7 +4306,7 @@ def ask(
         last_err = None
         for attempt in range(3):
             try:
-                return client.messages.create(
+                resp = client.messages.create(
                     model=MODEL,
                     max_tokens=MAX_TOKENS,
                     system=[
@@ -4319,6 +4319,12 @@ def ask(
                     tools=tools,
                     messages=messages,
                 )
+                # F3 (VER-IA): metering por iteración del loop de tools —
+                # antes response.usage se DESCARTABA (auditoría H12) y el
+                # gasto de IA era invisible hasta la factura. Nunca lanza.
+                import llm_usage
+                llm_usage.record(f"ask_agent:{mode}", MODEL, resp.usage)
+                return resp
             except _anthropic_mod.RateLimitError as e:
                 last_err = e
                 if attempt < 2:

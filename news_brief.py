@@ -135,6 +135,9 @@ def generate_brief() -> dict[str, Any]:
         ],
         messages=[{"role": "user", "content": prompt}],
     )
+    # F3 (VER-IA): metering de consumo — nunca lanza.
+    import llm_usage
+    llm_usage.record("news_brief", MODEL, response.usage)
 
     final_text = ""
     for block in response.content:
