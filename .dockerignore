@@ -1,0 +1,17 @@
+# Lo que NO viaja en la imagen. OJO: los .md de prompts SÍ viajan
+# (company_context.md, core/prompts/*.md) — no excluir *.md global.
+.git
+.github
+.gitignore
+.worktrees
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+*.zip
+logs
+archive
+azfunc
+tests
+Dockerfile
+.dockerignore

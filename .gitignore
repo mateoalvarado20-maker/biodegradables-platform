@@ -20,6 +20,9 @@
 !/requirements_bot.txt
 !/requirements-dev.txt
 !/pyproject.toml
+# F4.5: imagen Docker única de la plataforma
+!/Dockerfile
+!/.dockerignore
 
 # --- Config y templates (datos chicos, fuente de verdad) ---
 !/pbi_schema.json
