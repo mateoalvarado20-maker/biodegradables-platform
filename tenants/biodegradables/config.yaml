@@ -121,6 +121,7 @@ modules:
   news_brief: true      # brief de noticias del Data Bot
   calendar: true        # sync a calendario (con CALENDAR_SYNC_ENABLED=1)
   marketing: true       # KPIs de HubSpot
+  prospecting: true     # reply agent + notificador Apollo (flags de cutover aparte)
 
 # Horarios de los jobs del scheduler (F2.2 — core_config.JOB_SCHEDULES).
 # Cambiar un horario aquí mueve a la vez el cron, el catch-up y el dead-man

@@ -73,6 +73,7 @@ modules:
   news_brief: true      # brief diario de noticias para el bot de datos
   calendar: false       # sync de tareas al calendario (requiere admin consent)
   marketing: false      # KPIs de CRM de marketing (HubSpot)
+  prospecting: false    # respuestas automáticas a prospectos + notificador Apollo
 
 # Horarios de los jobs del scheduler (opcional — sin este bloque aplican los
 # defaults de core_config.JOB_SCHEDULES). Un horario declarado aquí mueve a la
