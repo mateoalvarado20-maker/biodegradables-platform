@@ -201,6 +201,9 @@ Genera el borrador de respuesta siguiendo las reglas. Devuelve solo el JSON."""
         ],
         messages=[{"role": "user", "content": user_msg}],
     )
+    # F3 (VER-IA): metering de consumo — nunca lanza.
+    import llm_usage
+    llm_usage.record("reply_agent", MODEL, response.usage)
 
     text = ""
     for block in response.content:

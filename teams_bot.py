@@ -5217,6 +5217,52 @@ async def _job_jose_asistencia() -> None:
     )
 
 
+async def _job_llm_budget_check() -> None:
+    """F3 (VER-IA 2026-07-03): vigila el presupuesto mensual de IA del tenant
+    (LLM_BUDGET_MONTHLY_USD). Corre diario; si el gasto del mes lo alcanzó,
+    avisa al operador — máximo 1 aviso por día (ledger). Sin presupuesto
+    configurado, no hace nada."""
+    import llm_usage
+    b = await asyncio.to_thread(llm_usage.budget_status)
+    if not b["exceeded"]:
+        return
+    fecha = send_ledger.today_iso()
+    if not send_ledger.claim("alert_llm_budget", fecha):
+        return  # ya avisado hoy
+    def _send() -> None:
+        import graph_mail as _gm
+        _gm.send(
+            from_user=ALERT_EMAIL,
+            to=ALERT_EMAILS,
+            subject=(
+                f"💸 Presupuesto de IA del mes alcanzado: "
+                f"${b['spent_usd']:.2f} de ${b['budget_usd']:.2f} USD"
+            ),
+            html_body=(
+                f"<h2 style='color:#c53030'>Presupuesto de IA alcanzado</h2>"
+                f"<p>El gasto en modelos de IA de este tenant llegó a "
+                f"<b>${b['spent_usd']:.2f} USD</b> en el mes, alcanzando el "
+                f"presupuesto configurado de <b>${b['budget_usd']:.2f} USD</b> "
+                f"(<code>LLM_BUDGET_MONTHLY_USD</code>).</p>"
+                f"<p>Desglose por agente/modelo/día: "
+                f"<code>GET /admin/llm-usage</code> o "
+                f"<code>python llm_usage.py status</code>.</p>"
+                f"<p>Los agentes siguen operando — este aviso es informativo "
+                f"para revisar consumo o ajustar el presupuesto.</p>"
+            ),
+        )
+    try:
+        await asyncio.to_thread(_send)
+        send_ledger.confirm("alert_llm_budget", fecha)
+        logger.warning(
+            "Alerta de presupuesto de IA enviada: $%.2f de $%.2f",
+            b["spent_usd"], b["budget_usd"],
+        )
+    except Exception:
+        logger.exception("No se pudo enviar la alerta de presupuesto de IA")
+        send_ledger.release("alert_llm_budget", fecha)
+
+
 def _schedule_jobs() -> None:
     # F2.3 (2026-07-02): cada job pertenece a un MÓDULO del catálogo del
     # tenant (core_config.MODULES). Módulo apagado = el job NO se registra,
@@ -5440,6 +5486,15 @@ def _schedule_jobs() -> None:
         _catchup_missed_sends,
         CronTrigger(hour="8-12,17-19", minute=35, timezone=EC_TZ),
         id="catchup_retry",
+        replace_existing=True,
+    )
+
+    # F3 (2026-07-03): vigía diario del presupuesto de IA. Infraestructura de
+    # plataforma (como catchup_retry) — no es un módulo del tenant.
+    scheduler.add_job(
+        _job_llm_budget_check,
+        CronTrigger(hour=7, minute=5, timezone=EC_TZ),
+        id="llm_budget_check",
         replace_existing=True,
     )
 
@@ -5687,6 +5742,12 @@ async def health() -> dict[str, Any]:
     # Fase 3: el health expone qué reportes salieron hoy (ledger) y quién
     # tiene el scheduler — observabilidad de entregas sin entrar a logs.
     lease = safe_json.load_json(_LEASE_PATH, dict)
+    # F3 (VER-IA): gasto de IA del mes a la vista — COGS del tenant.
+    try:
+        import llm_usage
+        llm_month = llm_usage.budget_status()
+    except Exception:
+        llm_month = {"error": "llm_usage no disponible"}
     return {
         "status": "healthy",
         "scheduler_running": scheduler.running,
@@ -5696,7 +5757,20 @@ async def health() -> dict[str, Any]:
             "this_instance": INSTANCE_ID,
         },
         "sends_today": send_ledger.status_today(),
+        "llm_month": llm_month,
     }
+
+
+@app.get("/admin/llm-usage")
+async def admin_llm_usage(request: Request, month: str | None = None) -> dict[str, Any]:
+    """F3 (VER-IA): resumen del consumo de IA del tenant — total del mes,
+    desglose por agente, por modelo y por día, y estado del presupuesto
+    (LLM_BUDGET_MONTHLY_USD). ?month=YYYY-MM para meses anteriores."""
+    _require_admin(request)
+    import llm_usage
+    s = llm_usage.summary(month)
+    s["budget"] = llm_usage.budget_status(month)
+    return s
 
 
 def _missing_deliveries(now: datetime, grace_minutes: int = 30) -> list[str]:
