@@ -62,34 +62,28 @@ az webapp config appsettings set -n biodegradables-bot-app -g rg-biodegradables-
 
 | Credencial | Vence | Renovación |
 |---|---|---|
-| MSAL refresh token (PC) | 90 días | `python pbi_cloud.py` interactivo (device-code). Síntomas de vencido: ApolloNotifier deja de mandar correos. |
+| MSAL refresh token (`MSAL_CACHE_B64` en el App Service) | inactividad 90 días (el tick cada 15 min lo mantiene vivo) | Re-auth: `python pbi_cloud.py` interactivo en la PC → re-exportar el cache a `MSAL_CACHE_B64` del App Service. Síntomas de vencido: el reply agent falla su tick (alerta throttled 1/día). |
 | Secret del bot (`MICROSOFT_APP_PASSWORD`) | según App Registration | Azure Portal → rotar → actualizar App Service + scripts. |
 | `ADMIN_API_TOKEN` | **OBLIGATORIO desde F0 (2026-07-02)** | App Service settings. El código ya NO cae al secret OAuth: sin este setting, TODOS los `/admin/*` responden 401. Generar 32+ bytes aleatorios y setearlo ANTES de deployar la versión F0. |
 | `CONTIFICO_API_TOKEN`, `HUBSPOT_TOKEN`, `APOLLO_API_KEY`, `ANTHROPIC_API_KEY` | no vencen solos | rotar en el proveedor → actualizar env (User-scope local + App Service + Function App). |
 
-## Cutover de prospección al bot (F4.3 — una sola vez, retira azfunc y la schtask)
+## Cutover de prospección al bot (F4.3 — ✅ EJECUTADO 2026-07-03)
 
-**Reply agent** (hoy: timer `reply_agent_tick` del Function App, cada 15 min):
-```powershell
-# 1. Copiar del Function App al App Service los settings: MSAL_CACHE_B64,
-#    AzureWebJobsStorage (y verificar APOLLO_API_KEY ya presente).
-# 2. Deploy del bot con esta versión (jobs gateados).
-# 3. En la MISMA ventana:
-az webapp config appsettings set -g rg-biodegradables-prod -n biodegradables-bot-app --settings REPLY_AGENT_IN_BOT=1
-az functionapp config appsettings set -g rg-biodegradables-prod -n func-biodegradables-ec --settings AzureWebJobs.reply_agent_tick.Disabled=true
-# 4. Validar: POST /admin/trigger-reply-agent (X-Admin-Token) → resumen del inbox.
-```
+**Reply agent**: corre en el bot (`reply_agent_tick`, cada 15 min) desde el
+2026-07-03 16:45 EC. Settings copiados del Function App (MSAL_CACHE_B64,
+AzureWebJobsStorage, APOLLO_API_KEY) + `REPLY_AGENT_IN_BOT=1`; timer azfunc
+deshabilitado (`AzureWebJobs.reply_agent_tick.Disabled=true`) en la misma
+ventana. Validación manual: `POST /admin/trigger-reply-agent` (X-Admin-Token).
 
-**Apollo notifier** (hoy: schtask `BiodegradablesEcuador-ApolloNotifier-2hrs` en la PC):
-```powershell
-# 1. Verificar APOLLO_API_KEY + ANTHROPIC_API_KEY en el App Service.
-# 2. En la MISMA ventana:
-az webapp config appsettings set -g rg-biodegradables-prod -n biodegradables-bot-app --settings APOLLO_NOTIFIER_IN_BOT=1
-schtasks /change /tn "BiodegradablesEcuador-ApolloNotifier-2hrs" /disable
-# 3. Validar: POST /admin/trigger-apollo-notifier?dry=1 → exit_code 0.
-```
-Tras 1 semana estable: eliminar el Function App y la carpeta azfunc/ del repo
-(el reply agent era su último timer activo), y borrar la schtask.
+**Apollo notifier**: RETIRADO 2026-07-04 por decisión del dueño ("no lo
+necesito") — nunca se activó en el bot. Schtask
+`BiodegradablesEcuador-ApolloNotifier-2hrs` deshabilitada; código en
+`archive/apollo_completion_notifier.py`. La PC de Mateo ya no tiene NINGUNA
+tarea de producción.
+
+**Pendiente (tras ~1 semana estable del reply agent en el bot):** eliminar el
+Function App `func-biodegradables-ec` (ya no tiene timers activos) y la
+carpeta `azfunc/` del repo junto con `tools/sync_azfunc.py` (F4.3b).
 
 ## Dead-man switch de entregas (F0, 2026-07-02)
 

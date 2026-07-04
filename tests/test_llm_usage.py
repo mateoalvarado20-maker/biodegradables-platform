@@ -57,13 +57,12 @@ def test_modelo_sin_precio_estima_y_no_lanza(lu):
 
 
 def test_modelos_de_los_agentes_tienen_precio(lu):
-    """Gate: si un agente cambia de modelo sin agregar la tarifa, CI falla."""
+    """Gate: si un agente cambia de modelo sin agregar la tarifa, CI falla.
+    (apollo_completion_notifier retirado 2026-07-04 — ya no se verifica.)"""
     import ask_agent
     import reply_agent
     import news_brief
-    import apollo_completion_notifier
-    for model in {ask_agent.MODEL, reply_agent.MODEL, news_brief.MODEL,
-                  apollo_completion_notifier.CLAUDE_MODEL}:
+    for model in {ask_agent.MODEL, reply_agent.MODEL, news_brief.MODEL}:
         assert model in lu.PRICES_USD_PER_MTOK, (
             f"{model} sin precio en llm_usage.PRICES_USD_PER_MTOK"
         )
