@@ -73,6 +73,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger("teams_bot")
 
+
+def _init_app_insights() -> bool:
+    """Observabilidad (auditoría 2026-07-02, H1): logs y trazas del bot a
+    Application Insights con retención — antes vivían SOLO en el log stream
+    efímero del App Service. Se activa únicamente si
+    APPLICATIONINSIGHTS_CONNECTION_STRING está seteado; JAMÁS rompe el
+    arranque (sin el paquete o sin permisos, el bot sigue con logging local).
+    """
+    if not os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip():
+        return False
+    try:
+        from azure.monitor.opentelemetry import configure_azure_monitor
+        configure_azure_monitor()  # logs + requests + dependencias (OTel)
+        logger.info("Application Insights conectado (OpenTelemetry)")
+        return True
+    except Exception as e:
+        logger.warning("App Insights no inicializó (%s) — sigo con logging local", e)
+        return False
+
+
+_init_app_insights()
+
 # ===== Configuración de los dos bots =====
 DATA_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 DATA_APP_PWD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
