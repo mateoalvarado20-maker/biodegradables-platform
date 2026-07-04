@@ -1,14 +1,55 @@
-# Proyecto: Reporte diario Biodegradables Ecuador
+# Proyecto: Plataforma VER-IA (tenant #1: Biodegradables Ecuador)
 
-Este folder contiene el sistema automatizado que envía un resumen comercial
-diario a las 8:00 AM al gerente, con datos de Power BI cloud (dataset Contifico).
+**Desde 2026-07-02 este repo es el producto de VER-IA**: una plataforma SaaS
+de agentes IA, bots de Teams y automatización empresarial, multi-tenant por
+diseño. **Biodegradables Ecuador es el tenant #1** (primer cliente), descrito
+íntegramente por `tenants/biodegradables/` (config.yaml + integrations.yaml +
+prompts). Historia del pivot y fases: memoria `project_veria_pivot`.
 
-**Si eres Claude en una sesión nueva:** lee este archivo antes de hacer cambios.
-Toda la lógica clave está aquí.
+**Si eres Claude en una sesión nueva:** lee este archivo antes de hacer
+cambios. OJO: puede haber OTRA sesión de Claude trabajando en paralelo en
+esta PC — `git fetch` antes de basar trabajo en master, y trabaja desde el
+worktree `C:\Users\Mateo\.worktrees\f0-estabilizacion` (no el árbol principal).
+
+## ⚡ PLATAFORMA VER-IA — reglas vigentes (2026-07-04)
+
+- **La fuente de verdad de la config del tenant es `tenants/<slug>/config.yaml`**
+  (producción corre con `TENANT_CONFIG_SOURCE=yaml` + `TENANT_SLUG`): destinatarios,
+  personas/roles, horarios de TODOS los jobs (`schedules:`), timezone, módulos
+  contratados (`modules:`), metas/umbrales/feriados, prefijos ERP, caja,
+  branding. `core_config.py` conserva defaults legacy (los usa azfunc/, que
+  muere en F4.3b). `integrations.yaml` declara secrets (fuente keyvault|env),
+  nunca valores.
+- **Todo cambio va por PR con el CI en verde** (branch protection activa en
+  master). Gates: ruff, drift azfunc, higiene async (teams_bot + admin_api),
+  validate_tenant, pytest (351+), build del paquete (con gate de imports vía
+  AST), docker build + smoke.
+- **Capas fijadas por test** (dirección única): `teams_bot` → `admin_api`/
+  `bot_cards`/`team_reports` → `tenant_roles` → `core_config`. Reportes de
+  equipo van en `team_reports`, cards en `bot_cards`, endpoints admin en
+  `admin_api` — tests de umbral impiden que `teams_bot`/`ask_agent` vuelvan
+  a engordar.
+- **Metering de IA (F3)**: todo `messages.create` nuevo debe registrar
+  `llm_usage.record(agente, MODEL, resp.usage)`; modelo sin precio en
+  `llm_usage.PRICES_USD_PER_MTOK` rompe CI. Consulta: `GET /admin/llm-usage`
+  o `python llm_usage.py status`. Presupuesto: `LLM_BUDGET_MONTHLY_USD`.
+- **Dependencias**: el zip deploya `requirements.txt` (RAÍZ) — agregar
+  paquetes runtime a AMBOS (raíz + `requirements_bot.txt`); test lo exige.
+- **JAMÁS editar archivos del repo con PowerShell** (Get/Set-Content =
+  mojibake+BOM). Solo Edit tool o scripts Python. Commits largos: `git
+  commit -F archivo` (comillas dobles en here-strings rompen el quoting).
+- Deploy del bot: `python tools/build_bot_package.py` → `az webapp deploy`
+  (desde el worktree en master actualizado). Post-deploy verificar `/health`,
+  `/health/deliveries` (dead-man) y, si se agregaron jobs con ledger key
+  nueva, sembrar las claves del día ANTES del deploy (vía Kudu VFS) para que
+  el catch-up no re-envíe cards.
+- Aprovisionamiento de un cliente nuevo: `ops/provision_tenant.py <slug>`
+  (App Regs + Bots + App Service + Key Vault) → cargar secrets → consent →
+  `ops/gen_teams_app.py` → deploy. Validación: `ops/validate_tenant.py`.
 
 ---
 
-## ✅ REFACTOR COMPLETADO (2026-06-12) — leer primero
+## ✅ Refactor 2026-06-12 + estado operativo
 
 Las 6 fases del refactor post-auditoría están implementadas y commiteadas
 (`git log`). Diagnóstico original: `AUDITORIA_TECNICA_2026-06-12.md`.
@@ -20,38 +61,44 @@ testean), `docs/onboarding.md`, `docs/runbook-operativo.md` (incidentes).
 - El proyecto es un **repo git** (`C:\Users\Mateo`, `.gitignore` whitelist). Todo cambio se commitea (idealmente por PR con el CI de `.github/workflows/ci.yml`).
 - **NO editar `azfunc\` a mano** (salvo los archivos azfunc-específicos listados en `tools/sync_azfunc.py`): se GENERA con `python tools/sync_azfunc.py`. El zip del bot se genera con `python tools/build_bot_package.py`.
 - Todo state pasa por `safe_json` (atómico+backup+cuarentena+locks); todo envío programado pasa por `_reliable_job` + `send_ledger` (nunca dos veces, nunca perdido en silencio); identidad SOLO desde el registro AAD (display name prohibido como fuente); config de negocio (destinatarios, feriados, PY_OVERRIDE, umbrales) SOLO en `core_config.py`/env vars; `date.today()` prohibido (usar helpers TZ Ecuador).
-- Suite de tests: `python -m pytest tests/ -q` (50 tests: aislamiento entre usuarios, concurrencia, corrupción, anti-duplicado, horarios, identidad). Correrla antes de cualquier deploy.
-- Código retirado vive en `archive/` con justificación en `archive/README.md`. NO restaurar sin leerla. Retirados: `weekly_report.py` (roto y huérfano — reemplazado por `weekly_summaries` del bot), `agent.py`, `apollo_orchestrator.*`, `run_reply_agent.bat`, `run_weekly_report.bat`.
+- Suite de tests: `python -m pytest tests/ -q` (**351+ tests**: aislamiento entre usuarios, concurrencia, corrupción, anti-duplicado, horarios, identidad, config de tenant, módulos, metering, extracciones de capas, packaging, observabilidad). Correrla antes de cualquier deploy. `test_safe_json` de concurrencia es flaky en Windows (pasa aislado).
+- Código retirado vive en `archive/` con justificación en `archive/README.md`. NO restaurar sin leerla. Retirados: `weekly_report.py` (roto y huérfano — reemplazado por `weekly_summaries` del bot), `agent.py`, `apollo_orchestrator.*`, `run_reply_agent.bat`, `run_weekly_report.bat`, `apollo_completion_notifier.py` + `run_apollo_notifier.bat` (retirado 2026-07-03 a pedido de Daniel; su schtask local fue eliminada), `apollo_stats.py` (huérfano).
 
 > **Auditoría 2026-06-22:** ver `AUTOMATIZACIONES_EMPRESA.md` (inventario maestro de
 > bots, agentes y automatizaciones + plan de migración). Esa auditoría actualizó los
 > pendientes de abajo y agregó la sección "Módulos adicionales" más abajo.
 
-**Pendientes operativos del refactor (acción humana, ver runbook):**
-1. ✅ **HECHO (2026-06-22):** repo conectado a GitHub (`mateoalvarado20-maker/biodegradables-platform`), 6 PRs mergeados. Falta solo confirmar branch protection en `master`.
-2. Deploy del bot (`tools/build_bot_package.py` → `az webapp deploy`) y del azfunc sincronizado.
-3. ✅ **HECHO (2026-07-02, F0 VER-IA):** `ADMIN_API_TOKEN` propio seteado en el App Service (random 32 bytes; también en env var User de esta PC para scripts de testing). El código además eliminó el fallback al secret OAuth (fail-closed). Dead-man switch desplegado: webtest `webtest-bot-deadman` + action group `ag-veria-alertas` + alerta en `rg-biodegradables-prod` — tras deployar F0, cambiar la URL del webtest de `/health` a `/health/deliveries`.
-4. Cutover de logística al bot (`LOGISTICS_IN_BOT=1` + disable del timer azfunc, en la misma ventana — runbook §Cutover).
-5. (Opcional) `DISPATCH_TABLE_CONN` en la PC para que `dispatch.py` escriba a la tabla de producción.
+**Pendientes operativos (actualizados 2026-07-04, fases VER-IA):**
+1. ✅ GitHub conectado (`mateoalvarado20-maker/biodegradables-platform`), branch protection ACTIVA en master.
+2. ✅ `ADMIN_API_TOKEN` propio en el App Service (fail-closed, sin fallback al secret OAuth). Dead-man switch desplegado: webtest `webtest-bot-deadman` → `/health/deliveries` + action group `ag-veria-alertas`.
+3. ✅ Cutover de logística al bot (`LOGISTICS_IN_BOT=1`) y de prospección (`REPLY_AGENT_IN_BOT=1`, 2026-07-03) — azfunc quedó SIN timers activos.
+4. **F4.3b (~2026-07-10, tras soak del reply agent):** borrar Function App `func-biodegradables-ec`, carpeta `azfunc/`, `tools/sync_azfunc.py` y el gate de drift del CI.
+5. **F1 (acción de Daniel):** M365 de VER-IA con el dominio comprado, suscripción Azure propia, GitHub org + transferencia del repo, cuenta Anthropic propia (rotar key al tenerla), acuerdo de IP con Biodegradables/Mateo. La prueba E2E de `ops/provision_tenant.py` (tenant demo de VER-IA) está bloqueada por esto.
+6. **F4.5b:** mover el repo fuera del home de Mateo (idealmente junto con la transferencia a la org).
+7. (Opcional) `DISPATCH_TABLE_CONN` en la PC para que `dispatch.py` escriba a la tabla de producción; migrar secrets de Biodegradables a Key Vault; rate limiting en `/admin/*`.
 
-**Estado operativo REAL verificado (2026-06-12):**
+**Estado operativo REAL (verificado 2026-07-04):**
 | Qué | Dónde corre HOY |
 |---|---|
-| Reporte comercial 8 AM | Job APScheduler `morning_sales_report` en teams_bot (App Service). Timer azfunc ELIMINADO del código en Fase 0. Schtask local DESHABILITADA (run_morning.bat queda para runs manuales). |
-| Reporte logística 8 AM | Timer azfunc `logistics_morning`. Schtask local DESHABILITADA. |
-| Reply agent cada 15 min | Timer azfunc `reply_agent_tick` (state en Azure Table). Schtask local DESHABILITADA y wrapper archivado — re-habilitarla duplicaría borradores. |
-| Apollo notifier cada 2 h | Schtask local `BiodegradablesEcuador-ApolloNotifier-2hrs` (única tarea local activa). ⚠️ SPOF: depende de que la PC de Mateo esté encendida; cuando la PC se suspende a la hora del trigger, Task Scheduler reporta `LastTaskResult 0xC000013A` (proceso abortado) aunque el script en sí termina en exit 0. Candidato a migrar a un timer de Azure Functions. |
-| Weekly report de Mateo | Job `weekly_summaries` del bot (Vie 17:00). El `weekly_report.py` viejo está archivado — NO crear su schtask. |
+| TODO lo programado | Jobs APScheduler en `teams_bot` (App Service `biodegradables-bot-app`), horarios desde `tenants/biodegradables/config.yaml` (`schedules:`). Con catch-up (`catchup_retry`) + dead-man (`/health/deliveries`). |
+| Reporte comercial 8 AM | Job `morning_sales_report` del bot. |
+| Reporte logística 8 AM | Job del bot (`LOGISTICS_IN_BOT=1`). Timer azfunc deshabilitado. |
+| Reply agent cada 15 min | Job `reply_agent_tick` del bot (`REPLY_AGENT_IN_BOT=1`, auth delegada vía `MSAL_CACHE_B64`, state en Azure Table). Timer azfunc deshabilitado 2026-07-03. |
+| Apollo notifier | **RETIRADO 2026-07-03** a pedido de Daniel (archivo en `archive/`). Schtask local eliminada. |
+| PC de Mateo | **CERO tareas de producción.** Task Scheduler local ya no ejecuta nada del sistema. |
+| azfunc `func-biodegradables-ec` | Sin timers activos. Se borra en F4.3b. |
+| Observabilidad | Application Insights `appi-biodegradables-prod` conectado al bot (logs+requests+deps). Verificado 2026-07-04. |
 
 ---
 
 ## Stack
 
-- Python 3.14 (Windows Store), instalado para el usuario `Mateo`
-- Librerías: `anthropic`, `mcp`, `msal`, `httpx`
-- Auth: Microsoft Entra ID via MSAL device-code (token cache persistente)
-- Fuente de datos: Power BI REST API (`/datasets/{id}/executeQueries`)
-- Envío: Microsoft Graph API (`/me/sendMail`)
+- Producción: App Service Linux, Python 3.12, FastAPI + gunicorn/uvicorn (**1 worker DELIBERADO**: lease del scheduler + locks son por proceso), APScheduler. También hay `Dockerfile` (build + smoke en CI).
+- Dev local: Python 3.14 (Windows Store), usuario `Mateo`.
+- Librerías: `anthropic`, `msal`, `httpx`, `botbuilder-core`, `pydantic` v2, `pyyaml`, `azure-data-tables`, `azure-monitor-opentelemetry`.
+- Config: pydantic strict (`core/config/schema.py`) sobre `tenants/<slug>/config.yaml`; secrets declarados en `integrations.yaml` (keyvault|env).
+- Fuente de datos: Contifico REST (el DAX/Power BI de abajo es LEGACY — el reporte diario ya no lo usa).
+- Envío: Microsoft Graph app-only (`graph_mail.py`); delegado MSAL solo para el reply agent (Outlook drafts).
 
 ---
 
@@ -76,7 +123,7 @@ testean), `docs/onboarding.md`, `docs/runbook-operativo.md` (incidentes).
 | `company_context.md` | Contexto editable de la empresa (catálogo, diferenciadores, reglas de tono) que `reply_agent.py` carga como system prompt. Editable a mano sin tocar código |
 | `calendar_client.py` | Cliente Microsoft Graph para Calendario. `create_yearly_all_day_event(user_email, ...)` crea eventos all-day con recurrencia anual y reminder. Si `user_email=None` usa `/me`, si tiene valor usa `/users/{email}` (requiere calendario compartido con permiso Editor). Scopes: `Calendars.ReadWrite` + `Calendars.ReadWrite.Shared` |
 | `setup_payment_reminders.py` | Crea recordatorios recurrentes de pagos en calendario de Daniel. Anuales: Patente Municipal 12 may (10d), Super de Bancos 30 sep (10d), CONTIFICO 1 oct (15d). Mensuales: Claude día 18 (3d), Microsoft 365 día 15 (3d). Idempotente — skip si subject ya existe. Flags: `--self`, `--dry-run`, `--replace SUBSTRING` para reemplazar uno existente. Agregar más pagos = editar lista `PAYMENTS` y correr |
-| `teams_bot.py` | **[En desarrollo — Phase B]** Backend FastAPI + Bot Framework para chat bot en Teams. Reusa `ask_agent.ask()`. Whitelist de usuarios. Comandos `/help` y `/refresh`. Espera env vars `MICROSOFT_APP_ID`, `MICROSOFT_APP_PASSWORD`, `MICROSOFT_APP_TENANT_ID`. Listo para deploy cuando Azure esté activo. |
+| `teams_bot.py` | **EN PRODUCCIÓN — entrypoint de la plataforma.** FastAPI + Bot Framework (dual-bot) + APScheduler con TODOS los jobs programados. Tras los splits F4 quedó como orquestador (~4.100 líneas): cards en `bot_cards.py`, reportes en `team_reports.py`, roles en `tenant_roles.py`, endpoints admin en `admin_api.py` (re-exports de compat). Env vars: `MICROSOFT_APP_*`, `ADMIN_API_TOKEN`, `TENANT_SLUG`, `TENANT_CONFIG_SOURCE=yaml`, flags de cutover. |
 | `manifest.json` | Template del manifest de Teams. Tiene 2 placeholders `REEMPLAZAR_CON_MICROSOFT_APP_ID` que se sustituyen cuando se crea el Azure Bot resource. Empaquetar como .zip con `color.png` + `outline.png` y subir a Teams via Apps → Upload custom app. |
 | `generate_bot_icons.py` | Genera `color.png` (192x192) + `outline.png` (32x32) con el verde corporativo. Usa Pillow. Ya están generados. |
 | `requirements_bot.txt` | Dependencias adicionales solo para teams_bot.py (no necesarias para daily_report.py): fastapi, uvicorn, botbuilder-core, botbuilder-schema, aiohttp, Pillow. |
@@ -88,13 +135,11 @@ testean), `docs/onboarding.md`, `docs/runbook-operativo.md` (incidentes).
 | `apollo_orchestrator.py` | **[DESHABILITADO 2026-05-28]** Era el orquestador "1 sola secuencia activa". El user lo descartó porque limitaba volumen — perdía dinero al apagar 10/11 secuencias. Archivos preservados por si se reaprovecha la lógica en otro modo. Tarea programada eliminada. No usar. |
 | `apollo_orchestrator.json` | Config del orquestador deshabilitado. Conservada por si se reusa. |
 | `run_apollo_orchestrator.bat` | Wrapper del orquestador deshabilitado. Conservado. |
-| `apollo_completion_notifier.py` | **Notificador de secuencias completadas**. Cada 2 horas chequea las secuencias activas y envía correo a malvarado@ cuando una llega a `unique_scheduled == 0` (terminó su cola). Incluye stats finales + **sugerencia IA de filtros Apollo** (industria, cargo, ubicación, keywords) generada con Claude sonnet-4-6 leyendo `company_context.md` como contexto del producto. State en `~/.claude-agent/apollo_completion_state.json` para evitar duplicados. CLI: `--status`, `--dry-run`, `--reset SEQ_ID`. Requiere `APOLLO_API_KEY` master + `ANTHROPIC_API_KEY`. |
-| `run_apollo_notifier.bat` | Wrapper Task Scheduler del notificador. Logs en `logs/apollo-notifier-AAAAMMDD.log`. |
+| `apollo_completion_notifier.py` | **RETIRADO 2026-07-03** a pedido de Daniel ("no lo necesito"). Vive en `archive/` con su wrapper; schtask local eliminada. Reversible: ver `archive/README.md`. |
 | `activities_template.json` | Plantilla de actividades recurrentes que Mateo debe ejecutar cada semana (Apollo 70 correos/día, TikTok video+live, códigos Contifico, chatbots, etc.). Se lee SOLO al inicializar una semana nueva en `activity_state.py`. Editable a mano para agregar/quitar/ajustar metas. |
 | `activity_state.py` | Persistencia del tracker de actividades semanales. State en `~/.claude-agent/activity_state.json`, una entry por semana ISO (`AAAA-Www`). Funciones: `init_week`, `mark_daily`, `set_weekly_progress`, `add_adhoc`, `remove_activity`, `daily_total`, `daily_compliance`. |
 | `activity_tracker.py` | CLI para tracking de actividades (estilo `dispatch.py`). Subcomandos: `done` (valor diario), `progress` (% avance semanal), `add` (ad-hoc), `remove`, `status`/`week`. Para uso de Mateo durante la semana mientras se implementa el bot de Teams en Fase 2. |
-| `weekly_report.py` | **Reporte semanal de actividades a Daniel los viernes 5 PM**. Lee `activity_state.json` y envía HTML con KPIs (correos Apollo, respuestas, avance proyectos), tabla de actividades diarias con columna por día + cumplimiento, tabla de proyectos semanales con avance %, y sección de pendientes. Modos: `send` (a JEFE), `test` (solo Mateo), `dry` (stdout), `preview --wk` (semana específica). |
-| `run_weekly_report.bat` | Wrapper Task Scheduler viernes 5 PM. Logs en `logs/weekly-AAAAMMDD.log`. |
+| `weekly_report.py` | **ARCHIVADO** (roto y huérfano). Reemplazado por el job `weekly_summaries` del bot. NO crear su schtask. |
 | `azure_setup_checklist.md` | Runbook paso a paso para Daniel/admin: provisionar Azure Bot + App Service + permisos Graph + manifest Teams. Pre-requisito para Fase 2 del tracker (slash commands en Teams) y para que `teams_bot.py` salga a producción. |
 | `graph_mail.py` | Cliente Microsoft Graph para enviar correo via Service Principal (client_credentials con APP_ID + SECRET del bot). NO usa MSAL cache — funciona desde Azure App Service. Función `send(from_user, to, subject, html_body, cc)`. Token cacheado en memoria ~50 min. |
 | `activities_manifest.json` | Manifest del Activities Bot (botId `bc908e6c-a2a0-4252-9760-2d3c5f17a3f6`). Empaquetado con icons en `activities_teams_app.zip` para sideload Teams. |
@@ -115,13 +160,35 @@ Estos estaban en producción pero faltaban en la tabla de arriba:
 | `conversation_history.py` | Persistencia multi-turn del chat por usuario (TTL 30 min, separado por bot). Usado por `teams_bot`. State `~/.claude-agent/conversation_history.json` (safe_json) | ✅ Activo |
 | `graph_calendar_app.py` | Cliente Graph **app-only** para calendario: crea/actualiza/borra eventos de fecha límite y reuniones en calendarios de gerencia. Usado por `teams_bot` y `ask_agent`. Requiere admin consent `Calendars.ReadWrite` | ✅ Activo |
 | `credito_excel.py` | Lee condiciones de crédito (días por cliente) desde Excel en SharePoint (Graph workbook). Fallback a `condiciones_credito.json`. Vive sincronizado en `azfunc/` | ✅ Activo (azfunc) |
-| `apollo_stats.py` | Métricas de prospección Apollo (enviados/respuestas). **HUÉRFANO**: ningún módulo lo importa | ⚠️ Sin uso |
+| `apollo_stats.py` | Métricas de prospección Apollo | 🗄️ ARCHIVADO 2026-07-03 (huérfano) |
 | `wp_client.py` | Cliente REST de WordPress (Basic Auth + Application Password). Solo lectura habilitada. Base de los `wp_*` | ✅ Activo |
 | `wp_audit.py` / `wp_check.py` / `wp_drafts.py` | Auditoría/smoke-test/inspección del WordPress. CLIs manuales, no automatizados | 🔧 Manual |
 | `wp_apply.py` | Aplicación controlada de cambios al WordPress. Dry-run por defecto; exige `--apply --approve <id>`; guarda backups | 🔧 Manual |
 | `graph_mail.py` | Envío de correo vía Service Principal (app-only, client_credentials). NO usa MSAL. Usado por todos los reportes del bot/azfunc | ✅ Activo |
-| `core_config.py` | **Fuente única** de config de negocio: destinatarios, feriados EC (2025-2027), `META_FACTOR`, `PY_OVERRIDE` (keyed por (año,mes)), umbrales, horarios de check-in | ✅ Activo |
+| `core_config.py` | Config de negocio (destinatarios, feriados, `META_FACTOR`, `PY_OVERRIDE`, umbrales, horarios, módulos). **En producción ya NO es la fuente de verdad**: `_maybe_load_from_tenant()` sobreescribe todo desde el YAML del tenant. Los defaults hardcodeados solo sirven a `azfunc/` (legacy, muere en F4.3b) y a runs locales sin `TENANT_CONFIG_SOURCE` | ✅ Activo |
 | `safe_json.py` / `send_ledger.py` | Infraestructura: escritura atómica + backup + cuarentena + locks; ledger anti-duplicado de envíos | ✅ Activo |
+
+### Módulos de la plataforma VER-IA (2026-07)
+
+Nacidos en las fases F0–F5 del pivot (memoria `project_veria_pivot`):
+
+| Archivo | Función | Estado |
+|---|---|---|
+| `tenants/<slug>/config.yaml` | **Fuente de verdad del tenant**: company, people/roles, schedules de todos los jobs, timezone, modules, metas, feriados, caja, prefijos ERP, branding. `tenants/_template/` documentado para clientes nuevos | ✅ Prod (`biodegradables`) |
+| `tenants/<slug>/integrations.yaml` | Declaración de secrets por integración (erp/crm/mail/ai/prospecting/wordpress), cada uno con fuente exactamente-una: `keyvault:` o `env:`. Nunca valores | ✅ Prod |
+| `core/config/schema.py` | Schema pydantic v2 strict (`extra="forbid"`) del config.yaml. `KNOWN_MODULES` espejo de `MODULES` (test fija igualdad) | ✅ |
+| `core/config/integrations.py` | `SecretRef` + `load_tenant_integrations()` | ✅ |
+| `bot_cards.py` | Todos los builders de Adaptive Cards (check-in, José/ruta, cierre de caja…) | ✅ Prod |
+| `team_reports.py` | Reportes de equipo (consolidado 18:30, weekly summaries, cierre caja email…) + `_load_collaborators()` | ✅ Prod |
+| `tenant_roles.py` | Roles/emails especiales del tenant (INFO/QUITO/JOSE, `SUPERVISORS_ONLY`, `CIERRE_CAJA_USERS`, sucursales…) — capa entre core_config y el resto | ✅ Prod |
+| `admin_api.py` | Los ~39 endpoints `/admin/*` (router FastAPI montado por teams_bot al final). Auth `X-Admin-Token: $ADMIN_API_TOKEN` (fail-closed) | ✅ Prod |
+| `llm_usage.py` | **Metering de IA (F3)**: registra cada llamada a Claude por (tenant, agente, modelo) con costo al centavo (`PRICES_USD_PER_MTOK`, cache write/read). `record()` jamás lanza. Presupuesto `LLM_BUDGET_MONTHLY_USD` + job `llm_budget_check` 7:05. CLI: `python llm_usage.py status` | ✅ Prod |
+| `ops/provision_tenant.py` | **Aprovisionamiento de cliente nuevo (F5)**: App Registrations + Azure Bots + App Service + Key Vault (`kv-<slug>-veria`, managed identity, referencias `@Microsoft.KeyVault`). Dry-run por defecto; `--expected-tenant-id` como guardia | ✅ Código listo, E2E bloqueado por F1 |
+| `ops/gen_teams_app.py` | Genera manifests + iconos (brand_color del YAML) + zips de los 2 bots de un tenant | ✅ |
+| `ops/validate_tenant.py` | Valida config.yaml + integrations.yaml de uno o todos los tenants. Corre en CI | ✅ CI |
+| `tools/check_core_purity.py` / `tools/check_async_hygiene.py` | Gates CI: pureza de capas y prohibición de llamadas bloqueantes en handlers async | ✅ CI |
+| `Dockerfile` + `.dockerignore` | Imagen python:3.12-slim, gunicorn+uvicorn 1 worker. Build + smoke de imports en CI | ✅ CI |
+| `demo_contifico.py` / `demo_hubspot.py` / `demo_seed.py` | `DEMO_MODE=1`: datos ficticios (empresa Andex) para demos comerciales sin tocar datos reales | ✅ |
 
 ## Phase E+F+G: Gestión de equipo, cobranzas, recurrencias (2026-05-30 / 31)
 
@@ -202,7 +269,12 @@ Dos bots distintos sirviendo audiencias diferentes, ambos hosteados en el mismo 
 
 ---
 
-## Constantes clave en `daily_report.py`
+## Constantes clave del reporte comercial
+
+> **NOTA 2026-07:** `daily_report.py` ya NO usa Power BI/DAX — lee Contifico
+> directo (migración 2026-06-10) y envía con `graph_mail` (app-only). Los
+> valores de abajo (meta, PY_OVERRIDE, feriados, umbrales) hoy vienen del
+> YAML del tenant vía `core_config`. La mecánica del cálculo sigue vigente.
 
 | Constante | Valor | Para qué |
 |---|---|---|
@@ -227,7 +299,10 @@ Dos bots distintos sirviendo audiencias diferentes, ambos hosteados en el mismo 
 
 ---
 
-## Esquema del modelo Power BI (Contifico)
+## Esquema del modelo Power BI (Contifico) — LEGACY
+
+> Solo relevante para consultas ad-hoc con `pbi_ask.py`. Ningún reporte
+> automatizado depende ya de Power BI.
 
 **Tablas:** Ventas, Calendario, Inventario, Bodega, Cobranzas, DimClientes,
 ClientesConCredito, ConfiguracionCredito.
@@ -261,91 +336,45 @@ explícitos del Calendario.
 
 ## Tareas programadas
 
-### 1. Reporte diario
-- **Nombre:** `BiodegradablesEcuador-DailyReport-Morning`
-- **Trigger:** Diario a las 8:00 AM hora local Ecuador
-- **Acción:** `C:\Users\Mateo\run_morning.bat`
-- **Logs:** `C:\Users\Mateo\logs\morning-AAAAMMDD.log`
+**Desde 2026-07-03 NO existe ninguna tarea de producción en el Task Scheduler
+de esta PC ni ningún timer activo en Azure Functions.** Todo lo programado
+corre como jobs APScheduler dentro de `teams_bot` (App Service), con horarios
+definidos en `tenants/biodegradables/config.yaml` → `schedules:`. NO crear
+schtasks locales — duplicarían envíos.
 
-### 2. Reply agent (respuestas automáticas a prospectos)
-- **Nombre:** `BiodegradablesEcuador-ReplyAgent-15min`
-- **Trigger:** Cada 15 minutos
-- **Acción:** `C:\Users\Mateo\run_reply_agent.bat`
-- **Logs:** `C:\Users\Mateo\logs\reply-AAAAMMDD.log`
+Jobs activos (nombres = claves de `JOB_SCHEDULES`): `morning_sales_report`,
+`logistics_morning`, `reply_agent_tick` (15 min), `daily_news_brief`,
+`auto_assign_cobranzas`, `checkin_weekday`/`checkin_saturday`,
+`deliver_reminders` (5 min), `weekly_summaries`,
+`consolidated_daily_summary`, `monthly_*_recap_day1`, `llm_budget_check`,
+`catchup_retry`, `jose_asistencia`, `apertura_caja_matinal`.
 
-### 3. Reporte logística (envíos a Gabriela)
-- **Nombre:** `BiodegradablesEcuador-LogisticsReport-Morning`
-- **Trigger:** Diario a las 8:00 AM hora local Ecuador
-- **Acción:** `C:\Users\Mateo\run_logistics.bat`
-- **Logs:** `C:\Users\Mateo\logs\logistics-AAAAMMDD.log`
-- **Estado:** REQUIERE `CONTIFICO_API_TOKEN` configurado. NO crear la tarea hasta probar con `python daily_logistics_report.py dry` y validar resultados.
-
-Comando para crearla (cuando el token esté configurado y se haya validado un run en modo `test`):
+Operación:
 ```powershell
-schtasks /create /tn "BiodegradablesEcuador-LogisticsReport-Morning" `
-  /tr "C:\Users\Mateo\run_logistics.bat" `
-  /sc daily /st 08:00 /ru "Mateo" /rl LIMITED /f
-```
+# Salud del bot y de las entregas del día (dead-man)
+curl https://biodegradables-bot-app-cvgnasgec8eqatdg.centralus-01.azurewebsites.net/health
+curl .../health/deliveries          # 200 = todo entregado según schedule, 503 = falta algo
 
-### 4. Apollo orchestrator (rotación de secuencias)
-- **Estado Task Scheduler local: ELIMINADO 2026-05-28.** El user lo descartó (limitaba volumen). Archivos `.py/.json/.bat` preservados pero tarea programada eliminada.
-- **Estado Azure Functions: DESHABILITADO 2026-06-01.** ⚠️ El orquestador ALSO vivía en `func-biodegradables-ec` (folder `azfunc/`) como timer `apollo_orchestrator_tick` cada 30 min. Se deshabilitó via app setting:
-  ```
-  AzureWebJobs.apollo_orchestrator_tick.Disabled=true
-  ```
-- **LECCIÓN APRENDIDA:** muchas tareas vivían en Task Scheduler local Y en Azure Functions (`azfunc/`). Antes de declarar algo "desactivado", chequear AMBOS lugares. Otros timers Azure activos: `logistics_morning` (8 AM EC), `reply_agent_tick` (cada 15 min).
+# Disparo manual de un job (auth X-Admin-Token: $env:ADMIN_API_TOKEN)
+# ver endpoints /admin/trigger-* en admin_api.py
 
-### 5. Apollo completion notifier (avisa cuando termina una secuencia)
-- **Nombre:** `BiodegradablesEcuador-ApolloNotifier-2hrs`
-- **Trigger:** Cada 2 horas
-- **Acción:** `C:\Users\Mateo\run_apollo_notifier.bat`
-- **Logs:** `C:\Users\Mateo\logs\apollo-notifier-AAAAMMDD.log`
-- **Estado:** OPERATIVO desde 2026-05-28 12:40. Genera sugerencia IA de filtros Apollo (industria, cargo, ubicación, keywords) usando Claude sonnet-4-6 y `company_context.md` como contexto.
-
-### 5. Reporte semanal de actividades de Mateo (a Daniel)
-- **Nombre:** `BiodegradablesEcuador-WeeklyActivityReport-Friday`
-- **Trigger:** Viernes 17:00 hora local Ecuador
-- **Acción:** `C:\Users\Mateo\run_weekly_report.bat`
-- **Logs:** `C:\Users\Mateo\logs\weekly-AAAAMMDD.log`
-- **Estado:** Listo para crear. Por validar primero con `python weekly_report.py test`.
-
-Comando para crearla (cuando esté validado):
-```powershell
-schtasks /create /tn "BiodegradablesEcuador-WeeklyActivityReport-Friday" `
-  /tr "C:\Users\Mateo\run_weekly_report.bat" `
-  /sc weekly /d FRI /st 17:00 /ru "Mateo" /rl LIMITED /f
-```
-
-Comandos útiles:
-```powershell
-# Estado de las tareas
-Get-ScheduledTask -TaskName "BiodegradablesEcuador-DailyReport-Morning" | Get-ScheduledTaskInfo
-Get-ScheduledTask -TaskName "BiodegradablesEcuador-ReplyAgent-15min" | Get-ScheduledTaskInfo
-Get-ScheduledTask -TaskName "BiodegradablesEcuador-ApolloOrchestrator-30min" | Get-ScheduledTaskInfo
-
-# Forzar ejecución
-schtasks /run /tn "BiodegradablesEcuador-DailyReport-Morning"
-schtasks /run /tn "BiodegradablesEcuador-ReplyAgent-15min"
-schtasks /run /tn "BiodegradablesEcuador-ApolloOrchestrator-30min"
-
-# Ver logs más recientes
-Get-Content C:\Users\Mateo\logs\morning-*.log -Tail 30
-Get-Content C:\Users\Mateo\logs\reply-*.log -Tail 30
-Get-Content C:\Users\Mateo\logs\apollo-*.log -Tail 30
-
-# Probar reply_agent en seco (sin crear drafts)
+# Runs manuales locales (nunca programados):
+python daily_report.py test
+python daily_logistics_report.py dry
 python reply_agent.py --dry-run --since-hours 24 --verbose
-
-# Apollo orchestrator
-python apollo_orchestrator.py --status        # ver qué secuencia está activa y cuál sigue
-python apollo_orchestrator.py --dry-run       # qué haría sin ejecutar
-python apollo_orchestrator.py --pause-all     # pausar todas (para emergencias)
-python apollo_orchestrator.py --force-rotate  # forzar paso a la siguiente
 ```
+
+**LECCIÓN APRENDIDA (histórica):** las tareas llegaron a vivir en 3 lugares
+(schtasks locales, timers azfunc, jobs del bot). Antes de declarar algo
+"desactivado" o "único", chequear TODOS. Hoy el único lugar es el bot;
+`azfunc/` queda sin timers y se elimina en F4.3b.
 
 ---
 
-## Cómo responder preguntas sobre Power BI
+## Cómo responder preguntas sobre Power BI — LEGACY
+
+> Para preguntas de datos, hoy lo normal es `contifico_client.py` /
+> `ask_agent.py`. Esto queda para cuando el usuario pida algo del dashboard PBI.
 
 Cuando el usuario te pregunte algo sobre datos de PBI (ej. "cuánto vendimos hoy",
 "cuál es el top deudor de Quito"), tu flujo es:
@@ -382,8 +411,12 @@ python pbi_ask.py --schema            # esquema completo
 
 ## Reply agent: cómo funciona
 
-`reply_agent.py` es el sistema de respuestas automáticas a prospectos. Corre
-cada 15 min vía Task Scheduler. Flujo:
+`reply_agent.py` es el sistema de respuestas automáticas a prospectos.
+**Desde 2026-07-03 corre como job `reply_agent_tick` del bot** (cada 15 min,
+`REPLY_AGENT_IN_BOT=1`): auth delegada vía `MSAL_CACHE_B64` (cache MSAL
+serializado en app setting — se mantiene vivo con el uso; si expira, runbook
+§MSAL_CACHE_B64), state en Azure Table, textos de empresa/firma desde
+`core_config` (COMPANY_DOMAIN, OUTBOUND_SIGNER). Flujo:
 
 1. Lee correos no leídos del inbox de Mateo (Graph API, scope `Mail.ReadWrite`)
 2. Filtra: descarta correos del dominio propio, no-reply, auto-respuestas
@@ -395,8 +428,8 @@ cada 15 min vía Task Scheduler. Flujo:
 6. Claude devuelve JSON `{should_draft, body_html, reason_if_skip}`
 7. Si `should_draft=true`, crea borrador vía `/createReply` (Graph). Aparece
    enhebrado en la carpeta Drafts de Outlook
-8. Persiste el `message_id` en `~/.claude-agent/reply_state.json` para no
-   duplicar borradores en la siguiente corrida
+8. Persiste el `message_id` para no duplicar borradores (Azure Table en
+   producción; `~/.claude-agent/reply_state.json` en runs locales)
 
 **Cómo ajustar el comportamiento sin tocar código:**
 Edita `company_context.md`. Cambios típicos:
@@ -565,18 +598,27 @@ Para verlas:
 
 ---
 
-## Datos del usuario / contexto de negocio
+## Contexto de negocio
 
-- **Empresa:** Biodegradables Ecuador (`@biodegradablesecuador.com`)
-- **Industria:** comercial / distribución
-- **Ciudades operativas:** Quito (UIO) y Guayaquil (GYE)
-- **ERP fuente:** Contifico (los datasets de PBI extraen de ahí)
-- **Producto del reporte:** dashboard "COM-RPT-001 Dashboard Comercial Contifico"
-  con páginas: Seguimiento Mensual de Ventas, Ventas Históricas, Ventas por
-  Productos, Ventas por Clientes, Cobranzas – Gestión de Riesgo
-- **Gerente:** Daniel Sánchez (`dsanchez@`)
-- **Gerente comercial:** Gabriela Sánchez (`gsanchez@`, +593 98 042 8767) — actualmente NO se menciona en reply agent (ver Issue #9). Recibe el reporte de logística diario.
-- **Usuario:** Mateo Alvarado (`malvarado@`)
-- **Prospección outbound:** vía Apollo.io (plan Basic). Reply agent responde automáticamente a los que contestan. **Orquestador de secuencias** (`apollo_orchestrator.py`) mantiene UNA sola secuencia activa a la vez para evitar cola amontonada de envíos.
+**VER-IA** (empresa de Daniel Sánchez, `dsanchez@`) es dueña de la plataforma;
+Claude actúa como CTO técnico. **Separación corporativa pendiente (F1):** el
+repo, la suscripción Azure y la PC de trabajo hoy pertenecen al entorno del
+cliente #1 — migrar cuando exista el tenant M365/Azure/GitHub de VER-IA.
 
-Última actualización: 2026-05-21
+**Tenant #1 — Biodegradables Ecuador** (`@biodegradablesecuador.com`):
+- Comercial/distribución de empaques biodegradables; Quito (UIO, doc `001-002`)
+  y Guayaquil (GYE, doc `001-001`). ERP: Contifico.
+- Personas (detalle en `tenants/biodegradables/config.yaml`): Daniel Sánchez
+  (gerente, supervisor — no trackea actividades), Gabriela Sánchez (gerente
+  comercial, `gsanchez@` — OJO: distinta de Gabriela Bravo `info@` GYE),
+  Mateo Alvarado (`malvarado@`, opera esta PC — puede tener OTRA sesión de
+  Claude abierta en paralelo), `quito@` (asistente UIO), José (chofer GYE).
+- Prospección outbound vía Apollo.io (plan Basic: máx 1 secuencia activa —
+  Apollo pausa las demás en silencio). Reply agent responde a los que contestan.
+
+**Tenant #2 — Andex (demo):** empresa ficticia para demos comerciales
+(`DEMO_MODE=1`, `demo_*.py`). Ver `PROPUESTA_DEMO_COMERCIAL.md`.
+
+Última actualización: **2026-07-04** (pivot VER-IA F0–F5; este archivo se
+reescribió para reflejar la plataforma — si encuentras una sección que
+contradiga las "reglas vigentes" del inicio, ganan las reglas vigentes).
