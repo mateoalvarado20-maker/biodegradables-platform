@@ -36,7 +36,7 @@ jobs:
         run: python tools/check_core_purity.py
 
       - name: Higiene async (sin red síncrona en el event loop — gate F0)
-        run: python tools/check_async_hygiene.py teams_bot.py
+        run: python tools/check_async_hygiene.py teams_bot.py admin_api.py
 
       - name: Validar paquetes de tenant (gate)
         run: python ops/validate_tenant.py --all

@@ -31,6 +31,7 @@ BOT_FILES = [
     "team_reports.py",
     "bot_cards.py",
     "tenant_roles.py",
+    "admin_api.py",
     # infraestructura (Fases 1-5 + F3 VER-IA)
     "safe_json.py",
     "send_ledger.py",
