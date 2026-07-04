@@ -5237,22 +5237,9 @@ async def _job_reply_agent_tick() -> None:
     )
 
 
-def _run_apollo_notifier_tick() -> None:
-    """F4.3: notificador de secuencias Apollo (antes schtask cada 2h en la PC
-    de Mateo — el último SPOF de PC encendida). Email vía graph_mail app-only;
-    state en STATE_DIR persistente."""
-    import apollo_completion_notifier
-    rc = apollo_completion_notifier.cmd_tick(dry_run=False)
-    if rc != 0:
-        raise RuntimeError(f"apollo_notifier tick retornó {rc}")
-
-
-async def _job_apollo_notifier_tick() -> None:
-    await _reliable_job(
-        "apollo_notifier_tick",
-        lambda: asyncio.to_thread(_run_apollo_notifier_tick),
-        retries=2,
-    )
+# El notificador de secuencias Apollo fue RETIRADO el 2026-07-04 por pedido
+# del dueño ("no lo necesito") — nunca llegó a activarse en el bot. Código en
+# archive/apollo_completion_notifier.py; justificación en archive/README.md.
 
 
 async def _job_llm_budget_check() -> None:
@@ -5539,8 +5526,10 @@ def _schedule_jobs() -> None:
     # F4.3 (2026-07-03): prospección outbound migrada al bot. CUTOVER como el
     # de logística: prender el flag aquí SOLO junto con el disable del timer
     # correspondiente (reply agent: AzureWebJobs.reply_agent_tick.Disabled=true
-    # en el Function App; notifier: deshabilitar la schtask de la PC) — si
-    # ambos corren, se duplican borradores/avisos.
+    # en el Function App) — si ambos corren, se duplican borradores.
+    # CUTOVER EJECUTADO 2026-07-03 16:45 EC (timer azfunc deshabilitado).
+    # (El notificador de secuencias Apollo se retiró el 2026-07-04 — nunca se
+    # activó en el bot; ver archive/README.md.)
     if _mod("prospecting") and os.environ.get("REPLY_AGENT_IN_BOT", "0").strip() == "1":
         scheduler.add_job(
             _job_reply_agent_tick,
@@ -5549,14 +5538,6 @@ def _schedule_jobs() -> None:
             replace_existing=True,
         )
         logger.info("reply_agent_tick programado EN EL BOT (REPLY_AGENT_IN_BOT=1)")
-    if _mod("prospecting") and os.environ.get("APOLLO_NOTIFIER_IN_BOT", "0").strip() == "1":
-        scheduler.add_job(
-            _job_apollo_notifier_tick,
-            CronTrigger(hour="*/2", minute=10, timezone=EC_TZ),
-            id="apollo_notifier_tick",
-            replace_existing=True,
-        )
-        logger.info("apollo_notifier_tick programado EN EL BOT (APOLLO_NOTIFIER_IN_BOT=1)")
 
     logger.info(
         "Jobs: checkin oficina mon-fri 16:30, sucursales mon-fri 17:10 + "
@@ -5831,18 +5812,6 @@ async def trigger_reply_agent(request: Request, since_hours: int = 24) -> dict[s
         reply_agent.process_inbox, since_hours=since_hours
     )
     return {"status": "ok", "resumen": resumen}
-
-
-@app.post("/admin/trigger-apollo-notifier")
-async def trigger_apollo_notifier(request: Request, dry: int = 1) -> dict[str, Any]:
-    """F4.3: corre el tick del notificador Apollo. Default DRY (no envía);
-    ?dry=0 para el tick real."""
-    _require_admin(request)
-    import apollo_completion_notifier
-    rc = await asyncio.to_thread(
-        apollo_completion_notifier.cmd_tick, bool(dry)
-    )
-    return {"status": "ok" if rc == 0 else "error", "exit_code": rc, "dry": bool(dry)}
 
 
 @app.get("/admin/llm-usage")
