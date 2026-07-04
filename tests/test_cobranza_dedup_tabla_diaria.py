@@ -38,6 +38,8 @@ def test_cobranza_no_se_repite_en_tabla_diaria(state_env):
     html = aa._collaborator_block_html_v2(INFO, target_date=_WED)
     # El cliente aparece UNA sola vez (no 3)
     assert html.count("CLUB DEPORTIVO COUNTRY") == 1
-    # y es la marcada (Hecha + su observación)
+    # y es la marcada, en la sección PROPIA de cobranzas (2026-07-04):
+    # estado "Contactado" + su observación
     assert "pagos semanales programados" in html
-    assert "Hecha" in html
+    assert "Contactado" in html
+    assert "📞 Cobranzas" in html

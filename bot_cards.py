@@ -283,14 +283,21 @@ def _build_checkin_card(
     # Sábado: SIN cobranzas — no se gestionan ese día (2026-07-04).
     if activity_state._today().weekday() == 5:
         diarias = [(aid, a) for aid, a in diarias if not aid.startswith("cobranza-")]
+    # 2026-07-04: el card se separa en secciones por naturaleza del trabajo:
+    # actividades diarias / tareas puntuales (una sola vez) / cartera
+    # (cobranzas) / proyectos semanales.
+    cobranzas = [(aid, a) for aid, a in diarias if aid.startswith("cobranza-")]
+    diarias = [(aid, a) for aid, a in diarias if not aid.startswith("cobranza-")]
     # Las finalizadas NO se muestran en el card (2026-06-24): cuando el
     # colaborador confirma "quitar del card" una actividad al 100%, se finaliza
     # y deja de aparecer acá. Las recolocadas vuelven a pendiente y sí aparecen.
-    semanales = [
+    no_diarias = [
         (aid, a) for aid, a in wk["activities"].items()
         if a["tipo"] != "diaria"
         and activity_state.task_effective_status(a) != "finalizada"
     ]
+    unicas = [(aid, a) for aid, a in no_diarias if a["tipo"] == "unica"]
+    semanales = [(aid, a) for aid, a in no_diarias if a["tipo"] != "unica"]
 
     hoy = datetime.now(activity_state.LOCAL_TZ)
     fecha_str = f"{DIAS_ES[hoy.weekday()]} {hoy.day:02d}/{hoy.month:02d}"
@@ -339,7 +346,7 @@ def _build_checkin_card(
         "items": horario_items,
     })
 
-    if not diarias and not semanales:
+    if not diarias and not semanales and not unicas and not cobranzas:
         body.append({
             "type": "Container",
             "style": "emphasis",
@@ -375,8 +382,6 @@ def _build_checkin_card(
             is_co = activity_state.is_carryover_alta(a, _today_iso, _yest_iso)
             co_prefix = "⚠️ PENDIENTE DE AYER · " if is_co else ""
             color = "Attention" if is_co else "Default"
-            es_cobranza = aid.startswith("cobranza-")
-            es_sin_credito = aid.startswith("cobranza-sc-")
             diarias_items.append({
                 "type": "TextBlock",
                 "text": f"{co_prefix}{prio_badge}**{a['nombre']}**{meta_txt}",
@@ -384,10 +389,111 @@ def _build_checkin_card(
                 "spacing": "Medium",
                 "color": color,
             })
+            diarias_items.append({
+                "type": "Input.ChoiceSet",
+                "id": f"estado__{aid}",
+                "style": "expanded",
+                "value": "skip",
+                "choices": [
+                    {"title": "✅ Hecho", "value": "hecho"},
+                    {"title": "⚠️ Parcial", "value": "parcial"},
+                    {"title": "❌ No hecho", "value": "no_hecho"},
+                    {"title": "— Sin actividad / saltar", "value": "skip"},
+                ],
+            })
+            placeholder = (
+                f"Cuánto se hizo? (meta {meta})"
+                if meta is not None
+                else "Cuánto se hizo? (cantidad)"
+            )
+            diarias_items.append({
+                "type": "Input.Number",
+                "id": f"valor__{aid}",
+                "placeholder": placeholder,
+                "min": 0,
+            })
+            diarias_items.append({
+                "type": "Input.Text",
+                "id": f"razon__{aid}",
+                "placeholder": "Si Parcial o No hecho: por qué?",
+                "isMultiline": False,
+            })
+        body.append({
+            "type": "Container",
+            "style": "emphasis",
+            "spacing": "Large",
+            "separator": True,
+            "items": diarias_items,
+        })
+
+    # ===== Tareas puntuales (tipo "unica" — se hacen una sola vez) =====
+    if unicas:
+        unicas_items: list[dict[str, Any]] = [{
+            "type": "TextBlock",
+            "text": "🗂️ Tareas puntuales",
+            "weight": "Bolder",
+            "size": "ExtraLarge",
+            "color": "Accent",
+        }, {
+            "type": "TextBlock",
+            "text": "Asignaciones de una sola vez — cuando lleguen al 100% se cierran.",
+            "wrap": True,
+            "isSubtle": True,
+            "spacing": "None",
+            "size": "Small",
+        }]
+        for aid, a in unicas:
+            current = a.get("avance") or 0
+            fl = a.get("fecha_limite")
+            fl_txt = f" · 📅 límite {fl}" if fl else ""
+            unicas_items.append({
+                "type": "TextBlock",
+                "text": f"**{a['nombre']}** — actual {current:.0f}%{fl_txt}",
+                "wrap": True,
+                "spacing": "Medium",
+            })
+            unicas_items.append({
+                "type": "Input.Number",
+                "id": f"avance__{aid}",
+                "placeholder": "Nuevo % avance (0-100). Vacío si no avanzaste.",
+                "min": 0,
+                "max": 100,
+            })
+            unicas_items.append({
+                "type": "Input.Text",
+                "id": f"notas__{aid}",
+                "placeholder": "Notas breves (opcional)",
+                "isMultiline": False,
+            })
+        body.append({
+            "type": "Container",
+            "style": "emphasis",
+            "spacing": "Large",
+            "separator": True,
+            "items": unicas_items,
+        })
+
+    # ===== Cartera (cobranzas del día) =====
+    if cobranzas:
+        cartera_items: list[dict[str, Any]] = [{
+            "type": "TextBlock",
+            "text": "📞 Cartera — cobranzas del día",
+            "weight": "Bolder",
+            "size": "ExtraLarge",
+            "color": "Accent",
+        }]
+        for aid, a in cobranzas:
+            es_sin_credito = aid.startswith("cobranza-sc-")
+            cartera_items.append({
+                "type": "TextBlock",
+                "text": f"**{a['nombre']}**",
+                "wrap": True,
+                "spacing": "Medium",
+            })
             if es_sin_credito:
                 # Cliente sin crédito aprobado al que se facturó sin registrar el
                 # pago: avisar y pedir el motivo del no-pago como observación.
-                diarias_items.append({
+                cartera_items.append({
                     "type": "TextBlock",
                     "text": ("ℹ️ Este cliente **no tiene crédito aprobado**. "
                              "Indica por qué no ha pagado."),
@@ -395,65 +501,34 @@ def _build_checkin_card(
                     "spacing": "None",
                     "isSubtle": True,
                 })
-            if es_cobranza:
-                diarias_items.append({
-                    "type": "Input.ChoiceSet",
-                    "id": f"estado__{aid}",
-                    "style": "expanded",
-                    "value": "no_contactado",
-                    "choices": [
-                        {"title": "📞 Contactado", "value": "contactado"},
-                        {"title": "❌ No contactado", "value": "no_contactado"},
-                    ],
-                })
-                diarias_items.append({
-                    "type": "Input.Text",
-                    "id": f"razon__{aid}",
-                    "placeholder": (
-                        "¿Por qué no ha pagado? "
-                        "(ej. 'paga el lunes', 'se facturó sin registrar el pago')"
-                        if es_sin_credito else
-                        "¿Qué te dijo el cliente? "
-                        "(ej. 'paga el viernes', 'no contesta', 'pidió plazo de 15 días')"
-                    ),
-                    "isMultiline": True,
-                })
-            else:
-                diarias_items.append({
-                    "type": "Input.ChoiceSet",
-                    "id": f"estado__{aid}",
-                    "style": "expanded",
-                    "value": "skip",
-                    "choices": [
-                        {"title": "✅ Hecho", "value": "hecho"},
-                        {"title": "⚠️ Parcial", "value": "parcial"},
-                        {"title": "❌ No hecho", "value": "no_hecho"},
-                        {"title": "— Sin actividad / saltar", "value": "skip"},
-                    ],
-                })
-                placeholder = (
-                    f"Cuánto se hizo? (meta {meta})"
-                    if meta is not None
-                    else "Cuánto se hizo? (cantidad)"
-                )
-                diarias_items.append({
-                    "type": "Input.Number",
-                    "id": f"valor__{aid}",
-                    "placeholder": placeholder,
-                    "min": 0,
-                })
-                diarias_items.append({
-                    "type": "Input.Text",
-                    "id": f"razon__{aid}",
-                    "placeholder": "Si Parcial o No hecho: por qué?",
-                    "isMultiline": False,
-                })
+            cartera_items.append({
+                "type": "Input.ChoiceSet",
+                "id": f"estado__{aid}",
+                "style": "expanded",
+                "value": "no_contactado",
+                "choices": [
+                    {"title": "📞 Contactado", "value": "contactado"},
+                    {"title": "❌ No contactado", "value": "no_contactado"},
+                ],
+            })
+            cartera_items.append({
+                "type": "Input.Text",
+                "id": f"razon__{aid}",
+                "placeholder": (
+                    "¿Por qué no ha pagado? "
+                    "(ej. 'paga el lunes', 'se facturó sin registrar el pago')"
+                    if es_sin_credito else
+                    "¿Qué te dijo el cliente? "
+                    "(ej. 'paga el viernes', 'no contesta', 'pidió plazo de 15 días')"
+                ),
+                "isMultiline": True,
+            })
         body.append({
             "type": "Container",
             "style": "emphasis",
             "spacing": "Large",
             "separator": True,
-            "items": diarias_items,
+            "items": cartera_items,
         })
 
     if semanales:

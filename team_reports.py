@@ -841,20 +841,27 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
         )
 
     # === Daily activities ===
-    diarias_items = [
+    # 2026-07-04: las COBRANZAS se separan en su propia sección (abajo) — son
+    # trabajo de otra naturaleza y a gerencia le llegaba todo mezclado en la
+    # misma tabla.
+    todas_diarias = [
         (aid, a) for aid, a in week["activities"].items() if a["tipo"] == "diaria"
     ]
-    diarias_items = activity_state.sort_activities_by_priority_then_carryover(
-        diarias_items, today_iso, yesterday_iso
+    todas_diarias = activity_state.sort_activities_by_priority_then_carryover(
+        todas_diarias, today_iso, yesterday_iso
     )
+    cobranza_items = [
+        (aid, a) for aid, a in todas_diarias if aid.startswith("cobranza-")
+    ]
+    diarias_items = [
+        (aid, a) for aid, a in todas_diarias if not aid.startswith("cobranza-")
+    ]
     # Dedup cobranzas por cliente (2026-06-25): auto_assign creaba un aid
     # `cobranza-<cliente>-<fecha>` por día y el MISMO cliente se repetía como
     # varias filas en la tabla. Elegimos UNA activity por cliente — la marcada
     # hoy si existe; las demás se omiten del render.
     _chosen_cob: dict = {}  # cliente -> (aid, marcada_hoy)
-    for _aid, _a in diarias_items:
-        if not _aid.startswith("cobranza-"):
-            continue
+    for _aid, _a in cobranza_items:
         _nom = _a.get("nombre", "").replace("📞 Cobranza:", "").strip()
         _cli = _nom.split(" — ")[0].strip() if " — " in _nom else _nom
         _marcada = (_a.get("log") or {}).get(today_iso) is not None
@@ -866,9 +873,6 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
     daily_rows = ""
     counts = {"hecha": 0, "parcial": 0, "no": 0, "sin": 0}
     for aid, a in diarias_items:
-        # omitir cobranzas duplicadas del mismo cliente (ver dedup arriba)
-        if aid.startswith("cobranza-") and aid not in _cob_keep:
-            continue
         rec = (a.get("log") or {}).get(today_iso)
         meta = a.get("meta")
         if rec is None:
@@ -915,8 +919,6 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
         priority = a.get("priority", "media")
         prio = {"alta": "🔴", "media": "🟡", "baja": "⚪"}.get(priority, "")
         nombre = a["nombre"]
-        if aid.startswith("cobranza-"):
-            nombre = nombre.replace("📞 Cobranza:", "📞").strip()
         daily_rows += (
             f'<tr>'
             f'<td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;">{prio} {nombre}</td>'
@@ -944,6 +946,56 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
             f'<th style="text-align:left;padding:5px 8px;color:#0e7c39;">Estado</th>'
             f'<th style="text-align:left;padding:5px 8px;color:#0e7c39;">Detalle</th>'
             f'</tr>{daily_rows}</table>'
+        )
+
+    # === Cobranzas (sección propia, 2026-07-04) ===
+    cobranza_rows = ""
+    cob_counts = {"contactada": 0, "no": 0, "sin": 0}
+    for aid, a in cobranza_items:
+        if aid not in _cob_keep:
+            continue  # duplicada del mismo cliente (dedup arriba)
+        rec = (a.get("log") or {}).get(today_iso)
+        if rec is None:
+            cob_counts["sin"] += 1
+            icon, label, color = "⏳", "Sin gestionar", "#999"
+            obs = "—"
+        else:
+            valor = rec.get("valor", 0) or 0
+            notas = (rec.get("notas") or "").strip()
+            if valor > 0:
+                cob_counts["contactada"] += 1
+                icon, label, color = "📞", "Contactado", "#2e7d32"
+            else:
+                cob_counts["no"] += 1
+                icon, label, color = "❌", "No contactado", "#c62828"
+            obs = f'<i>"{notas}"</i>' if notas else "—"
+        nombre = a["nombre"].replace("📞 Cobranza:", "").strip()
+        cobranza_rows += (
+            f'<tr>'
+            f'<td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;">{nombre}</td>'
+            f'<td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;color:{color};'
+            f'font-weight:600;white-space:nowrap;">{icon} {label}</td>'
+            f'<td style="padding:5px 8px;border-bottom:1px solid #f0f0f0;font-size:12px;color:#555;">{obs}</td>'
+            f'</tr>'
+        )
+
+    cobranza_section = ""
+    if cobranza_rows:
+        cob_chips = (
+            f'<span style="color:#2e7d32;">📞 {cob_counts["contactada"]}</span> · '
+            f'<span style="color:#c62828;">❌ {cob_counts["no"]}</span> · '
+            f'<span style="color:#999;">⏳ {cob_counts["sin"]}</span>'
+        )
+        cobranza_section = (
+            f'<h4 style="color:#b26a00;margin:14px 0 4px 0;">📞 Cobranzas '
+            f'<span style="font-weight:400;font-size:13px;">({cob_chips})</span></h4>'
+            f'<table style="width:100%;border-collapse:collapse;font-size:13px;'
+            f'background:#fff;border:1px solid #ecd9b8;border-radius:4px;">'
+            f'<tr style="background:#fdf6ea;">'
+            f'<th style="text-align:left;padding:5px 8px;color:#b26a00;">Cliente</th>'
+            f'<th style="text-align:left;padding:5px 8px;color:#b26a00;">Gestión</th>'
+            f'<th style="text-align:left;padding:5px 8px;color:#b26a00;">Observación</th>'
+            f'</tr>{cobranza_rows}</table>'
         )
 
     # === Proyectos semanales ===
@@ -1173,7 +1225,7 @@ def _collaborator_block_html_v2(user_email: str, target_date: date | None = None
         f'</div>'
         f'<div style="padding:14px 18px;background:{header_bg};">'
         f'<div style="margin-bottom:8px;font-size:13px;">{horario_html}</div>'
-        f'{daily_section}{sem_section}{cierre_section}{tiktok_videos_section}{tiktok_section}{choco_section}'
+        f'{daily_section}{cobranza_section}{sem_section}{cierre_section}{tiktok_videos_section}{tiktok_section}{choco_section}'
         f'</div>'
         f'</div>'
     )
