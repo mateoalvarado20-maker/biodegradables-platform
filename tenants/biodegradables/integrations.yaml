@@ -1,0 +1,33 @@
+# Integraciones de Biodegradables Ecuador (tenant #1). Documenta la REALIDAD
+# actual: los secrets viven como app settings cargados a mano (fuente env) —
+# sin Key Vault todavía. Migrarlos a keyvault es opcional y no urgente
+# (F5.3: los tenants NUEVOS nacen con Key Vault desde el provisioner).
+
+erp:
+  provider: contifico
+  secrets:
+    CONTIFICO_API_TOKEN: { env: CONTIFICO_API_TOKEN }
+
+crm:
+  provider: hubspot
+  secrets:
+    HUBSPOT_TOKEN: { env: HUBSPOT_TOKEN }
+
+mail:
+  provider: graph                      # credenciales del bot (app settings)
+
+ai:
+  provider: anthropic
+  secrets:
+    ANTHROPIC_API_KEY: { env: ANTHROPIC_API_KEY }
+
+prospecting:
+  secrets:
+    APOLLO_API_KEY: { env: APOLLO_API_KEY }
+    MSAL_CACHE_B64: { env: MSAL_CACHE_B64 }
+    AzureWebJobsStorage: { env: AzureWebJobsStorage }
+
+wordpress:
+  provider: wordpress
+  secrets:
+    WP_APP_PASSWORD: { env: WP_APP_PASSWORD }
