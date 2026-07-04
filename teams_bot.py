@@ -2967,8 +2967,27 @@ def _run_daily_report_test() -> None:
         _sys.argv = _orig
 
 
+def _morning_sales_skip_hoy(now: datetime | None = None) -> bool:
+    """True si HOY no debe salir el reporte comercial diario: el día 1 del
+    mes gerencia recibe el recap mensual de ventas a la misma hora y llegaban
+    los dos correos juntos (pedido 2026-07-04). Solo aplica si el tenant tiene
+    contratado el recap mensual (monthly_sales_recap en su schedule)."""
+    now = now or datetime.now(EC_TZ)
+    return (
+        now.day == 1
+        and "monthly_sales_recap" in core_config.JOB_SCHEDULES
+    )
+
+
 async def send_morning_sales_report_job() -> None:
-    """Reporte comercial Lun-Sáb 8:00 EC — vía _reliable_job + ledger."""
+    """Reporte comercial Lun-Sáb 8:00 EC — vía _reliable_job + ledger.
+    El día 1 del mes NO sale (lo cubre el recap mensual — ver
+    _morning_sales_skip_hoy; el catch-up y el dead-man usan el mismo guard)."""
+    if _morning_sales_skip_hoy():
+        logger.info(
+            "morning_sales_report: día 1 — hoy sale el recap mensual, skip"
+        )
+        return
     await _reliable_job(
         "morning_sales_report",
         lambda: asyncio.to_thread(_run_daily_report_morning),
@@ -3742,8 +3761,13 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
     specs: list[tuple[str, Any, Any]] = []
     if _mod("commercial"):
         specs += [
+            # El día 1 el comercial diario NO sale (lo cubre el recap mensual)
+            # — el guard aplica igual al catch-up y al dead-man, así el skip
+            # no cuenta como entrega perdida.
             ("morning_sales", send_morning_sales_report_job,
-             _due_after("morning_sales")),
+             lambda now, _due=_due_after("morning_sales"): (
+                 not _morning_sales_skip_hoy(now) and _due(now)
+             )),
             ("monthly_sales_recap", _job_monthly_sales_recap,
              _due_after("monthly_sales_recap")),
         ]

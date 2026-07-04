@@ -127,6 +127,13 @@ def _build_sales_recap_html(year: int, month: int) -> str:
     except Exception as e:
         forecast_next = {"error": str(e)}
 
+    # Proyección que se hizo PARA el mes cerrado (mismo método baseline del
+    # recap anterior) — para comparar en qué escenario cayó el real.
+    try:
+        forecast_propio = forecasting.forecast_baseline(year, month, neto=True)
+    except Exception as e:
+        forecast_propio = {"error": str(e)}
+
     # News brief context (para enriquecer las proyecciones)
     brief = news_brief.load_brief()
     brief_context = ""
@@ -182,6 +189,63 @@ def _build_sales_recap_html(year: int, month: int) -> str:
             f'<p style="color:#666;font-size:12px;">'
             f'Baseline = mismo mes año anterior × (1 + crecimiento YoY de {forecast_next.get("yoy_growth_estimado_pct", 0):.0f}%). '
             f'Rango ± 15%. Mismo mes {py_year}: ${forecast_next.get("ventas_mismo_mes_anio_anterior", 0):,.0f}.</p>'
+        )
+
+    # === Proyección vs real del mes cerrado ===
+    proy_vs_real_html = ""
+    if not forecast_propio.get("error"):
+        pv = forecast_propio.get("proyeccion", {})
+        pes = pv.get("pesimista", 0) or 0
+        prob = pv.get("probable", 0) or 0
+        opt = pv.get("optimista", 0) or 0
+        if total_mes < pes:
+            veredicto = (
+                f"quedó <b>por debajo del escenario pesimista</b> "
+                f"(faltaron ${pes - total_mes:,.0f} para alcanzarlo)"
+            )
+            v_color = "#c62828"
+        elif total_mes < prob:
+            veredicto = "cayó <b>entre el escenario pesimista y el probable</b>"
+            v_color = "#ef6c00"
+        elif total_mes < opt:
+            veredicto = "cayó <b>entre el escenario probable y el optimista</b>"
+            v_color = "#2e7d32"
+        else:
+            veredicto = (
+                f"<b>superó el escenario optimista</b> "
+                f"(${total_mes - opt:,.0f} por encima) 🎉"
+            )
+            v_color = "#0e7c39"
+
+        def _esc_row(emoji, nombre_esc, valor, bg):
+            alcanzado = (
+                '<span style="color:#2e7d32;font-weight:700;">✔ superado</span>'
+                if total_mes >= valor else
+                '<span style="color:#c62828;">✘ no alcanzado</span>'
+            )
+            return (
+                f'<tr style="background:{bg};"><td>{emoji} {nombre_esc}</td>'
+                f'<td style="text-align:right;">${valor:,.0f}</td>'
+                f'<td style="text-align:right;">{alcanzado}</td></tr>'
+            )
+
+        proy_vs_real_html = (
+            f'<h3>🎯 Proyección vs real — {nombre_mes}</h3>'
+            f'<table>'
+            f'<tr><th>Escenario proyectado</th>'
+            f'<th style="text-align:right;">Ventas esperadas</th>'
+            f'<th style="text-align:right;">Resultado</th></tr>'
+            f'{_esc_row("🔴", "Pesimista", pes, "#ffebee")}'
+            f'{_esc_row("🟡", "Probable", prob, "#fff3e0")}'
+            f'{_esc_row("🟢", "Optimista", opt, "#e8f5e9")}'
+            f'</table>'
+            f'<p style="font-size:14px;">Ventas reales de {nombre_mes}: '
+            f'<b style="color:{v_color};">${total_mes:,.0f}</b> — el mes '
+            f'<span style="color:{v_color};">{veredicto}</span>.</p>'
+            f'<p style="color:#888;font-size:11px;margin:2px 0 0;">'
+            f'Proyección baseline recalculada con el mismo método del recap '
+            f'anterior (mismo mes año anterior × crecimiento YoY, ±15%); '
+            f'puede variar levemente respecto del correo del mes pasado.</p>'
         )
 
     def _growth_card(titulo, sub, cur_label, cur_v, prev_label, prev_v, pct):
@@ -314,6 +378,8 @@ las proyecciones para {nombre_mes_next}.</p>
   <b>Mes</b> = {nombre_mes} {year} comparado con {nombre_mes} {py_year}. ·
   <b>Año</b> = todo lo vendido de enero a {nombre_mes} {year}, comparado con el
   mismo tramo de {py_year}.</p>
+
+{proy_vs_real_html}
 
 <h3>🏙️ Por ciudad</h3>
 <table>
