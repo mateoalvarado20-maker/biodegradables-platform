@@ -107,7 +107,7 @@ def test_horarios_de_jobs_configurados(bot):
     esperados = {
         "checkin_weekday": ("day_of_week='mon-fri'", "hour='16'", "minute='30'"),
         "checkin_sucursales_weekday": ("day_of_week='mon-fri'", "hour='17'", "minute='10'"),
-        "checkin_saturday": ("day_of_week='sat'", "hour='12'", "minute='30'"),
+        "checkin_saturday": ("day_of_week='sat'", "hour='12'", "minute='0'"),
         "deliver_reminders": ("minute='*/5'",),
         "auto_assign_cobranzas": ("day_of_week='mon-fri'", "hour='7'", "minute='30'"),
         # weekly_summaries DESHABILITADO 2026-06-29 (ya no se agenda)
@@ -154,7 +154,8 @@ def test_ningun_checkin_corre_domingo(bot):
 
 
 def test_checkin_destinatarios_por_grupo(bot):
-    """Lun-Vie 16:30 → Mateo+Gabriela S.; 17:10 y Sáb 12:30 → info@+quito@."""
+    """Lun-Vie 16:30 → Mateo+Gabriela S.; 17:10 → info@+quito@.
+    Sáb 12:00 → TODOS (oficina+sucursales, sin cobranzas; ver test aparte)."""
     import core_config
     assert set(core_config.CHECKIN_OFICINA) == {
         "malvarado@biodegradablesecuador.com",
@@ -166,7 +167,7 @@ def test_checkin_destinatarios_por_grupo(bot):
     }
     assert core_config.CHECKIN_WEEKDAY_OFICINA == (16, 30)
     assert core_config.CHECKIN_WEEKDAY_SUCURSALES == (17, 10)
-    assert core_config.CHECKIN_SATURDAY_SUCURSALES == (12, 30)
+    assert core_config.CHECKIN_SATURDAY_SUCURSALES == (12, 0)
 
 
 def test_checkin_override_solo_fechas_vigentes(bot, monkeypatch):

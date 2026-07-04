@@ -1,4 +1,4 @@
-# Configuración del tenant: Biodegradables Ecuador (tenant #1 de VER-IA).
+﻿# Configuración del tenant: Biodegradables Ecuador (tenant #1 de VER-IA).
 #
 # ⚡ EN PRODUCCIÓN desde 2026-07-02 (F2.1): el App Service corre con
 # TENANT_CONFIG_SOURCE=yaml + TENANT_SLUG=biodegradables, así que ESTE archivo
@@ -107,7 +107,7 @@ checkin:                                   # core_config CHECKIN_* (hora local d
       - info@biodegradablesecuador.com
       - quito@biodegradablesecuador.com
     weekday_time: "17:10"                  # CHECKIN_WEEKDAY_SUCURSALES
-    saturday_time: "12:30"                 # CHECKIN_SATURDAY_SUCURSALES
+    saturday_time: "12:00"                 # CHECKIN_SATURDAY_SUCURSALES
 
 # Módulos contratados (F2.3 — core_config.MODULES). Biodegradables usa el
 # catálogo completo. Apagar un módulo quita sus jobs, su lugar en el catch-up

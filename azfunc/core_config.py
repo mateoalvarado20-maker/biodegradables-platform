@@ -63,7 +63,10 @@ CHECKIN_SUCURSALES = _env_list(
 )
 CHECKIN_WEEKDAY_OFICINA = (16, 30)      # Lun-Vie → oficina
 CHECKIN_WEEKDAY_SUCURSALES = (17, 10)   # Lun-Vie → sucursales
-CHECKIN_SATURDAY_SUCURSALES = (12, 30)  # Sáb → SOLO sucursales
+# Sáb → TODOS (oficina + sucursales) en un solo horario, sin cobranzas.
+# El chofer también recibe card ese día (con las actividades del asistente 1
+# de su sucursal — rotación de sábados, ver ROTATIVOS_SABADO_EMAILS).
+CHECKIN_SATURDAY_SUCURSALES = (12, 0)
 
 # Overrides puntuales por fecha ISO: ese día, el job regular del grupo omite
 # a los usuarios listados aquí y en su lugar corre el horario del override.
@@ -434,6 +437,17 @@ def asistente_email_for_sucursal(sucursal: str) -> str:
 
 def chofer_email() -> str:
     return next((e for e, p in PEOPLE.items() if p.get("role") == "chofer"), "")
+
+
+def asistente1_email(sucursal: str | None) -> str:
+    """Email del asistente 1 de una sucursal ('' si no hay). Usado por la
+    rotación de sábados: el chofer cubre ese rol y llena su check-in."""
+    return next(
+        (e for e, p in PEOPLE.items()
+         if p.get("role") == "asistente" and p.get("sucursal") == sucursal
+         and p.get("asistente_num") == 1),
+        "",
+    )
 
 
 def email_domain() -> str:

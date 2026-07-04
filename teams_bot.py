@@ -12,7 +12,7 @@ Phase D (2026-05-30): se separa en 2 bots con identidades distintas:
    - Acceso: cualquier colaborador del tenant
    - Funciones: check-in diario con Adaptive Card, marcado de actividades,
      envío de resumen al supervisor
-   - Scheduler: Lun-Vie 16:30 EC + Sáb 12:30 EC
+   - Scheduler: Lun-Vie 16:30 EC + Sáb 12:00 EC
 
 Comparten infraestructura (App Service, env vars Graph, código base) pero
 cada uno tiene su propia App Registration y credenciales.
@@ -694,7 +694,7 @@ ACTIVITIES_WELCOME = (
     "queda solo en tu sesión, y al cierre del día se manda un resumen a "
     "tu supervisor.\n\n"
     "**Automático:**\n"
-    "• Lun-Vie 4:30 PM y Sáb 12:30 PM te llega un formulario con las "
+    "• Lun-Vie 4:30 PM y Sáb 12:00 PM te llega un formulario con las "
     "actividades del día\n"
     "• Al completarlo, se manda el resumen al supervisor\n\n"
     "**Comandos:**\n"
@@ -711,7 +711,7 @@ ACTIVITIES_HELP = (
     "• `/status` — progreso de la semana actual\n"
     "• `/tareas` — tus tareas pendientes / en progreso / vencidas\n"
     "• `/help` — esta ayuda\n\n"
-    "**Schedule automático:** te escribo Lun-Vie 4:30 PM y Sáb 12:30 PM.\n\n"
+    "**Schedule automático:** te escribo Lun-Vie 4:30 PM y Sáb 12:00 PM.\n\n"
     "Para consultas de ventas/cartera, usá el **Data Bot**."
 )
 
@@ -844,8 +844,18 @@ def _save_horario_from_form(form_data: dict[str, Any], user_email: str) -> None:
     )
 
 
-def _build_checkin_card(user_email: str | None = None) -> Activity:
-    """Construye una Adaptive Card con casillas/inputs para el check-in."""
+def _build_checkin_card(
+    user_email: str | None = None,
+    alt_sender: str | None = None,
+) -> Activity:
+    """Construye una Adaptive Card con casillas/inputs para el check-in.
+
+    Args:
+        alt_sender: email adicional autorizado a hacer submit de ESTE card
+            (rotación de sábados: el chofer cubre al asistente 1 de su
+            sucursal y llena el card de ese rol — las marcas van al state
+            de `user_email`, no al del remitente).
+    """
     wk = activity_state.get_week(user_email)
     diarias = [
         (aid, a) for aid, a in wk["activities"].items() if a["tipo"] == "diaria"
@@ -857,6 +867,9 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
     diarias = activity_state.sort_activities_by_priority_then_carryover(
         diarias, _today_iso, _yest_iso
     )
+    # Sábado: SIN cobranzas — no se gestionan ese día (2026-07-04).
+    if activity_state._today().weekday() == 5:
+        diarias = [(aid, a) for aid, a in diarias if not aid.startswith("cobranza-")]
     # Las finalizadas NO se muestran en el card (2026-06-24): cuando el
     # colaborador confirma "quitar del card" una actividad al 100%, se finaliza
     # y deja de aparecer acá. Las recolocadas vuelven a pendiente y sí aparecen.
@@ -886,6 +899,21 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
             "isSubtle": True,
         },
     ]
+
+    if alt_sender:
+        _owner_name = core_config.display_name_for(user_email) or user_email
+        _suc_name = core_config.sucursal_name_for(user_email)
+        body.append({
+            "type": "TextBlock",
+            "text": (
+                f"🔁 **Turno del sábado** — hoy cubrís la sucursal "
+                f"{_suc_name or 'asignada'}: estas son las actividades de "
+                f"{_owner_name} (Asistente 1). Llenalas vos."
+            ),
+            "wrap": True,
+            "color": "Accent",
+            "spacing": "Small",
+        })
 
     # ===== CONTAINER 1: Horario de hoy (helper compartido con José) =====
     horario_items = _horario_card_items(hoy.date())
@@ -1328,6 +1356,9 @@ def _build_checkin_card(user_email: str | None = None) -> Activity:
         "ctx_user": (user_email or "").strip().lower(),
         "ctx_fecha": activity_state._today().isoformat(),
         "ctx_wk": activity_state.week_key(),
+        # Rotación de sábados: remitente alternativo autorizado (chofer que
+        # cubre al asistente 1). Vacío en el card normal.
+        "ctx_alt": (alt_sender or "").strip().lower(),
     }
     actions: list[dict[str, Any]] = []
     if user_email_l in CIERRE_CAJA_USERS:
@@ -1365,18 +1396,32 @@ async def _handle_checkin_submission(
     # Los campos ctx_* faltan en cards generados antes de esta versión —
     # en ese caso se omite la validación (compat durante la migración).
     ctx_user = (form_data.get("ctx_user") or "").strip().lower()
+    ctx_alt = (form_data.get("ctx_alt") or "").strip().lower()
     ctx_fecha = (form_data.get("ctx_fecha") or "").strip()
     hoy_iso = activity_state._today().isoformat()
-    if ctx_user and ctx_user != (user_email or "").strip().lower():
-        logger.warning(
-            "submit_checkin RECHAZADO: card de %s enviado por %s",
-            ctx_user, user_email,
-        )
-        await context.send_activity(
-            "❌ Este formulario fue generado para otro usuario. "
-            "Tipea `/checkin` para abrir el tuyo."
-        )
-        return
+    sender_l = (user_email or "").strip().lower()
+    if ctx_user and ctx_user != sender_l:
+        if ctx_alt and sender_l == ctx_alt:
+            # Rotación de sábados: el card pertenece al rol de sucursal
+            # (ctx_user, p.ej. asistente 1 GYE) y lo llena el rotativo de
+            # turno (p.ej. el chofer). Las marcas van al state del ROL, no
+            # al del remitente — así el reporte muestra un solo bloque de
+            # sucursal sin importar quién estuvo de turno.
+            logger.info(
+                "submit_checkin: card de %s llenado por %s (turno sábado)",
+                ctx_user, sender_l,
+            )
+            user_email = ctx_user
+        else:
+            logger.warning(
+                "submit_checkin RECHAZADO: card de %s enviado por %s",
+                ctx_user, user_email,
+            )
+            await context.send_activity(
+                "❌ Este formulario fue generado para otro usuario. "
+                "Tipea `/checkin` para abrir el tuyo."
+            )
+            return
     if ctx_fecha and ctx_fecha != hoy_iso:
         logger.info(
             "submit_checkin tardío: card del %s enviado el %s por %s",
@@ -1633,14 +1678,21 @@ async def _handle_checkin_submission(
     if al_100:
         try:
             await context.send_activity(
-                _build_done_activities_card(user_email, al_100)
+                # ctx_alt: en el turno de sábado user_email ya es el ROL
+                # (asistente 1) pero quien clickea es el rotativo (sender_l)
+                # — sin esto el guard del follow-up lo rechazaría.
+                _build_done_activities_card(
+                    user_email, al_100,
+                    alt_sender=sender_l if sender_l != user_email else None,
+                )
             )
         except Exception as e:
             logger.exception("no pude mandar card de actividades al 100%%: %s", e)
 
 
 def _build_done_activities_card(
-    user_email: str, items: list[tuple[str, str]]
+    user_email: str, items: list[tuple[str, str]],
+    alt_sender: str | None = None,
 ) -> Activity:
     """Tarjeta de seguimiento (2026-06-24): por cada actividad que quedó al 100%
     pregunta si quitarla del card (finalizar), recolocarla para otro día (con
@@ -1697,7 +1749,9 @@ def _build_done_activities_card(
             "type": "Action.Submit",
             "title": "💾 Confirmar",
             "style": "positive",
-            "data": {"intent": "confirm_done", "ctx_user": user_email, "ctx_fecha": hoy_iso},
+            "data": {"intent": "confirm_done", "ctx_user": user_email,
+                     "ctx_fecha": hoy_iso,
+                     "ctx_alt": (alt_sender or "").strip().lower()},
         }],
     }
     return Activity(
@@ -1714,11 +1768,16 @@ async def _handle_done_activities(
 ) -> None:
     """Procesa la tarjeta de actividades al 100%: quitar / recolocar / dejar."""
     ctx_user = (form_data.get("ctx_user") or "").strip().lower()
-    if ctx_user and ctx_user != (user_email or "").strip().lower():
-        await context.send_activity(
-            "❌ Este formulario fue generado para otro usuario."
-        )
-        return
+    ctx_alt = (form_data.get("ctx_alt") or "").strip().lower()
+    sender_l = (user_email or "").strip().lower()
+    if ctx_user and ctx_user != sender_l:
+        if ctx_alt and sender_l == ctx_alt:
+            user_email = ctx_user  # turno de sábado: escribir al state del rol
+        else:
+            await context.send_activity(
+                "❌ Este formulario fue generado para otro usuario."
+            )
+            return
     quitadas, recolocadas, errores = [], [], []
     for key, val in form_data.items():
         if not key.startswith("done_action__"):
@@ -2074,6 +2133,17 @@ async def _on_turn_activities(context: TurnContext) -> None:
     # dispara el card de ruta actualizado con la última lista de Contifico.
     # No le mandamos check-in normal de actividades.
     if email == JOSE_EMAIL:
+        # Sábado: no hay ruta — le toca el turno de sucursal (rotación con el
+        # asistente 1). Cualquier mensaje le reabre ese check-in card.
+        if datetime.now(activity_state.LOCAL_TZ).weekday() == 5:
+            owner = core_config.asistente1_email(
+                core_config.sucursal_for(JOSE_EMAIL)
+            )
+            if owner:
+                await context.send_activity(
+                    _build_checkin_card(owner, alt_sender=JOSE_EMAIL)
+                )
+                return
         # Un solo card de ruta por día, actualizado en su lugar (2026-06-23).
         created = await _upsert_jose_card(context, JOSE_EMAIL, skip_refresh=False)
         if not created:
@@ -4304,7 +4374,7 @@ def _build_jose_asistencia_card(user_email: str | None = None) -> Activity:
 
 async def send_jose_asistencia_card_job() -> None:
     """Job de scheduler: envía a José el card de asistencia (17:10 Lun-Vie,
-    12:30 Sáb — igual que el check-in de sucursales del Asistente 1)."""
+    12:00 Sáb — igual que el check-in de sucursales del Asistente 1)."""
     refs = _load_refs()
     ref_dict = refs.get("activities", {}).get(JOSE_EMAIL)
     if not ref_dict:
@@ -5006,6 +5076,52 @@ async def _job_checkin_sucursales() -> None:
     )
 
 
+async def send_chofer_saturday_checkin() -> None:
+    """Sábados: el chofer recibe el check-in card del ASISTENTE 1 de su
+    sucursal (rotación de sábados — se turnan cubriendo la sucursal). El card
+    embebe ctx_alt=chofer, así su submit escribe en el state del rol de
+    sucursal y el reporte muestra un solo bloque sin importar quién marcó."""
+    owner = core_config.asistente1_email(core_config.sucursal_for(JOSE_EMAIL))
+    if not owner:
+        logger.warning("checkin sábado chofer: sin asistente 1 para su sucursal")
+        return
+    ref_dict = _load_refs().get("activities", {}).get(JOSE_EMAIL)
+    if not ref_dict:
+        logger.warning("checkin sábado chofer: no hay ref para %s", JOSE_EMAIL)
+        return
+    ref = ConversationReference().deserialize(ref_dict)
+
+    async def cb(turn_context: TurnContext) -> None:
+        await turn_context.send_activity(
+            _build_checkin_card(owner, alt_sender=JOSE_EMAIL)
+        )
+
+    await activities_adapter.continue_conversation(ref, cb, bot_id=ACTIVITIES_APP_ID)
+    logger.info("Check-in sábado (rol %s) enviado al chofer %s", owner, JOSE_EMAIL)
+
+
+async def _job_checkin_saturday() -> None:
+    """Sábado 12:00 EC: check-in para TODOS (oficina + sucursales, sin
+    cobranzas — se filtran en _build_checkin_card) y card de turno para el
+    chofer con las actividades del asistente 1 de su sucursal."""
+    targets = (
+        {u.lower() for u in core_config.CHECKIN_OFICINA}
+        | {u.lower() for u in core_config.CHECKIN_SUCURSALES}
+    ) - _checkin_override_users_hoy()
+    if targets:
+        await _reliable_job(
+            "checkin_saturday",
+            lambda: send_daily_checkin(only=targets),
+            ledger_key="checkin_saturday",
+        )
+    if core_config.module_enabled("chofer"):
+        await _reliable_job(
+            "checkin_saturday_chofer",
+            send_chofer_saturday_checkin,
+            ledger_key="checkin_saturday_chofer",
+        )
+
+
 async def _job_checkin_override(hhmm: str, users: list[str]) -> None:
     await _reliable_job(
         f"checkin_override_{hhmm}",
@@ -5210,7 +5326,7 @@ async def _job_apertura_caja_matinal() -> None:
 
 async def _job_jose_asistencia() -> None:
     # Una sola key diaria: en un día dado solo aplica uno de los dos triggers
-    # (mon-fri 17:10 o sat 12:30), no chocan entre sí.
+    # (mon-fri 17:10 o sat 12:00), no chocan entre sí.
     await _reliable_job(
         "jose_asistencia", send_jose_asistencia_card_job,
         ledger_key="jose_asistencia",
@@ -5296,7 +5412,8 @@ def _schedule_jobs() -> None:
     _mod = core_config.module_enabled
 
     # ===== Check-in cards — config única en core_config.CHECKIN_* =====
-    # Lun-Vie: oficina 16:30, sucursales 17:10. Sáb: SOLO sucursales 12:30.
+    # Lun-Vie: oficina 16:30, sucursales 17:10. Sáb: TODOS 12:00 (sin
+    # cobranzas; el chofer recibe el card del asistente 1 de su sucursal).
     # Domingo: NINGÚN envío (ningún trigger lo cubre).
     if _mod("activities"):
         oh, om = core_config.CHECKIN_WEEKDAY_OFICINA
@@ -5315,7 +5432,7 @@ def _schedule_jobs() -> None:
         )
         bh, bm = core_config.CHECKIN_SATURDAY_SUCURSALES
         scheduler.add_job(
-            _job_checkin_sucursales,
+            _job_checkin_saturday,
             CronTrigger(day_of_week="sat", hour=bh, minute=bm, timezone=EC_TZ),
             id="checkin_saturday",
             replace_existing=True,
@@ -5460,7 +5577,7 @@ def _schedule_jobs() -> None:
     # correo aparte — está integrado en el consolidated_daily_summary 18:30
     # como bloque "📦 ASISTENTE 2 GYE — José Solórzano".
     # (2026-06-23): José marca su ASISTENCIA una sola vez al día en un card
-    # dedicado — 17:10 Lun-Vie y 12:30 Sáb, igual que el Asistente 1 UIO/GYE.
+    # dedicado — 17:10 Lun-Vie y 12:00 Sáb, igual que el Asistente 1 UIO/GYE.
     if _mod("chofer") and _mod("activities"):
         jh, jm = core_config.CHECKIN_WEEKDAY_SUCURSALES
         scheduler.add_job(
@@ -5541,7 +5658,8 @@ def _schedule_jobs() -> None:
 
     logger.info(
         "Jobs: checkin oficina mon-fri 16:30, sucursales mon-fri 17:10 + "
-        "sat 12:30 (domingo NADA), reminders */5min, "
+        "sat 12:00 TODOS sin cobranzas + chofer card GYE (domingo NADA), "
+        "reminders */5min, "
         "cobranzas mon-fri 7:30, "
         "news_brief daily 6:00, monthly_recaps day 1 8:00+10:00, "
         "consolidated_daily mon-fri 18:30, saturday_recap mon 8:00, "
@@ -5606,16 +5724,17 @@ def _catchup_specs() -> list[tuple[str, Any, Any]]:
         )
     if _mod("activities"):
         specs += [
-            # Check-ins: lun-vie oficina y sucursales; sáb solo sucursales.
+            # Check-ins: lun-vie oficina y sucursales; sáb TODOS (12:00).
             # Domingo (weekday 6) ninguna condición aplica — no hay catch-up.
             ("checkin_oficina", _job_checkin_oficina,
              lambda now: now.weekday() <= 4
              and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_OFICINA),
             ("checkin_sucursales", _job_checkin_sucursales,
-             lambda now: (now.weekday() <= 4
-                          and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES)
-             or (now.weekday() == 5
-                 and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES)),
+             lambda now: now.weekday() <= 4
+             and (now.hour, now.minute) >= core_config.CHECKIN_WEEKDAY_SUCURSALES),
+            ("checkin_saturday", _job_checkin_saturday,
+             lambda now: now.weekday() == 5
+             and (now.hour, now.minute) >= core_config.CHECKIN_SATURDAY_SUCURSALES),
         ]
         # Overrides de check-in de HOY: si el bot estuvo caído a esa hora, el
         # catch-up los dispara al arrancar (el ledger evita duplicados).
@@ -6330,7 +6449,7 @@ async def preview_jose_asistencia(request: Request) -> dict[str, Any]:
 
     async def cb(turn_context: TurnContext) -> None:
         await turn_context.send_activity(
-            "📋 **PREVIEW** — card de asistencia de José (17:10 Lun-Vie / 12:30 Sáb):"
+            "📋 **PREVIEW** — card de asistencia de José (17:10 Lun-Vie / 12:00 Sáb):"
         )
         await turn_context.send_activity(_build_jose_asistencia_card(JOSE_EMAIL))
         await turn_context.send_activity(
