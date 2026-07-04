@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from pydantic import ValidationError  # noqa: E402
 
+from core.config.integrations import load_tenant_integrations  # noqa: E402
 from core.config.loader import TENANTS_DIR, load_tenant_config  # noqa: E402
 
 
@@ -35,7 +36,18 @@ def _validate_one(slug: str) -> bool:
     except Exception as e:  # YAML roto, fecha mal escrita, etc.
         print(f"[FAIL] {slug}: {type(e).__name__}: {e}")
         return False
-    print(f"[OK]   {slug}: {cfg.display_name} ({cfg.locale}, {cfg.timezone})")
+    # F5.3: integrations.yaml es opcional, pero si existe debe validar.
+    try:
+        integ = load_tenant_integrations(slug)
+    except ValidationError as e:
+        print(f"[FAIL] {slug}: integrations.yaml inválido")
+        print(e)
+        return False
+    except Exception as e:
+        print(f"[FAIL] {slug}: integrations.yaml — {type(e).__name__}: {e}")
+        return False
+    extra = f", {len(integ.all_secrets())} secrets declarados" if integ else ""
+    print(f"[OK]   {slug}: {cfg.display_name} ({cfg.locale}, {cfg.timezone}{extra})")
     return True
 
 

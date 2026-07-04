@@ -35,6 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core.config.integrations import load_tenant_integrations  # noqa: E402
 from core.config.loader import load_tenant_config  # noqa: E402
 
 # Graph application permissions que usa la plataforma (resourceAppId de
@@ -88,13 +89,21 @@ def _app_settings(slug: str, cfg, admin_token: str) -> dict[str, str]:
     }
 
 
-# Secrets que el operador debe cargar tras el provisioning (por integración
-# contratada). El script solo los LISTA — nunca los inventa.
-SECRETS_PENDIENTES = [
+# Secrets fallback cuando el tenant NO tiene integrations.yaml (F5.3): el
+# operador los carga a mano. Con integrations.yaml, la lista real sale de ahí.
+SECRETS_PENDIENTES_DEFAULT = [
     "ANTHROPIC_API_KEY", "CONTIFICO_API_TOKEN", "HUBSPOT_TOKEN",
     "APOLLO_API_KEY", "MSAL_CACHE_B64 (si contrata prospección)",
     "AzureWebJobsStorage (si contrata prospección)",
 ]
+
+PLACEHOLDER_KV = "REEMPLAZAR"
+
+
+def _kv_name(slug: str) -> str:
+    """Nombre de Key Vault válido (3-24 chars, alfanumérico y guiones)."""
+    base = f"kv-{slug}-veria".replace("_", "-")
+    return base[:24].rstrip("-")
 
 
 def provision(slug: str, location: str, resource_group: str | None,
@@ -174,7 +183,50 @@ def provision(slug: str, location: str, resource_group: str | None,
             "--settings", *[f"{k}={v}" for k, v in settings.items()],
             sensitive=True)
 
-    # 4) Salida: consent link, siguiente comando, pendientes.
+    # 4) Key Vault (F5.3) — solo si el tenant declara secrets con fuente
+    # keyvault en integrations.yaml. Siembra placeholders y cablea los app
+    # settings como referencias @Microsoft.KeyVault (el App Service los
+    # resuelve con su managed identity).
+    integ = load_tenant_integrations(slug)
+    pendientes: list[str] = []
+    kv_secrets: dict[str, str] = {}  # APP_SETTING -> nombre en el vault
+    if integ:
+        for setting, ref in integ.all_secrets().items():
+            if ref.keyvault:
+                kv_secrets[setting] = ref.keyvault
+            else:
+                pendientes.append(f"{setting} (app setting manual)")
+    else:
+        pendientes = list(SECRETS_PENDIENTES_DEFAULT)
+
+    kv = None
+    if kv_secrets:
+        kv = _kv_name(slug)
+        plan.az("keyvault", "create", "-g", rg, "-n", kv, "-l", location,
+                "--enable-rbac-authorization", "false")
+        plan.az("webapp", "identity", "assign", "-g", rg, "-n", webapp)
+        # En vivo, el principalId sale del comando anterior; en el plan se
+        # referencia simbólicamente.
+        plan.az("keyvault", "set-policy", "-n", kv,
+                "--object-id", "<principalId-del-webapp>",
+                "--secret-permissions", "get", "list")
+        kv_refs: dict[str, str] = {}
+        for setting, secret_name in sorted(kv_secrets.items()):
+            plan.az("keyvault", "secret", "set", "--vault-name", kv,
+                    "--name", secret_name, "--value", PLACEHOLDER_KV,
+                    sensitive=True)
+            kv_refs[setting] = (
+                f"@Microsoft.KeyVault(SecretUri=https://{kv}.vault.azure.net/"
+                f"secrets/{secret_name}/)"
+            )
+            pendientes.append(
+                f"{setting}: az keyvault secret set --vault-name {kv} "
+                f"--name {secret_name} --value <REAL>"
+            )
+        plan.az("webapp", "config", "appsettings", "set", "-g", rg, "-n", webapp,
+                "--settings", *[f"{k}={v}" for k, v in kv_refs.items()])
+
+    # 5) Salida: consent link, siguiente comando, pendientes.
     tenant_ref = expected_tenant_id or "<tenant-cliente>"
     consent = (f"https://login.microsoftonline.com/{tenant_ref}/adminconsent"
                f"?client_id={bots['data']['app_id']}")
@@ -188,7 +240,8 @@ def provision(slug: str, location: str, resource_group: str | None,
             f"--data-app-id {bots['data']['app_id']} "
             f"--activities-app-id {bots['activities']['app_id']}"
         ),
-        "secrets_pendientes": SECRETS_PENDIENTES,
+        "keyvault": kv,
+        "secrets_pendientes": pendientes,
         "deploy": (
             f"python tools/build_bot_package.py && az webapp deploy -g {rg} "
             f"-n {webapp} --src-path bot_deploy.zip --type zip"

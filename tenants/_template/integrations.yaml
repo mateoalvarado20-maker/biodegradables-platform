@@ -1,0 +1,38 @@
+# PLANTILLA de integraciones de un cliente nuevo (F5.3). Copiar a
+# tenants/<slug>/integrations.yaml. Declara QUÉ integraciones usa y DÓNDE
+# vive cada secret — NUNCA el valor del secret (este archivo va a git).
+#
+# Fuentes por secret (exactamente una):
+#   keyvault: <nombre>  → ops/provision_tenant.py crea el secret (placeholder)
+#                         en el Key Vault del tenant y cablea el app setting
+#                         como referencia @Microsoft.KeyVault. Cargar el valor
+#                         real con: az keyvault secret set.
+#   env: <NOMBRE>       → se carga a mano como app setting (p.ej. tokens que
+#                         salen de un flujo interactivo).
+#
+# Quitar las secciones de integraciones que el cliente no contrate.
+
+erp:
+  provider: contifico                  # ver connectors/factory.py (build_erp)
+  secrets:
+    CONTIFICO_API_TOKEN: { keyvault: contifico-api-token }
+
+crm:
+  provider: hubspot
+  secrets:
+    HUBSPOT_TOKEN: { keyvault: hubspot-token }
+
+mail:
+  provider: graph                      # usa las credenciales del bot (provisioner)
+
+ai:
+  provider: anthropic
+  secrets:
+    ANTHROPIC_API_KEY: { keyvault: anthropic-api-key }
+
+# Solo si contrata el módulo `prospecting`:
+# prospecting:
+#   secrets:
+#     APOLLO_API_KEY: { keyvault: apollo-api-key }
+#     MSAL_CACHE_B64: { env: MSAL_CACHE_B64 }          # device-code, manual
+#     AzureWebJobsStorage: { env: AzureWebJobsStorage } # storage del tenant
