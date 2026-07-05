@@ -2257,6 +2257,11 @@ async def _handle_jose_intent(
         # (2026-06-25). Solo procesa actividades — NO toca horario/caja/envíos.
         wk = activity_state.get_week(email)
         marcadas = 0
+        # Actividades que llegan al 100% en esta marcada (2026-07-04): José
+        # recibe el mismo card Quitar/Recolocar que el resto del equipo — antes
+        # solo el flujo del check-in lo disparaba y él no tenía cómo sacar una
+        # actividad terminada de su card.
+        al_100: list[tuple[str, str]] = []
         for aid, a in wk.get("activities", {}).items():
             if a.get("tipo") == "diaria" and not aid.startswith("cobranza-"):
                 estado = (value.get(f"estado__{aid}") or "skip").strip()
@@ -2287,10 +2292,12 @@ async def _handle_jose_intent(
                 if avance_raw in (None, ""):
                     continue
                 try:
-                    activity_state.set_weekly_progress(
+                    ent = activity_state.set_weekly_progress(
                         aid, float(avance_raw), user_email=email,
                         notas=(value.get(f"notas__{aid}") or "").strip())
                     marcadas += 1
+                    if (ent.get("avance") or 0) >= 100 and ent.get("status") != "finalizada":
+                        al_100.append((aid, a.get("nombre", aid)))
                 except (TypeError, ValueError):
                     pass
         if marcadas:
@@ -2300,6 +2307,18 @@ async def _handle_jose_intent(
             await context.send_activity(
                 "👀 No marcaste ninguna actividad (todas en 'Saltar' o vacías).")
         await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
+        # Al 100% → card de seguimiento Quitar/Recolocar (mismo flujo que el
+        # check-in; el submit confirm_done se procesa a nivel del dispatcher,
+        # antes del atajo de texto de José, así que funciona para él).
+        if al_100:
+            try:
+                await context.send_activity(
+                    _build_done_activities_card(email, al_100)
+                )
+            except Exception as e:
+                logger.exception(
+                    "no pude mandar card de actividades al 100%% a José: %s", e
+                )
         return
 
     if intent == "jose_asistencia":
