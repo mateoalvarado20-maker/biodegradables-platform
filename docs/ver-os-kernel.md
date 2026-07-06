@@ -54,9 +54,22 @@ validate_payload("LeadOutcome@1", {"lead_id": "l1", "outcome": "won", "closed_at
 Registrados: `LeadHandoff@1`, `LeadOutcome@1`, `WeeklyDeptReport@1`,
 `EscalationRequest@1`. Breaking change = archivo nuevo `@N+1`, ambos conviven.
 
+## Puente LLM (F0.10)
+
+Toda llamada a un modelo hecha por un departamento se registra en ambos ledgers:
+
+```python
+from org.kernel.llm import record_llm_call
+resp = client.messages.create(...)
+record_llm_call(dept, agent="guionista", model=MODEL, usage=resp.usage)
+```
+
+Queda en `llm_usage` (COGS de plataforma, agente `"<dept_id>:<agent>"`) y en el
+`Meter` del departamento (presupuesto del charter). Registrar jamás lanza; el
+corte duro es `dept.ensure_budget()` ANTES de gastar.
+
 ## Pendiente en F0 (ver ROADMAP)
 
-- F0.10: integrar `Meter` con el metering LLM existente (`llm_usage.py`).
 - F0.12: revisión técnica de fase (¿ajustes a VER-OS v0.1?).
 
 ## Decisiones de implementación que la revisión de fase debe validar

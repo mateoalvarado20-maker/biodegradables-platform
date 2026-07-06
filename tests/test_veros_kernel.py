@@ -308,3 +308,42 @@ def test_contrato_payload_invalido_detalla_errores():
 def test_contrato_desconocido():
     with pytest.raises(KeyError):
         validate_payload("Inexistente@9", {})
+
+
+# --- puente LLM (F0.10) ----------------------------------------------------------
+
+
+def test_llm_call_registra_en_ambos_ledgers(dept, tmp_path, monkeypatch):
+    import llm_usage
+
+    from org.kernel.llm import record_llm_call
+
+    monkeypatch.setattr(llm_usage, "USAGE_PATH", tmp_path / "llm_usage.json")
+    usage = {"input_tokens": 1000, "output_tokens": 500}
+
+    usd = record_llm_call(dept, agent="guionista", model="claude-sonnet-4-6", usage=usage)
+
+    esperado = (1000 * 3.00 + 500 * 15.00) / 1_000_000  # tabla de precios vigente
+    assert usd == pytest.approx(esperado)
+    # ledger del departamento (presupuesto del charter)
+    assert dept.meter.month_usd() == pytest.approx(esperado)
+    assert dept.meter.month_units("llm_tokens") == 1500
+    # ledger de plataforma (COGS), atribuido al departamento
+    resumen = llm_usage.summary()
+    assert resumen["total_usd"] == pytest.approx(esperado, abs=1e-4)
+    assert "test-dept:guionista" in resumen["by_agent"]
+
+
+def test_llm_call_jamas_lanza(dept, tmp_path, monkeypatch):
+    import llm_usage
+
+    from org.kernel.llm import record_llm_call
+
+    monkeypatch.setattr(llm_usage, "USAGE_PATH", tmp_path / "llm_usage.json")
+
+    def boom(*a, **k):
+        raise RuntimeError("disco lleno")
+
+    monkeypatch.setattr(dept.meter, "record", boom)
+    usd = record_llm_call(dept, "guionista", "claude-sonnet-4-6", {"input_tokens": 10})
+    assert usd == 0.0  # falló el registro → 0.0, sin excepción

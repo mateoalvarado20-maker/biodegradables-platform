@@ -52,7 +52,7 @@ El kernel se integra con eso — no lo duplica.
 | F0.7 | `Department`: composición de todo lo anterior + capacidades enforced + `health()` | F0.1–F0.6 | Capability no otorgada → `CapabilityError`; health reporta estado/gasto/último evento | ✅ |
 | F0.8 | Contratos fundacionales en `org/contracts/` (envelope + `LeadHandoff@1`, `LeadOutcome@1`, `WeeklyDeptReport@1`, `EscalationRequest@1`) + registro/validación | F0.5 | Payload inválido contra su esquema → rechazo con detalle | ✅ |
 | F0.9 | Demo ejecutable (`python -m org.demo`): departamento de juguete completo (install→onboard→L0, decide, emite, mide, health) | F0.7 | Corre sin red ni secrets; salida legible | ✅ |
-| F0.10 | Integración de metering con `llm_usage.py` (las llamadas LLM de un dept se reflejan en su meter) | F0.4 | Test de doble registro (llm_usage + meter del dept) | ⬜ |
+| F0.10 | Integración de metering con `llm_usage.py` (las llamadas LLM de un dept se reflejan en su meter) | F0.4 | Test de doble registro (llm_usage + meter del dept) | ✅ |
 | F0.11 | Doc mínima `docs/ver-os-kernel.md` (qué hay, cómo usarlo, qué es convención vs invariante) | F0.1–F0.9 | Existe y refleja el código real | ✅ |
 | F0.12 | **Revisión técnica de fase** con el board: ¿ajustar VER-OS v0.1? | todo F0 | Acta en §Revisiones de este archivo | ⬜ 👤 |
 
