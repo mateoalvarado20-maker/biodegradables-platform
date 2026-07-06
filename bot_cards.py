@@ -2043,7 +2043,10 @@ def _build_apertura_caja_card(user_email: str) -> Activity:
         "type": "TextBlock",
         "text": (
             "Tu check-in con el detalle de lo hecho lo hacés a la tarde "
-            "(4:30 PM Mateo/Gabriela · 5:00 PM Gladys/Gabriela Bravo). "
+            f"(oficina {core_config.CHECKIN_WEEKDAY_OFICINA[0]}:"
+            f"{core_config.CHECKIN_WEEKDAY_OFICINA[1]:02d} · sucursales "
+            f"{core_config.CHECKIN_WEEKDAY_SUCURSALES[0]}:"
+            f"{core_config.CHECKIN_WEEKDAY_SUCURSALES[1]:02d}). "
             "¡Buen día y mucha suerte!"
         ),
         "isSubtle": True,

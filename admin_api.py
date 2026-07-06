@@ -26,6 +26,8 @@ logger = logging.getLogger("admin_api")
 # Módulos de dominio — import directo (no via teams_bot).
 import activity_state  # noqa: E402
 import ask_agent  # noqa: E402
+import core_config  # noqa: E402
+import tenant_roles  # noqa: E402
 import monthly_recap  # noqa: E402
 import news_brief  # noqa: E402
 import reminders  # noqa: E402
@@ -357,7 +359,7 @@ async def preview_checkin_as_user(request: Request) -> dict[str, Any]:
         body = {}
     as_email = (body or {}).get("as_email", "").strip().lower()
     send_to_email = (body or {}).get(
-        "send_to_email", "malvarado@biodegradablesecuador.com"
+        "send_to_email", core_config.MIO
     ).strip().lower()
     if not as_email or "@" not in as_email:
         raise HTTPException(status_code=400, detail="as_email requerido")
@@ -510,7 +512,7 @@ async def preview_jose_route(request: Request) -> dict[str, Any]:
     except Exception:
         body = {}
     send_to_email = (body or {}).get(
-        "send_to_email", "malvarado@biodegradablesecuador.com"
+        "send_to_email", core_config.MIO
     ).strip().lower()
 
     refs = _load_refs()
@@ -547,7 +549,7 @@ async def preview_jose_asistencia(request: Request) -> dict[str, Any]:
     except Exception:
         body = {}
     send_to_email = (body or {}).get(
-        "send_to_email", "malvarado@biodegradablesecuador.com"
+        "send_to_email", core_config.MIO
     ).strip().lower()
     refs = _load_refs()
     target_ref = refs.get("activities", {}).get(send_to_email)
@@ -586,7 +588,7 @@ async def preview_jose_summary_email(request: Request) -> dict[str, Any]:
     except Exception:
         body = {}
     to = (body or {}).get(
-        "to_override", "malvarado@biodegradablesecuador.com"
+        "to_override", core_config.MIO
     ).strip().lower()
     try:
         html_body = _jose_summary_html(activity_state._today().isoformat())
@@ -808,9 +810,9 @@ async def preview_apertura_caja(request: Request) -> dict[str, Any]:
         body = await request.json()
     except Exception:
         body = {}
-    as_email = (body or {}).get("as_email", "info@biodegradablesecuador.com").strip().lower()
+    as_email = (body or {}).get("as_email", tenant_roles.INFO_EMAIL).strip().lower()
     send_to = (body or {}).get(
-        "send_to_email", "malvarado@biodegradablesecuador.com"
+        "send_to_email", core_config.MIO
     ).strip().lower()
 
     refs = _load_refs()
@@ -845,9 +847,9 @@ async def preview_confirmacion_cierre(request: Request) -> dict[str, Any]:
         body = await request.json()
     except Exception:
         body = {}
-    emisor = (body or {}).get("emisor_email", "info@biodegradablesecuador.com").strip().lower()
+    emisor = (body or {}).get("emisor_email", tenant_roles.INFO_EMAIL).strip().lower()
     fecha = (body or {}).get("fecha", activity_state._today().isoformat()).strip()
-    send_to = (body or {}).get("send_to_email", "malvarado@biodegradablesecuador.com").strip().lower()
+    send_to = (body or {}).get("send_to_email", core_config.MIO).strip().lower()
 
     cierre = activity_state.get_cierre_caja(emisor, fecha)
     if not cierre:

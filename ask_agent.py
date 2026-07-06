@@ -504,7 +504,7 @@ TOOLS = [
         "description": (
             "Resumen de carga de tareas del equipo: pendientes, en progreso, "
             "vencidas, finalizadas y próximas fechas por colaborador. Usá cuando "
-            "el user pregunte '¿cómo va el equipo?', '¿qué tiene pendiente Mateo?', "
+            "el user pregunte '¿cómo va el equipo?', '¿qué tiene pendiente Ana?', "
             "'mostrame las tareas vencidas'. Si pasás `target_user` muestra solo "
             "ese colaborador; sin él, todo el equipo."
         ),
@@ -557,7 +557,7 @@ TOOLS = [
         "description": (
             "Asigna una actividad nueva a un colaborador (NO a vos mismo). "
             "Aparece automáticamente en su próximo check-in del Activities Bot. "
-            "Usá cuando el user diga 'añade a Mateo a hacer X', 'sumale a Juan "
+            "Usá cuando el user diga 'añade a Ana a hacer X', 'sumale a Juan "
             "tal cosa esta semana'. Generá un activity_id en kebab-case. "
             "Tipo default: 'unica' (evento único). 'semanal' si es un proyecto "
             "con % avance. 'diaria' si se repite a diario."
@@ -692,11 +692,11 @@ TOOLS = [
         "name": "set_activity_priority_for_collaborator",
         "description": (
             "Marca la PRIORIDAD de una actividad de un colaborador. Solo "
-            "gerencia (Daniel/Gabriela) lo usa. Las altas aparecen primero "
+            "gerencia lo usa. Las altas aparecen primero "
             "en su check-in card y, si no se hacen, vuelven a aparecer al "
             "día siguiente subrayadas en rojo (carry-over). Usá esto cuando "
-            "el user diga 'marca como prioritaria X de Mateo', 'es importante "
-            "que Gabriela haga Y', 'baja la prioridad de Z'."
+            "el user diga 'marca como prioritaria X de Ana', 'es importante "
+            "que Juan haga Y', 'baja la prioridad de Z'."
         ),
         "input_schema": {
             "type": "object",
@@ -738,7 +738,7 @@ TOOLS = [
     {
         "name": "list_today_activities",
         "description": (
-            "Lista las actividades de la semana actual del tracker de Mateo "
+            "Lista las actividades de la semana actual del tracker del usuario "
             "(diarias y semanales) con sus IDs, metas, valor marcado hoy y avance "
             "acumulado. Usá esto ANTES de marcar para conocer los IDs exactos."
         ),
@@ -937,7 +937,7 @@ Su rol es ASIGNAR actividades a otros colaboradores y verificar que las hagan.
 
 CUANDO {target_humano} TE PIDA AGREGAR ACTIVIDADES:
 - SIEMPRE asumí que son PARA OTRO colaborador, NO para él mismo.
-- Si menciona un nombre (ej. "agregale a Gabriela X cosa", "que Mateo haga Y"),
+- Si menciona un nombre (ej. "agregale a Ana X cosa", "que Juan haga Y"),
   usá `add_activity_for_collaborator` con target_user=email del colaborador.
 - Si NO menciona nombre, preguntá: "¿Para quién?" — NUNCA las pongas en su
   propio tracker.
@@ -1274,8 +1274,8 @@ def _require_collaborator(
     if raw is None or not str(raw).strip():
         logger.warning("%s: sin target_user (requested_by=%s)",
                        tool_name, requested_by or "?")
-        return {"error": "No me dijiste a QUIÉN asignar. Decime el nombre del "
-                         "colaborador (ej. 'Gabriela Sánchez', 'Mateo')."}
+        return {"error": "No me dijiste a QUIÉN asignar. Decime el nombre de "
+                         "un colaborador registrado del equipo."}
 
     detail = _resolve_collaborator_detail(raw)
     status = detail["status"]
