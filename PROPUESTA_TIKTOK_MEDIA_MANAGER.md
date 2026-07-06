@@ -9,6 +9,9 @@ Departamento Comercial, Atención al Cliente, Financiero, RRHH y un Director Gen
 la información necesaria. TikTok pasa de ser "el proyecto" a ser el primer canal del
 primer departamento. La visión organizacional está en §5; todo lo demás de v2
 (conocimiento, autonomía, canales, producción) sigue vigente y se generaliza.
+**Actualización 2026-07-06:** la capa organizacional de este doc queda gobernada por
+el estándar **VER-OS v0.1** (`PROPUESTA_VER_OS.md`); el Marketing Brain es su
+**implementación de referencia**.
 
 La investigación de campo de v1 (APIs de TikTok, publishers, riesgos, stack de
 producción — verificada contra fuentes primarias el 2026-07-04) sigue vigente y está
