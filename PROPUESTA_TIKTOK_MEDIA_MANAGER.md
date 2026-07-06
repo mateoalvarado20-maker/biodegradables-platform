@@ -1,11 +1,14 @@
-# PROPUESTA v2 — Empleado Autónomo de Marketing Orgánico (VER-IA Marketing Brain)
+# PROPUESTA v3 — Marketing Brain: primer departamento de la empresa dirigida por IA (VER-IA)
 
-**Fecha:** 2026-07-04 · **Estado:** propuesta para aprobación (diseño, sin código)
-**Reemplaza a:** v1 (misma fecha), que diseñaba un "automatizador de TikTok". El
-mandato cambió: no un automatizador de redes, sino **el mejor sistema autónomo de
-marketing orgánico impulsado por IA** — un empleado virtual senior que decide, aprende,
-documenta su conocimiento y escala a decenas o cientos de marcas sin prompts manuales.
-TikTok pasa de ser "el proyecto" a ser **el primer canal del primer empleado**.
+**Fecha:** 2026-07-05 · **Estado:** propuesta para aprobación (diseño, sin código)
+**Evolución del mandato:** v1 (automatizador de TikTok) → v2 (empleado virtual senior
+de marketing orgánico) → **v3: el Marketing Brain es el primer departamento
+completamente autónomo de una empresa dirigida por IA**, que a futuro convivirá con un
+Departamento Comercial, Atención al Cliente, Financiero, RRHH y un Director General
+(CEO Agent), colaborando entre sí mediante **contratos y eventos**, compartiendo solo
+la información necesaria. TikTok pasa de ser "el proyecto" a ser el primer canal del
+primer departamento. La visión organizacional está en §5; todo lo demás de v2
+(conocimiento, autonomía, canales, producción) sigue vigente y se generaliza.
 
 La investigación de campo de v1 (APIs de TikTok, publishers, riesgos, stack de
 producción — verificada contra fuentes primarias el 2026-07-04) sigue vigente y está
@@ -83,6 +86,18 @@ controlados). El mismo empleado que aprende qué temas resuenan en TikTok debe
 reutilizarlos como contenido SEO de blog (y viceversa: keywords SEO → ideas de video).
 Canal barato de agregar (Fase 6) y multiplica el mismo contenido. El paid (ads) queda
 explícitamente fuera de v2.
+
+### 2.5 El CEO Agent no se construye primero: se construye el chasis
+Un CEO Agent coordinando un solo departamento es un wrapper caro sin decisiones reales
+que tomar: no hay presupuesto que arbitrar ni conflictos que resolver. Lo que SÍ debe
+construirse desde el día 0 — porque retrofitearlo después es carísimo — son las
+**primitivas organizacionales**: el chasis de departamento reutilizable, el formato de
+contratos, el sobre de eventos y el directorio de departamentos (§5). El Marketing
+Brain nace *siendo* un departamento (charter, presupuesto, contratos, eventos), no se
+convierte en uno después. El CEO Agent llega en dos etapas (§5.4): "jefe de gabinete"
+(consolida reportes y enruta escalaciones — barato, útil desde F7) y CEO real
+(asignación de recursos entre departamentos — solo cuando existan ≥2 departamentos).
+Construirlo antes sería teatro organizacional.
 
 ---
 
@@ -230,7 +245,116 @@ Historia diaria: asistida por tarjeta Teams (límite de plataforma, §3).
 
 ---
 
-## 5. Economía por marca (la métrica que decide la escala)
+## 5. La empresa autónoma: el Marketing Brain como departamento #1
+
+### 5.1 El chasis de departamento (Department Kernel)
+
+La observación clave: **todo lo que v2 definió para el "empleado" no es específico de
+marketing.** Charter con OKRs y presupuesto, contexto auto-mantenido, playbook con
+procedencia, decision journal, escalera de autonomía L0→L3, reglas duras, self-report,
+protocolo de escalación — eso es el esqueleto de *cualquier* departamento autónomo.
+v3 lo extrae a un chasis reutilizable (`org/kernel`):
+
+```
+Departamento = KERNEL (genérico)              + DOMINIO (específico)
+               charter: misión, OKRs,           agentes propios (Estratega,
+                 presupuesto, límites de          Guionista, Analista…)
+                 autoridad                      puertos propios (Publisher,
+               brain: contexto + playbook         MetricsSource…)
+                 con procedencia                contratos que ofrece y
+               decision journal                   consume (§5.2)
+               autonomía L0→L3 + escalación     conocimiento de dominio
+               self-report + scorecard OKRs
+               reglas duras (no editables)
+               identidad: principal con
+                 credenciales de mínimo
+                 privilegio
+```
+
+Costo de construir el kernel como capa separada en F0: ~2–3 días sobre el plan v2
+(las piezas se iban a construir igual; solo cambia dónde viven). Beneficio: el
+Departamento Comercial futuro se construye escribiendo SOLO su columna derecha.
+
+### 5.2 Contratos entre departamentos
+
+Registro versionado de esquemas (`org/contracts/*.json`, JSON Schema + semver).
+Principios innegociables:
+
+1. **Mínimo necesario:** los payloads llevan IDs y agregados, nunca datos crudos del
+   dominio ajeno (Marketing recibe "el lead #123 cerró por $450", no el historial
+   completo del cliente).
+2. **Cada departamento es dueño de sus datos.** Acceso SOLO vía contrato — ningún
+   departamento lee la base de otro. (Regla de lint en CI: `marketing/` no importa de
+   `comercial/` salvo `org/contracts/`.)
+3. **Compatibilidad:** cambios breaking = versión nueva del contrato; ambas conviven
+   durante la migración.
+
+Contratos fundacionales (los dos primeros cierran el loop de atribución de Marketing —
+son la razón económica de todo esto):
+
+| Contrato | Dirección | Contenido mínimo |
+|---|---|---|
+| `LeadHandoff` | Marketing → Comercial | lead_id, canal/post de origen, contexto de intención |
+| `LeadOutcome` | Comercial → Marketing | lead_id, resultado (ganado/perdido), valor — **convierte el playbook de vanity metrics a revenue real** |
+| `VoiceOfCustomer` | Atención → Marketing | temas/quejas frecuentes agregados y anonimizados → ideas de contenido |
+| `BudgetEnvelope` | Financiero → depto | presupuesto del periodo, límites |
+| `SpendReport` | depto → Financiero | gasto real por categoría |
+| `OKRDirective` / `WeeklyDeptReport` / `EscalationRequest` | CEO ↔ depto | objetivos, resultados vs OKRs, decisiones que exceden autoridad |
+
+### 5.3 Eventos
+
+Bus de eventos **append-only por tenant** con sobre estándar:
+`{event_id, tenant_id, dept, type, schema_version, occurred_at, correlation_id, payload}`.
+Pub/sub por tópicos; consumidores idempotentes por `event_id` (mismo patrón
+`send_ledger` ya probado). **Implementación F0: una tabla `org_events` en SQLite**
+(→ Azure Storage Queue/Service Bus cuando haya ≥2 departamentos). No Kafka, no broker:
+la semántica correcta hoy, la infraestructura pesada cuando el volumen la pida.
+Marketing emite desde el día 1 (`content.published`, `lead.captured`,
+`report.weekly_ready`, `escalation.raised`) aunque el único consumidor inicial sea el
+dashboard — el historial de eventos ES la memoria organizacional del futuro CEO.
+
+### 5.4 CEO Agent: dos etapas, board humano siempre
+
+- **Etapa 1 — Jefe de gabinete (F7):** consolida los self-reports de departamentos en
+  un reporte único a gerencia (el patrón `consolidated_daily_summary` ya existe en
+  producción), enruta escalaciones al humano correcto, detecta OKRs en conflicto.
+  No decide: informa y enruta. Costo marginal ~$5–10/mes de LLM.
+- **Etapa 2 — CEO real (cuando existan ≥2 departamentos):** propone asignación de
+  presupuesto y OKRs entre departamentos (sube al board para aprobación), arbitra
+  conflictos inter-departamento por contrato, sube su propia escalera de autonomía
+  igual que cualquier departamento.
+- **El board es humano, siempre:** gerencia define misión y presupuesto global,
+  aprueba OKRs, puede vetar o pausar cualquier departamento (`/org pause <dept>`).
+  Una "empresa dirigida por IA" sin board humano no es un objetivo de diseño de VER-IA:
+  es un pasivo legal.
+
+### 5.5 La empresa ya existe en embrión (mapa de migración)
+
+Los otros departamentos no se construirán de cero: las automatizaciones actuales de la
+plataforma son sus embriones. Cuando toque, se envuelven en el kernel (charter + brain
++ contratos) en vez de reescribirse:
+
+| Departamento futuro | Embrión ya en producción |
+|---|---|
+| Comercial | Reporte diario de ventas, forecasting, Apollo/reply agent, pipeline HubSpot |
+| Atención al Cliente | Data Bot / Activities Bot Teams, agente WhatsApp (diseñado), chatbots web |
+| Financiero | Cobranzas auto-asignadas, cierre de caja, recap mensual, cartera vencida |
+| RRHH / Operaciones | Activity tracker, check-ins diarios, weekly summaries, consolidado 18:30 |
+| **Marketing** | **Este proyecto — el primero que nace con el kernel completo** |
+
+### 5.6 Seguridad organizacional
+
+Cada departamento es un **principal** con credenciales propias de mínimo privilegio
+(Marketing tiene el token del publisher y NADA de Contifico; Comercial al revés).
+Jerarquía de reglas duras: corporativas (board) > departamentales > preferencias del
+agente — las de arriba no son editables por nada de abajo. Los decision journals de
+todos los departamentos son legibles por el CEO Agent y el board (auditoría cruzada),
+pero los datos de dominio no. Y la frontera más dura sigue siendo el **tenant**: los
+departamentos colaboran dentro de una empresa; jamás cruzan datos entre empresas.
+
+---
+
+## 6. Economía por marca (la métrica que decide la escala)
 
 El control plane trackea desde F0 el **costo total por marca/mes** (LLM + render +
 publisher + infra prorrateada) contra el valor generado (alcance, leads atribuibles).
@@ -249,25 +373,28 @@ cumplidos y costo/marca estable — el negocio escala sobre evidencia, no sobre 
 
 ---
 
-## 6. Plan por fases (revisado v2)
+## 7. Plan por fases (revisado v3)
 
 | Fase | Alcance | Criterio de salida | Est. |
 |---|---|---|---|
-| **F0 — Fundaciones + Brand Brain** | Módulo `marketing/`, modelos de datos (incluye playbook/journal/experiments **desde el día 0**), puertos, Brand Brain del tenant #1 (migrando `company_context.md`), OKRs aprobados por gerencia | Esquema estable, Brand Brain firmado, CI verde | 1–1.5 sem |
+| **F0 — Fundaciones + kernel org + Brand Brain** | `org/kernel` (charter, journal, autonomía, self-report genéricos) + `org/contracts` + tabla `org_events`; módulo `marketing/` como primer departamento sobre el kernel; modelos de datos (playbook/journal/experiments **desde el día 0**), puertos, Brand Brain del tenant #1 (migrando `company_context.md`), charter y OKRs aprobados por gerencia | Esquema estable, kernel separado del dominio, charter firmado, CI verde | 1.5–2 sem |
 | **F1 — Producción** | Pipeline guion→TTS→Remotion→QA + carruseles. 10 piezas demo | Calidad aprobada por gerencia | 2 sem |
 | **F2 — Publicación L0** | Adapter Zernio + ledger + scheduler + aprobación Teams. Posts públicos reales, cada post etiquetado como experimento | 1 semana a 2 videos/día sin incidentes | 1–2 sem |
 | **F3 — Ciclo de aprendizaje** | Ingesta métricas, scoring, Analista, primera actualización de playbook con procedencia, decision journal, tarjeta diaria de historia | Primer ciclo completo métrica→regla→post mejorado | 2 sem |
 | **F4 — Autonomía L1 + dashboard + self-report** | Gate auto-aprobación, dashboard completo, reporte semanal a gerencia, kill-switch. Solicitud de auditoría TikTok propia (como SaaS VER-IA) en paralelo | L1 activo, primer self-report enviado | 2 sem |
 | **F5 — Comunidad** | Triage de comentarios + borradores de respuesta (asistido primero, auto dentro de política después) | Respuesta <24h sostenida 2 semanas | 1–2 sem |
 | **F6 — Canal SEO/web** | Reuso de contenido ganador → posts de blog vía `wp_client`/`wp_apply` (flujo dry-run→approve existente) | 4 posts SEO publicados derivados del playbook | 1–2 sem |
-| **F7 — L2/L3 + flota** | Autonomía L2, volumen por datos, migración render a Azure, Profession Brain (destilación con aislamiento), control plane multi-marca, onboarding de marca #2 (posible = Andex, tenant demo) | Marca #2 operando con priors, costo/marca medido | 3 sem |
+| **F7 — L2/L3 + flota + CEO etapa 1** | Autonomía L2, volumen por datos, migración render a Azure, Profession Brain (destilación con aislamiento), control plane multi-marca, onboarding de marca #2 (posible = Andex, tenant demo), **CEO Agent "jefe de gabinete"** (reporte consolidado + ruteo de escalaciones) | Marca #2 operando con priors, costo/marca medido, primer reporte consolidado org | 3 sem |
 
-**~13–15 semanas** hasta empleado L2 multi-canal con flota iniciada; valor visible
-desde la semana 3 (F1) y publicación real desde la semana 5 (F2).
+**~14–16 semanas** hasta departamento L2 multi-canal con flota iniciada y CEO etapa 1;
+valor visible desde la semana 3–4 (F1) y publicación real desde la semana 5–6 (F2).
+El costo del paso v2→v3 es ~1 semana extra total (kernel en F0 + CEO etapa 1 en F7):
+barato, porque compra la opción de construir cada departamento futuro solo con su
+lógica de dominio.
 
 ---
 
-## 7. Riesgos principales
+## 8. Riesgos principales
 
 | Riesgo | Prob. | Impacto | Mitigación |
 |---|---|---|---|
@@ -283,7 +410,7 @@ desde la semana 3 (F1) y publicación real desde la semana 5 (F2).
 
 ---
 
-## 8. Decisiones que necesito de gerencia antes de F0
+## 9. Decisiones que necesito de gerencia antes de F0
 
 1. **OKRs del trimestre para la marca #1** (propuesta inicial: 0→3k seguidores TikTok,
    ≥2 leads/semana atribuibles a orgánico, ≥12 posts/semana sostenidos) — son el
@@ -301,6 +428,13 @@ desde la semana 3 (F1) y publicación real desde la semana 5 (F2).
 8. **Pilares de contenido** (3–5) para el Brand Brain inicial — propuesta: educación
    sostenibilidad, producto en uso real, tips food-service, detrás de cámaras,
    tendencias eco Ecuador.
+9. **Secuencia organizacional:** ¿ratifican kernel + contratos + eventos en F0, CEO
+   Agent etapa 1 (jefe de gabinete) en F7, y CEO etapa 2 solo cuando exista el segundo
+   departamento? (Es mi recomendación fuerte, ver §2.5.)
+10. **Segundo departamento:** recomiendo **Comercial** — sus embriones ya operan
+    (reporte de ventas, Apollo, HubSpot) y su contrato `LeadOutcome` es el que convierte
+    el aprendizaje de Marketing de métricas de vanidad a revenue real. ¿De acuerdo, o
+    prefieren Atención al Cliente?
 
 ---
 
