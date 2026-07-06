@@ -480,8 +480,8 @@ def _is_allowed_activities(email: str) -> bool:
 _UNRESOLVED_MSG = (
     "🤔 No pude identificarte con certeza, así que no voy a registrar nada "
     "(esto protege que tus datos no caigan en el usuario equivocado).\n\n"
-    "Pedile a Mateo que registre tu usuario — tu AAD id aparece en los "
-    "logs del bot."
+    "Pedile al administrador de la plataforma que registre tu usuario — "
+    "tu AAD id aparece en los logs del bot."
 )
 
 
@@ -501,7 +501,7 @@ async def _resolve_or_reject(context: TurnContext) -> str:
 
 # ===== Data Bot =====
 DATA_WELCOME = (
-    "👋 ¡Hola! Soy el **Data Bot** de Biodegradables Ecuador.\n\n"
+    f"👋 ¡Hola! Soy el **Data Bot** de {core_config.COMPANY_NAME}.\n\n"
     "Te ayudo con consultas en tiempo real sobre la operación:\n"
     "• ¿Cuánto vendimos hoy / ayer / este mes?\n"
     "• ¿Cómo va el cumplimiento del mes vs la meta?\n"
@@ -527,7 +527,7 @@ def _friendly_api_error(e: Exception) -> str:
     if "credit balance" in err_str or "billing" in err_str or "purchase credits" in err_str:
         return (
             "⏸️ El asistente está temporalmente sin crédito en la API de Claude. "
-            "Mateo ya está al tanto y lo está solucionando — apenas se resuelva, "
+            "El administrador ya está al tanto y lo está solucionando — apenas se resuelva, "
             "todo vuelve solo.\n\n"
             "Por mientras podés usar **`/checkin`** para abrir tu formulario del día "
             "(eso funciona sin IA)."
@@ -540,10 +540,10 @@ def _friendly_api_error(e: Exception) -> str:
     if "timeout" in err_str:
         return (
             "⏰ La respuesta demoró demasiado. Volvé a intentar — si vuelve a "
-            "pasar, avisale a Mateo."
+            "pasar, avisale al administrador."
         )
     return (
-        "❌ Algo no anda bien con el asistente ahora. Mateo está al tanto. "
+        "❌ Algo no anda bien con el asistente ahora. El administrador está al tanto. "
         "Por mientras podés usar **`/checkin`** para tu formulario del día."
     )
 
@@ -2525,7 +2525,7 @@ async def _handle_jose_intent(
         else:
             await context.send_activity(
                 f"⚠️ Ya tenías saldo inicial guardado (${res.get('inicial', 0):,.2f}). "
-                f"Si querés corregirlo, pedile a Mateo que lo resetee."
+                f"Si querés corregirlo, pedile al administrador que lo resetee."
             )
         await _upsert_jose_card(context, email, skip_refresh=True, create_if_absent=False)
         return
@@ -3939,7 +3939,7 @@ async def _scheduler_lease_loop() -> None:
 
 
 # ===== FastAPI app =====
-app = FastAPI(title="Biodegradables Bots — Data + Activities")
+app = FastAPI(title=f"{core_config.COMPANY_NAME} Bots — Data + Activities")
 
 
 @app.on_event("startup")
