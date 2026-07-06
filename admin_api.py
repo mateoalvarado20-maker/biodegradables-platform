@@ -261,13 +261,20 @@ async def seed_template_for_user(request: Request) -> dict[str, Any]:
 
     week = activity_state.get_week(user_email)
     existing_ids = set(week["activities"].keys())
+    # 2026-07-06: los puntuales/proyectos que el colaborador FINALIZÓ o quitó
+    # no se re-siembran (mismo criterio que init_week los lunes).
+    cerradas = activity_state.tareas_cerradas(user_email)
 
     added: list[dict[str, Any]] = []
     already: list[str] = []
+    omitidas_cerradas: list[str] = []
     for a in template_activities:
         aid = a["id"]
         if aid in existing_ids:
             already.append(aid)
+            continue
+        if a.get("tipo", "semanal") != "diaria" and aid in cerradas:
+            omitidas_cerradas.append(aid)
             continue
         try:
             activity_state.add_adhoc(
@@ -297,6 +304,7 @@ async def seed_template_for_user(request: Request) -> dict[str, Any]:
         "added_count": len([x for x in added if "error" not in x]),
         "added": added,
         "already_present": already,
+        "omitidas_cerradas": omitidas_cerradas,
     }
 
 

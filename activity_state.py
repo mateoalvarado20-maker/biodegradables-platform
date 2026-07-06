@@ -254,6 +254,32 @@ def _prev_week_key_with_data(user: dict[str, Any], wk: str) -> str | None:
     return best_key
 
 
+def _cerradas_set(user: dict[str, Any]) -> set[str]:
+    """Aids de tareas NO-diarias finalizadas o quitadas por el colaborador
+    (2026-07-06). Vive a nivel de usuario (sobrevive el cambio de semana):
+    init_week y el seed del template NO re-siembran estos aids — solo las
+    diarias recurren siempre. Se limpia al re-agregar el aid (add_adhoc) o al
+    recolocar la tarea (reset_task_para_rehacer / status != finalizada)."""
+    return set(user.get("tareas_cerradas") or [])
+
+
+def _marcar_cerrada(user: dict[str, Any], aid: str, cerrada: bool) -> None:
+    s = _cerradas_set(user)
+    if cerrada:
+        s.add(aid)
+    else:
+        s.discard(aid)
+    user["tareas_cerradas"] = sorted(s)
+
+
+def tareas_cerradas(user_email: str | None = None) -> set[str]:
+    """Lectura pública (sin crear state) del registro de tareas cerradas."""
+    email = _normalize_email(user_email)
+    state = load()
+    user = (state.get("users") or {}).get(email) or {}
+    return _cerradas_set(user)
+
+
 def _ensure_task_fields(entry: dict[str, Any], wk: str) -> dict[str, Any]:
     """Rellena (in-place) los campos de tarea persistente faltantes.
 
@@ -337,8 +363,16 @@ def init_week(
     template = load_template(email)
     monday, friday = week_range(wk)
 
+    # 2026-07-06: los puntuales/proyectos FINALIZADOS (o quitados) no vuelven
+    # el lunes — antes el template los re-sembraba frescos cada semana y el
+    # colaborador los veía reaparecer aunque ya los cerró al 100%. Solo las
+    # diarias re-siembran siempre (recurrentes por diseño).
+    cerradas = _cerradas_set(user)
+
     activities: dict[str, dict[str, Any]] = {}
     for a in template["activities"]:
+        if a["tipo"] != "diaria" and a["id"] in cerradas:
+            continue
         entry: dict[str, Any] = {
             "nombre": a["nombre"],
             "tipo": a["tipo"],
@@ -376,6 +410,8 @@ def init_week(
             _ensure_task_fields(prev_entry, prev_wk)
             if task_effective_status(prev_entry) == "finalizada":
                 continue
+            if aid in cerradas:
+                continue  # cerrada por el colaborador — no revive
             carried = copy.deepcopy(prev_entry)
             carried["updated_at"] = _now_iso()
             _append_history(
@@ -540,6 +576,9 @@ def add_adhoc(
         _append_history(entry, None, "pendiente", by="system", note="creada")
 
     activities[activity_id] = entry
+    # Re-agregar un aid lo saca del registro de cerradas (2026-07-06): si
+    # gerencia vuelve a delegar la misma tarea, debe reaparecer normal.
+    _marcar_cerrada(user, activity_id, False)
     save(state)
     return entry
 
@@ -557,7 +596,13 @@ def remove_activity(
     activities = user["weeks"][wk]["activities"]
     if activity_id not in activities:
         return False
+    entry = activities[activity_id]
     del activities[activity_id]
+    # 2026-07-06: quitar una tarea no-diaria también la registra como cerrada
+    # — si está en el template, el lunes NO se re-siembra. Las diarias quedan
+    # fuera del registro (recurren siempre; para retirarlas: editar template).
+    if entry.get("tipo") != "diaria":
+        _marcar_cerrada(user, activity_id, True)
     save(state)
     return True
 
@@ -700,12 +745,15 @@ def set_task_status(
     email = _normalize_email(user_email)
     wk = wk or week_key()
     state = load()
-    _, _, entry = _task_entry_for_mutation(state, email, wk, activity_id)
+    user, _, entry = _task_entry_for_mutation(state, email, wk, activity_id)
     prev = entry.get("status")
     entry["status"] = status
     entry["updated_at"] = _now_iso()
     if status == "finalizada":
         entry["avance"] = 100
+    # Registro de cerradas (2026-07-06): finalizada → el template no la
+    # re-siembra el lunes; reabrirla (cualquier otro status) la desmarca.
+    _marcar_cerrada(user, activity_id, status == "finalizada")
     _append_history(entry, prev, status, by=by, note=note)
     save(state)
     return entry
@@ -728,12 +776,13 @@ def reset_task_para_rehacer(
     email = _normalize_email(user_email)
     wk = wk or week_key()
     state = load()
-    _, _, entry = _task_entry_for_mutation(state, email, wk, activity_id)
+    user, _, entry = _task_entry_for_mutation(state, email, wk, activity_id)
     if entry.get("tipo") == "diaria":
         raise ValueError(f"'{activity_id}' es diaria — no se recoloca.")
     prev = entry.get("status")
     entry["avance"] = 0
     entry["status"] = "pendiente"
+    _marcar_cerrada(user, activity_id, False)  # recolocada → puede volver
     if fecha_limite is not None:
         entry["fecha_limite"] = fecha_limite or None
     entry["ultima_actualizacion"] = _now_iso()
