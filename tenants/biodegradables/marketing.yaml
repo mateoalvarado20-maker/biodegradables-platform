@@ -1,0 +1,25 @@
+# Departamento de Marketing — datos del tenant Biodegradables Ecuador.
+# content_pillars: HIPÓTESIS iniciales aprobadas por el board 2026-07-06.
+# El Analista (F3) las promueve (validated, con exp_ids) o retira (retired)
+# según datos — no son reglas fijas. Editar aquí solo agrega hipótesis nuevas.
+content_pillars:
+  - id: educacion-sostenibilidad
+    name: Educación sobre sostenibilidad
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
+  - id: producto-en-uso
+    name: Productos en uso real
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
+  - id: tips-food-service
+    name: Tips para food service y negocios
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
+  - id: detras-de-camaras
+    name: Detrás de cámaras de la empresa
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
+  - id: tendencias-eco-ecuador
+    name: Tendencias de sostenibilidad en Ecuador
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial

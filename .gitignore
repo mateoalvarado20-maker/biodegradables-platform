@@ -49,6 +49,8 @@
 !/connectors/
 # --- VER-OS: kernel organizacional (ROADMAP.md F0) ---
 !/org/
+# --- Departamento de Marketing, implementación de referencia VER-OS (F1+) ---
+!/marketing/
 
 # --- Exclusiones dentro de directorios incluidos ---
 # Staging viejo del bot (artefacto de deploy, no fuente; rollback = bot_deploy.zip)

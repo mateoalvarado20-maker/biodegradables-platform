@@ -1,0 +1,23 @@
+# PlatformProfile de TikTok — límites verificados contra la API oficial
+# (PROPUESTA_TIKTOK_MEDIA_MANAGER.md §3 y anexo de fuentes, 2026-07-04).
+# Las posting_windows son HIPÓTESIS iniciales: el Analista (F3) las ajusta
+# con datos. Los límites duros (caption, slides, cap diario) son de la RED.
+platform: tiktok
+formats: [video, carousel]        # story NO tiene API — es flujo asistido, no rendition
+aspect: "9:16"
+width: 1080
+height: 1920
+min_video_s: 5
+max_video_s: 600                  # 10 min vía API; el creador puede tener menos (creator_info)
+caption_max_chars: 2200           # runes UTF-16 para video
+hashtags_max: 5                   # política propia (la red no fija máximo aparte del caption)
+carousel_max_slides: 35           # photo post API
+platform_cap_posts_per_day: 15    # cap de la API por cuenta creadora (~15, compartido)
+min_gap_minutes: 180              # anti-spam propio: espaciar 3 h entre posts
+posting_windows:
+  - "11:00-13:00"
+  - "18:00-21:00"
+notes: >
+  Musica del catalogo NO seleccionable via API (audio embebido en el archivo;
+  auto_add_music solo en carruseles). Scheduling nativo inexistente: el
+  scheduler es nuestro. Retencion/watch-time no expuestos por Display API.

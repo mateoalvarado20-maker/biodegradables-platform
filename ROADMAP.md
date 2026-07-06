@@ -11,6 +11,22 @@ avance una tarea. Línea base aprobada (2026-07-06): `PROPUESTA_VER_OS.md` v0.1 
 (4) revisión técnica: ¿lo aprendido exige ajustar VER-OS v0.1 antes de seguir?
 El registro de esas revisiones vive al final de este archivo.
 
+**Reglas permanentes del board (2026-07-06), aplican a toda fase:**
+1. **Deuda técnica explícita:** cada fase cierra con su tabla de deuda creada
+   (impacto, prioridad, fase recomendada de resolución) en §Deuda técnica.
+2. **Cuestionar arquitectura en caliente:** si una decisión escrita deja de ser la
+   mejor, se cuestiona de inmediato — no se desarrolla por inercia documental.
+3. **Dependencias nuevas solo si valen su mantenimiento:** sistema pequeño y
+   entendible antes que lleno de librerías. Toda dependencia nueva se justifica
+   por escrito en el PR.
+4. **VER-OS es consecuencia de la implementación:** si Marketing descubre una
+   mejor forma, primero se actualiza el estándar, después se sigue desarrollando.
+5. **Demostración funcional obligatoria:** una fase sin forma objetiva de
+   comprobar que funciona no está terminada.
+6. (Del validador de contratos, condición del board:) si empieza a crecer en
+   complejidad o a replicar funcionalidades maduras de `jsonschema`, señalarlo
+   ANTES de seguir ampliándolo.
+
 ---
 
 ## Decisiones adoptadas (línea base aprobada) y pendientes humanas
@@ -25,7 +41,7 @@ El registro de esas revisiones vive al final de este archivo.
 | Secuencia org: kernel en F0, CEO etapa 1 en F7, CEO real con ≥2 deptos | ✅ adoptada |
 | Segundo departamento: Comercial (contrato `LeadOutcome`) | ✅ adoptada |
 | **OKRs numéricos del trimestre para el charter** (propuesta: 0→3k seguidores, ≥2 leads/sem, ≥12 posts/sem) | 👤 confirmar cifras — bloquea F2 (no F0/F1) |
-| **Pilares de contenido** (propuesta: educación sostenibilidad, producto en uso, tips food-service, detrás de cámaras, tendencias eco EC) | 👤 confirmar — bloquea F1 |
+| **Pilares de contenido**: educación sostenibilidad, producto en uso real, tips food-service, detrás de cámaras, tendencias eco EC — **como HIPÓTESIS iniciales**, el sistema los modifica cuando los datos lo demuestren (no son reglas fijas) | ✅ confirmados 2026-07-06 |
 | **Separación corporativa VER-IA** (M365 + Azure + GitHub org + acuerdo IP) | 👤 ya trackeada como F1 de plataforma (CLAUDE.md pendiente #5) — no bloquea el código, bloquea venta |
 | Alta de cuenta Zernio/Buffer + cuenta TikTok de prueba | 👤 antes de F2 |
 
@@ -54,16 +70,18 @@ El kernel se integra con eso — no lo duplica.
 | F0.9 | Demo ejecutable (`python -m org.demo`): departamento de juguete completo (install→onboard→L0, decide, emite, mide, health) | F0.7 | Corre sin red ni secrets; salida legible | ✅ |
 | F0.10 | Integración de metering con `llm_usage.py` (las llamadas LLM de un dept se reflejan en su meter) | F0.4 | Test de doble registro (llm_usage + meter del dept) | ✅ |
 | F0.11 | Doc mínima `docs/ver-os-kernel.md` (qué hay, cómo usarlo, qué es convención vs invariante) | F0.1–F0.9 | Existe y refleja el código real | ✅ |
-| F0.12 | **Revisión técnica de fase** con el board: ¿ajustar VER-OS v0.1? | todo F0 | Acta en §Revisiones de este archivo | ⬜ 👤 |
+| F0.12 | **Revisión técnica de fase** con el board: ¿ajustar VER-OS v0.1? | todo F0 | Acta en §Revisiones de este archivo | ✅ |
 
-## Fase 1 — Producción de contenido
+**FASE 0 CERRADA — 2026-07-06** (aprobación del board en la revisión técnica).
+
+## Fase 1 — Producción de contenido 🔨 EN CURSO
 
 **Objetivo:** pipeline guion→TTS→render→QA + carruseles, sin publicar.
-**Bloqueada por:** pilares de contenido (👤).
+Pilares confirmados por el board 2026-07-06 (como hipótesis) — desbloqueada.
 
 | ID | Tarea | Depende de | Criterio de aceptación | Estado |
 |---|---|---|---|---|
-| F1.1 | Modelos `ContentPackage`/`PlatformRendition` + `PlatformProfile` YAML (TikTok) | F0 | Validación pydantic estricta (patrón `core/config/schema.py`) | ⬜ |
+| F1.1 | Modelos `ContentPackage`/`PlatformRendition` + `PlatformProfile` YAML (TikTok) + pilares como hipótesis en `tenants/<slug>/marketing.yaml` | F0 | Validación pydantic estricta (patrón `core/config/schema.py`) | ✅ |
 | F1.2 | Guionista (Claude Sonnet, JSON validado, registra en `llm_usage`+meter) | F1.1 | 10 guiones válidos consecutivos sin intervención | ⬜ |
 | F1.3 | TTS Azure neural es-EC con word boundaries persistidos | F1.1 | Audio + timestamps por palabra en el package | ⬜ |
 | F1.4 | B-roll Pexels/Pixabay por keywords del guion (cache local) | F1.2 | Assets descargados y atribuidos en el package | ⬜ |
@@ -126,4 +144,16 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 
 | Fase | Fecha | Decisión sobre VER-OS | Acta |
 |---|---|---|---|
-| F0 | — | pendiente | — |
+| F0 | 2026-07-06 | **Sin cambios a v0.1.** Ratificadas las 3 decisiones de implementación: (1) SQLite por tenant con enforcement del motor (camino limpio a Postgres+RLS en H2); (2) validador de contratos propio, con la condición de señalar ANTES de ampliarlo si empieza a replicar jsonschema (regla permanente #6); (3) idempotencia por claims. **Aprendizaje promovido al backlog de v1.0:** la separación registro-de-metering (best-effort, jamás lanza) vs enforcement-de-presupuesto (duro, antes de gastar) entra al estándar como aprendizaje extraído, no como supuesto. | Board aprobó cierre; 5 reglas permanentes nuevas (arriba) |
+
+## Deuda técnica (regla permanente #1)
+
+### Creada en F0
+
+| Deuda | Impacto | Prioridad | Resolver en |
+|---|---|---|---|
+| SQLite por tenant → PostgreSQL+RLS (backups/migraciones/operación a ≥5 tenants) | Escala operativa | Media | H2 (deuda deliberada, detrás del puerto de storage) |
+| Validador de contratos propio (tipos+required+enum) | Mantenimiento si crece | Baja | Vigilancia continua (regla #6); decidir en v1.0 del estándar |
+| `TenantStore` es single-process (lock de hilos, no cross-proceso) — coherente con el "1 worker deliberado" de la plataforma | Concurrencia futura | Baja | H2, junto con Postgres |
+| `health()` no emite heartbeat a ningún control plane (no existe aún) | Observabilidad de flota | Baja | F7 (control plane) |
+| Sin CLI de inspección de journal/eventos (solo API Python y demo) | DX/auditoría manual | Baja | F4 (dashboard los expone) |
