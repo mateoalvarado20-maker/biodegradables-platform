@@ -11,6 +11,7 @@
 !/PROPUESTA_DEMO_COMERCIAL.md
 !/PROPUESTA_TIKTOK_MEDIA_MANAGER.md
 !/PROPUESTA_VER_OS.md
+!/ROADMAP.md
 !/DEMO_GUION.md
 !/DEMO_FASE5_RUNBOOK.md
 !/.env.demo.example
@@ -46,6 +47,8 @@
 !/ops/
 !/tenants/
 !/connectors/
+# --- VER-OS: kernel organizacional (ROADMAP.md F0) ---
+!/org/
 
 # --- Exclusiones dentro de directorios incluidos ---
 # Staging viejo del bot (artefacto de deploy, no fuente; rollback = bot_deploy.zip)

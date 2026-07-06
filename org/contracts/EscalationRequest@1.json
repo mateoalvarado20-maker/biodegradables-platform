@@ -1,0 +1,12 @@
+{
+  "contract": "EscalationRequest@1",
+  "direction": "departamento -> CEO/board",
+  "description": "Escalacion de una decision que excede la autoridad del departamento. default_action se ejecuta si nadie responde antes de respond_by (default seguro).",
+  "fields": {
+    "dept_id": {"type": "string", "required": true},
+    "question": {"type": "string", "required": true},
+    "context": {"type": "string", "required": false},
+    "default_action": {"type": "string", "required": true},
+    "respond_by": {"type": "string", "required": false}
+  }
+}
