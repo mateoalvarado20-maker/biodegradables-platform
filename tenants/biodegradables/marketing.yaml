@@ -6,6 +6,9 @@
 # Contexto de marca que consume el Guionista (ruta relativa a la raíz del repo)
 brand_context_file: company_context.md
 
+# Voz TTS del tenant (catálogo Azure Speech; es-EC = acento ecuatoriano)
+tts_voice: es-EC-AndreaNeural
+
 content_pillars:
   - id: educacion-sostenibilidad
     name: Educación sobre sostenibilidad

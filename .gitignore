@@ -22,6 +22,7 @@
 !/requirements.txt
 !/requirements_bot.txt
 !/requirements-dev.txt
+!/requirements-marketing.txt
 !/pyproject.toml
 # F4.5: imagen Docker única de la plataforma
 !/Dockerfile

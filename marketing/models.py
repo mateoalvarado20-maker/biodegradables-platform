@@ -73,6 +73,25 @@ class Scene(StrictModel):
     on_screen_text: str | None = None
 
 
+class WordTiming(StrictModel):
+    """Timestamp de una palabra hablada (word boundary del TTS, F1.3).
+
+    Es la materia prima de los subtítulos karaoke SIN transcripción: el
+    sintetizador ya sabe exactamente cuándo dice cada palabra. Offsets en ms
+    relativos al inicio del audio de SU escena."""
+
+    scene_index: int = Field(ge=0)
+    word: str = Field(min_length=1)
+    start_ms: float = Field(ge=0)
+    end_ms: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _rango(self):
+        if self.end_ms <= self.start_ms:
+            raise ValueError(f"word {self.word!r}: end_ms debe ser > start_ms")
+        return self
+
+
 class AssetRef(StrictModel):
     kind: Literal["audio", "video", "image", "cover", "subtitles"]
     path: str = Field(min_length=1)
@@ -94,6 +113,7 @@ class ContentPackage(StrictModel):
     cta: str = Field(min_length=2)
     music_ref: str | None = None
     assets: list[AssetRef] = Field(default_factory=list)
+    word_timings: list[WordTiming] = Field(default_factory=list)  # las llena el TTS (F1.3)
     status: PackageStatus = "draft"
     created_at: str = Field(min_length=10)
 

@@ -14,6 +14,20 @@ import yaml
 _REPO_ROOT = Path(__file__).parent.parent
 
 
+def load_tts_voice(tenant_slug: str, base_dir: str | Path | None = None) -> str:
+    """Voz TTS declarada por el tenant (`tts_voice` en marketing.yaml)."""
+    tenants_dir = Path(base_dir) if base_dir is not None else _REPO_ROOT / "tenants"
+    cfg_path = tenants_dir / tenant_slug / "marketing.yaml"
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"el tenant {tenant_slug!r} no tiene marketing.yaml")
+    with open(cfg_path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    voice = data.get("tts_voice")
+    if not voice:
+        raise KeyError(f"{cfg_path} no declara tts_voice")
+    return str(voice)
+
+
 def load_brand_context(tenant_slug: str, base_dir: str | Path | None = None) -> str:
     """`base_dir` es el directorio de tenants (default: <repo>/tenants). El
     brand_context_file se resuelve relativo al padre de ese directorio."""
