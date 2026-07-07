@@ -1,0 +1,16 @@
+{
+  "name": "veria-marketing-render",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Template Remotion del video vertical 9:16 con subtitulos karaoke (F1.5). Licencia Remotion: gratuita para equipos de hasta 3 personas (remotion.pro/license).",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.286",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.286"
+  }
+}

@@ -102,7 +102,7 @@ Pilares confirmados por el board 2026-07-06 (como hipótesis) — desbloqueada.
 | F1.2 | Guionista (Claude Sonnet, JSON validado, registra en `llm_usage`+meter) + `Hypothesis` obligatoria en el modelo (directriz #7) + `marketing/brand.py` | F1.1 | 10 guiones válidos consecutivos sin intervención | ✅ (10/10 el 2026-07-07, $0.046/guion, 0 intervenciones) |
 | F1.3 | TTS Azure neural es-EC con word boundaries persistidos (`marketing/tts.py`, voz como dato del tenant, SDK justificado en `requirements-marketing.txt`) | F1.1 | Audio + timestamps por palabra en el package | ✅ (2026-07-07: guion real → 6 MP3 es-EC + 127 WordTimings, $0 tier F0) |
 | F1.4 | B-roll Pexels por keywords del guion (`marketing/broll.py`: backend inyectable, dedup por package, fallback al pilar, cache por archivo) | F1.2 | Assets descargados y atribuidos en el package | ✅ (2026-07-07: 4 clips verticales reales, únicos, atribuidos, scene_index para el render) |
-| F1.5 | Render Remotion 1080×1920 + subtítulos karaoke desde timestamps TTS + portada | F1.3, F1.4 | Video H.264 válido; QA técnico automático (duración/res/loudness) pasa | ⬜ |
+| F1.5 | Render Remotion 1080×1920 + subtítulos karaoke desde timestamps TTS + portada (`marketing/render_video.py` + template React en `marketing/render/`; Node 22 portable en `C:\Users\Mateo\tools`) | F1.3, F1.4 | Video H.264 válido; QA técnico automático pasa (loudness → deuda F1) | ✅ (2026-07-07: pipeline completo real guion→voz→b-roll→MP4 31MB/31s `produced`, $0.049) |
 | F1.6 | Carruseles: plantillas HTML → PNG 1080×1920 (Playwright local) | F1.1 | 5–10 slides de marca desde un package | ⬜ |
 | F1.7 | Gate de calidad: revisor Claude con rúbrica de marca + claims prohibidos del charter | F1.2 | Pieza con claim vetado → rechazada con razón | ⬜ |
 | F1.8 | Demo: 10 piezas (8 videos + 2 carruseles) para aprobación de gerencia | F1.5–F1.7 | 👤 gerencia aprueba calidad | ⬜ |
@@ -174,3 +174,12 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 | `TenantStore` es single-process (lock de hilos, no cross-proceso) — coherente con el "1 worker deliberado" de la plataforma | Concurrencia futura | Baja | H2, junto con Postgres |
 | `health()` no emite heartbeat a ningún control plane (no existe aún) | Observabilidad de flota | Baja | F7 (control plane) |
 | Sin CLI de inspección de journal/eventos (solo API Python y demo) | DX/auditoría manual | Baja | F4 (dashboard los expone) |
+
+### Creada en F1 (fase abierta — se consolida al cierre)
+
+| Deuda | Impacto | Prioridad | Resolver en |
+|---|---|---|---|
+| QA de loudness no implementado (exigiría ffmpeg/pyloudnorm) | Audio des-normalizado entre piezas | Media | F1.7 (gate) o cierre de F1 |
+| `render/public/<pkg>/` no se limpia tras el render | Disco crece con cada video | Baja | F1.8 (limpieza post-QA) |
+| Tiempo de render en estado estable sin medir (la 1ª corrida incluyó descargas: 827s totales) | Estimación de throughput | Baja | F1.8 (medir en la demo de 10 piezas) |
+| Node portable + Chrome de Remotion viven solo en la PC de Mateo | SPOF conocido del plan | Media | F7 (Container Apps Job) |

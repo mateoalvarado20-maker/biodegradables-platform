@@ -94,7 +94,7 @@ def fetch_broll_for_package(
     """Un clip vertical por escena. Devuelve un package NUEVO (no muta)."""
     if not package.scenes:
         raise BrollError(f"package {package.package_id} sin escenas — nada que ilustrar")
-    if any(a.kind == "video" for a in package.assets):
+    if any(a.kind == "video" and a.scene_index is not None for a in package.assets):
         raise BrollError(f"package {package.package_id} ya tiene b-roll")
 
     fetch = fetch_fn or _pexels_fetch
