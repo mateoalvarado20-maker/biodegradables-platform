@@ -124,6 +124,7 @@ def synthesize_package(
                 path=str(path),
                 source=f"tts:azure:{voice}@{VERSION}",
                 license_note="voz sintética propia — sin restricciones",
+                scene_index=i,
             )
         )
         timings.extend(

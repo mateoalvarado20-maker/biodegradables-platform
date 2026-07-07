@@ -97,6 +97,7 @@ class AssetRef(StrictModel):
     path: str = Field(min_length=1)
     source: str = ""  # p.ej. "pexels:12345", "tts:azure:es-EC-AndreaNeural"
     license_note: str = ""
+    scene_index: int | None = None  # a qué escena pertenece (None = asset global)
 
 
 class ContentPackage(StrictModel):

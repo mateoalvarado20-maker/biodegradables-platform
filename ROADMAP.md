@@ -101,7 +101,7 @@ Pilares confirmados por el board 2026-07-06 (como hipótesis) — desbloqueada.
 | F1.1 | Modelos `ContentPackage`/`PlatformRendition` + `PlatformProfile` YAML (TikTok) + pilares como hipótesis en `tenants/<slug>/marketing.yaml` | F0 | Validación pydantic estricta (patrón `core/config/schema.py`) | ✅ |
 | F1.2 | Guionista (Claude Sonnet, JSON validado, registra en `llm_usage`+meter) + `Hypothesis` obligatoria en el modelo (directriz #7) + `marketing/brand.py` | F1.1 | 10 guiones válidos consecutivos sin intervención | ✅ (10/10 el 2026-07-07, $0.046/guion, 0 intervenciones) |
 | F1.3 | TTS Azure neural es-EC con word boundaries persistidos (`marketing/tts.py`, voz como dato del tenant, SDK justificado en `requirements-marketing.txt`) | F1.1 | Audio + timestamps por palabra en el package | ✅ (2026-07-07: guion real → 6 MP3 es-EC + 127 WordTimings, $0 tier F0) |
-| F1.4 | B-roll Pexels/Pixabay por keywords del guion (cache local) | F1.2 | Assets descargados y atribuidos en el package | ⬜ |
+| F1.4 | B-roll Pexels por keywords del guion (`marketing/broll.py`: backend inyectable, dedup por package, fallback al pilar, cache por archivo) | F1.2 | Assets descargados y atribuidos en el package | ✅ (2026-07-07: 4 clips verticales reales, únicos, atribuidos, scene_index para el render) |
 | F1.5 | Render Remotion 1080×1920 + subtítulos karaoke desde timestamps TTS + portada | F1.3, F1.4 | Video H.264 válido; QA técnico automático (duración/res/loudness) pasa | ⬜ |
 | F1.6 | Carruseles: plantillas HTML → PNG 1080×1920 (Playwright local) | F1.1 | 5–10 slides de marca desde un package | ⬜ |
 | F1.7 | Gate de calidad: revisor Claude con rúbrica de marca + claims prohibidos del charter | F1.2 | Pieza con claim vetado → rechazada con razón | ⬜ |
