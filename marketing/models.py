@@ -46,6 +46,17 @@ class Pillar(StrictModel):
         return self
 
 
+class Hypothesis(StrictModel):
+    """Hipótesis de negocio de una pieza (directriz #7 del board: cada
+    publicación es un experimento controlado, no volumen)."""
+
+    question: str = Field(min_length=10)  # ¿qué intentamos aprender?
+    metric: str = Field(min_length=3)  # qué métrica decide (views, shares, leads…)
+    success_criteria: str = Field(min_length=3)  # umbral o comparación que define éxito
+    decision_if_true: str = Field(min_length=3)  # qué haremos si se cumple
+    decision_if_false: str = Field(min_length=3)  # qué haremos si no
+
+
 class ExperimentLabels(StrictModel):
     """Etiquetado experimental obligatorio (dimensiones aprendibles, F2.5)."""
 
@@ -73,6 +84,8 @@ class ContentPackage(StrictModel):
     package_id: str = Field(min_length=8)
     tenant_id: str = Field(min_length=2)
     labels: ExperimentLabels
+    hypothesis: Hypothesis  # sin hipótesis de negocio no hay pieza (directriz #7)
+    generated_by: str = ""  # "agente@version:modelo" — medibilidad (directriz #10)
     title: str = Field(min_length=3)
     hook: str = Field(min_length=3)
     scenes: list[Scene] = Field(default_factory=list)

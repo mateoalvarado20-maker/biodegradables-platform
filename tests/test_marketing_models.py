@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from marketing.models import (
     ContentPackage,
     ExperimentLabels,
+    Hypothesis,
     Pillar,
     PlatformRendition,
     Scene,
@@ -27,11 +28,24 @@ def _labels(**over):
     return ExperimentLabels(**data)
 
 
+def _hypothesis(**over):
+    data = {
+        "question": "¿Los hooks de pregunta retienen más que los de dato?",
+        "metric": "views",
+        "success_criteria": ">= mediana de los últimos 10 videos del pilar",
+        "decision_if_true": "aumentar proporción de hooks de pregunta",
+        "decision_if_false": "volver a hooks de dato",
+    }
+    data.update(over)
+    return Hypothesis(**data)
+
+
 def _package(**over):
     data = {
         "package_id": "pkg-2026-07-06-001",
         "tenant_id": "biodegradables",
         "labels": _labels(),
+        "hypothesis": _hypothesis(),
         "title": "¿Sabías esto de los empaques?",
         "hook": "El 90% no sabe esto",
         "scenes": [Scene(voice_text="hola", broll_keywords=["packaging"])],
@@ -130,8 +144,25 @@ def test_package_sin_labels_no_existe():
         ContentPackage(
             package_id="pkg-sin-labels-1",
             tenant_id="biodegradables",
+            hypothesis=_hypothesis(),
             title="Título válido",
             hook="Hook válido",
+            caption_master="x",
+            cta="ver más",
+            created_at="2026-07-06",
+        )
+
+
+def test_package_sin_hipotesis_no_existe():
+    """Directriz #7 del board: sin hipótesis de negocio no hay pieza."""
+    with pytest.raises(ValidationError, match="hypothesis"):
+        ContentPackage(
+            package_id="pkg-sin-hipotesis",
+            tenant_id="biodegradables",
+            labels=_labels(),
+            title="Título válido",
+            hook="Hook válido",
+            scenes=[Scene(voice_text="hola")],
             caption_master="x",
             cta="ver más",
             created_at="2026-07-06",

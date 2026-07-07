@@ -2,6 +2,10 @@
 # content_pillars: HIPÓTESIS iniciales aprobadas por el board 2026-07-06.
 # El Analista (F3) las promueve (validated, con exp_ids) o retira (retired)
 # según datos — no son reglas fijas. Editar aquí solo agrega hipótesis nuevas.
+
+# Contexto de marca que consume el Guionista (ruta relativa a la raíz del repo)
+brand_context_file: company_context.md
+
 content_pillars:
   - id: educacion-sostenibilidad
     name: Educación sobre sostenibilidad

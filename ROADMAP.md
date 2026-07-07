@@ -27,6 +27,23 @@ El registro de esas revisiones vive al final de este archivo.
    complejidad o a replicar funcionalidades maduras de `jsonschema`, señalarlo
    ANTES de seguir ampliándolo.
 
+**Directrices del board (2026-07-07), F1 en adelante:**
+7. **Resultados, no contenido:** cada pieza es un experimento controlado con
+   hipótesis de negocio explícita (qué aprendemos, qué métrica decide, qué
+   decisión sigue de cada resultado). Enforced en el modelo: `ContentPackage`
+   sin `hypothesis` no valida.
+8. **Independencia de plataforma vigilada:** si una decisión empieza a acoplar
+   el core a una red específica, señalarlo de inmediato antes de continuar.
+9. **Calidad sobre cantidad:** consistencia excelente antes que cuota fija; si
+   los datos sugieren otra frecuencia, el sistema lo PROPONE al board con
+   evidencia (no lo cambia solo).
+10. **Todo agente nuevo nace medible:** métricas de desempeño claras
+    (¿qué guionista/modelo/CTA/estilo rinde más?). Componente inmedible =
+    componente inoptimizable. `generated_by` en cada artefacto + metering.
+11. **Lente de producto:** funcionalidad que solo sirve a un cliente se señala
+    y se propone su generalización (datos del cliente a `tenants/`, lógica a
+    módulos genéricos).
+
 ---
 
 ## Decisiones adoptadas (línea base aprobada) y pendientes humanas
@@ -82,7 +99,7 @@ Pilares confirmados por el board 2026-07-06 (como hipótesis) — desbloqueada.
 | ID | Tarea | Depende de | Criterio de aceptación | Estado |
 |---|---|---|---|---|
 | F1.1 | Modelos `ContentPackage`/`PlatformRendition` + `PlatformProfile` YAML (TikTok) + pilares como hipótesis en `tenants/<slug>/marketing.yaml` | F0 | Validación pydantic estricta (patrón `core/config/schema.py`) | ✅ |
-| F1.2 | Guionista (Claude Sonnet, JSON validado, registra en `llm_usage`+meter) | F1.1 | 10 guiones válidos consecutivos sin intervención | ⬜ |
+| F1.2 | Guionista (Claude Sonnet, JSON validado, registra en `llm_usage`+meter) + `Hypothesis` obligatoria en el modelo (directriz #7) + `marketing/brand.py` | F1.1 | 10 guiones válidos consecutivos sin intervención | ✅ (10/10 el 2026-07-07, $0.046/guion, 0 intervenciones) |
 | F1.3 | TTS Azure neural es-EC con word boundaries persistidos | F1.1 | Audio + timestamps por palabra en el package | ⬜ |
 | F1.4 | B-roll Pexels/Pixabay por keywords del guion (cache local) | F1.2 | Assets descargados y atribuidos en el package | ⬜ |
 | F1.5 | Render Remotion 1080×1920 + subtítulos karaoke desde timestamps TTS + portada | F1.3, F1.4 | Video H.264 válido; QA técnico automático (duración/res/loudness) pasa | ⬜ |
