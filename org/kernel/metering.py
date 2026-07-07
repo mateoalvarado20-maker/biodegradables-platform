@@ -71,6 +71,19 @@ class Meter:
         )
         return float(rows[0]["total"])
 
+    def month_rows(self, unit: str, month: str | None = None) -> list[dict]:
+        """Filas crudas de una unidad en el mes (qty, usd, meta dict) — para
+        agregaciones de dominio (p.ej. telemetría de etapas)."""
+        month = month or _now().strftime("%Y-%m")
+        rows = self._store.query(
+            "SELECT qty, usd, meta FROM metering WHERE dept_id = ? AND month = ? AND unit = ? "
+            "ORDER BY row_id",
+            (self._dept_id, month, unit),
+        )
+        return [
+            {"qty": r["qty"], "usd": r["usd"], "meta": json.loads(r["meta"])} for r in rows
+        ]
+
     def ensure_budget(self, budget_usd_month: float, about_to_spend_usd: float = 0.0) -> None:
         spent = self.month_usd()
         if spent + about_to_spend_usd > budget_usd_month:

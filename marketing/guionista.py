@@ -32,8 +32,9 @@ from marketing.models import (
     PlatformProfile,
     StrictModel,
 )
+from marketing.telemetry import stage as tel_stage
 from org.kernel.department import Department
-from org.kernel.llm import record_llm_call
+from org.kernel.llm import _tok, record_llm_call
 
 VERSION = "0.1"
 MODEL = "claude-sonnet-4-6"
@@ -54,7 +55,9 @@ class ScriptBrief(StrictModel):
     hook_type: str = Field(min_length=2)
     cta_type: str = Field(min_length=2)
     time_slot: str = Field(pattern=r"^\d{2}:\d{2}-\d{2}:\d{2}$")
-    duration_target_s: int = Field(default=35, gt=4, le=600)
+    # Directriz #13 del board: estándar 20-30 s; formatos más largos solo con
+    # evidencia experimental (el Analista propondrá briefs fuera de rango).
+    duration_target_s: int = Field(default=25, ge=20, le=30)
     hypothesis: Hypothesis
 
 
@@ -63,30 +66,72 @@ def _default_llm_call(system: str, messages: list[dict]) -> tuple[str, Any]:
 
     client = anthropic.Anthropic()
     resp = client.messages.create(
-        model=MODEL, max_tokens=MAX_TOKENS, system=system, messages=messages
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
+        # Prompt caching (directriz #12): el system (contexto de marca + reglas)
+        # es idéntico entre generaciones del mismo tenant — cache write 1.25x
+        # una vez, reads a 0.1x el resto del batch. llm_usage ya tarifica
+        # cache_creation/cache_read por separado.
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        messages=messages,
     )
     return resp.content[0].text, resp.usage
 
 
-def _system_prompt(brief: ScriptBrief, profile: PlatformProfile, brand_context: str) -> str:
+def _system_prompt(format: Format, profile: PlatformProfile, brand_context: str) -> str:
+    """ESTABLE por (tenant, formato, red): es la clave del prompt caching
+    (directriz #12). Todo lo que varía por pieza va en el mensaje de usuario."""
+    if format == "carousel":
+        estructura = (
+            'slides (lista de 5 a 7 objetos {"title": str ≤60 chars, "body": str ≤200 chars} — '
+            "el primero es la portada-gancho, el último cierra con el CTA)"
+        )
+        duracion = "- Cada slide se lee en 2-3 segundos: textos cortos y concretos."
+    else:
+        estructura = (
+            'scenes (lista de objetos {"voice_text": str, "broll_keywords": lista de str '
+            'en inglés para stock, "on_screen_text": str o null})'
+        )
+        duracion = (
+            "- DURACIÓN ESTRICTA: el guion hablado completo debe durar entre 20 y 30 "
+            "segundos — entre 55 y 80 palabras EN TOTAL sumando todas las escenas. "
+            "Máximo 5 escenas. (El mensaje del usuario puede afinar el objetivo.)"
+        )
     return f"""Eres el guionista senior del departamento de Marketing.
-Escribes guiones de {brief.format} vertical para {profile.platform} en español latino.
+Escribes contenido {format} vertical para {profile.platform} en español latino.
 
 CONTEXTO DE MARCA (fuente de verdad — no inventes datos fuera de esto):
 {brand_context}
 
-RESTRICCIONES DE LA RED:
-- Duración objetivo: ~{brief.duration_target_s}s (máx {profile.max_video_s:.0f}s).
+RESTRICCIONES:
+{duracion}
 - Caption: máximo {profile.caption_max_chars} caracteres.
 - Hashtags: máximo {profile.hashtags_max}, sin '#' y sin espacios.
 
 REGLAS:
-- Hook en los primeros 2 segundos (tipo de gancho pedido: {brief.hook_type}).
-- CTA del tipo: {brief.cta_type}.
+- Hook en los primeros 2 segundos, del tipo que pida el usuario.
+- CTA del tipo que pida el usuario.
 - Nada de claims no sustentados por el contexto de marca.
 - Responde SOLO con un objeto JSON, sin markdown ni texto extra, con las claves:
-  title (str, ≤90 chars), hook (str), scenes (lista de {{voice_text, broll_keywords, on_screen_text}}),
+  title (str, ≤90 chars), hook (str), {estructura},
   caption (str), hashtags (lista de str sin '#'), cta (str)."""
+
+
+def _user_message(brief: ScriptBrief) -> str:
+    partes = [
+        f"Pilar: {brief.pillar_id}.",
+        f"Tema sugerido: {brief.topic_hint}." if brief.topic_hint else "",
+        f"Tipo de gancho: {brief.hook_type}.",
+        f"Tipo de CTA: {brief.cta_type}.",
+        (
+            f"Duración objetivo: ~{brief.duration_target_s}s hablados."
+            if brief.format == "video"
+            else ""
+        ),
+        f"Hipótesis a validar: {brief.hypothesis.question} (métrica: {brief.hypothesis.metric}).",
+        "Escribe el contenido.",
+    ]
+    return " ".join(p for p in partes if p)
 
 
 def _extract_json(text: str) -> dict:
@@ -115,68 +160,66 @@ def generate_package(
 
     call = llm_call or _default_llm_call
     package_id = f"pkg-{uuid.uuid4().hex[:12]}"
-    system = _system_prompt(brief, profile, brand_context)
-    messages: list[dict] = [
-        {
-            "role": "user",
-            "content": (
-                f"Pilar: {brief.pillar_id}. "
-                + (f"Tema sugerido: {brief.topic_hint}. " if brief.topic_hint else "")
-                + f"Hipótesis a validar: {brief.hypothesis.question} "
-                f"(métrica: {brief.hypothesis.metric}). Escribe el guion."
-            ),
-        }
-    ]
+    system = _system_prompt(brief.format, profile, brand_context)
+    messages: list[dict] = [{"role": "user", "content": _user_message(brief)}]
 
     last_error: Exception | None = None
-    for _attempt in range(1 + MAX_RETRIES):
-        text, usage = call(system, messages)
-        record_llm_call(dept, "guionista", MODEL, usage)
-        try:
-            data = _extract_json(text)
-            package = ContentPackage(
-                package_id=package_id,
-                tenant_id=brief.tenant_id,
-                labels=ExperimentLabels(
-                    pillar=brief.pillar_id,
-                    hook_type=brief.hook_type,
-                    format=brief.format,
-                    time_slot=brief.time_slot,
-                    cta_type=brief.cta_type,
-                ),
-                hypothesis=brief.hypothesis,
-                generated_by=f"guionista@{VERSION}:{MODEL}",
-                title=str(data["title"])[:90],
-                hook=data["hook"],
-                scenes=data.get("scenes", []),
-                caption_master=data["caption"],
-                hashtags_master=list(data.get("hashtags", []))[: profile.hashtags_max],
-                cta=data["cta"],
-                created_at=datetime.now(_EC_TZ).isoformat(timespec="seconds"),
+    with tel_stage(dept, package_id, "guion") as info:
+        info.update(attempts=0, tokens=0)
+        for _attempt in range(1 + MAX_RETRIES):
+            text, usage = call(system, messages)
+            record_llm_call(dept, "guionista", MODEL, usage)
+            info["attempts"] += 1
+            info["tokens"] += _tok(usage, "input_tokens") + _tok(usage, "output_tokens")
+            info["cache_read_tokens"] = info.get("cache_read_tokens", 0) + _tok(
+                usage, "cache_read_input_tokens"
             )
-        except (ValueError, KeyError, ValidationError) as exc:
-            last_error = exc
-            messages.append({"role": "assistant", "content": text})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        f"Tu respuesta no validó: {exc}. Responde de nuevo SOLO con el "
-                        "objeto JSON corregido, con exactamente las claves pedidas."
+            try:
+                data = _extract_json(text)
+                package = ContentPackage(
+                    package_id=package_id,
+                    tenant_id=brief.tenant_id,
+                    labels=ExperimentLabels(
+                        pillar=brief.pillar_id,
+                        hook_type=brief.hook_type,
+                        format=brief.format,
+                        time_slot=brief.time_slot,
+                        cta_type=brief.cta_type,
                     ),
-                }
+                    hypothesis=brief.hypothesis,
+                    generated_by=f"guionista@{VERSION}:{MODEL}",
+                    title=str(data["title"])[:90],
+                    hook=data["hook"],
+                    scenes=data.get("scenes", []) if brief.format == "video" else [],
+                    slides=data.get("slides", []) if brief.format == "carousel" else [],
+                    caption_master=data["caption"],
+                    hashtags_master=list(data.get("hashtags", []))[: profile.hashtags_max],
+                    cta=data["cta"],
+                    created_at=datetime.now(_EC_TZ).isoformat(timespec="seconds"),
+                )
+            except (ValueError, KeyError, ValidationError) as exc:
+                last_error = exc
+                messages.append({"role": "assistant", "content": text})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Tu respuesta no validó: {exc}. Responde de nuevo SOLO con el "
+                            "objeto JSON corregido, con exactamente las claves pedidas."
+                        ),
+                    }
+                )
+                continue
+            dept.decide(
+                f"guion generado para pilar {brief.pillar_id} ({brief.format})",
+                context_refs=[
+                    f"package:{package.package_id}",
+                    f"hipótesis: {brief.hypothesis.question}",
+                    f"generated_by: {package.generated_by}",
+                ],
+                correlation_id=package.package_id,
             )
-            continue
-        dept.decide(
-            f"guion generado para pilar {brief.pillar_id} ({brief.format})",
-            context_refs=[
-                f"package:{package.package_id}",
-                f"hipótesis: {brief.hypothesis.question}",
-                f"generated_by: {package.generated_by}",
-            ],
-            correlation_id=package.package_id,
-        )
-        return package
+            return package
 
     raise RuntimeError(
         f"guionista: {1 + MAX_RETRIES} intentos sin JSON válido; último error: {last_error}"

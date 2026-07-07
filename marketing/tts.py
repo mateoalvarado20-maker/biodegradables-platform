@@ -25,6 +25,7 @@ from typing import Callable
 from xml.sax.saxutils import escape
 
 from marketing.models import AssetRef, ContentPackage, WordTiming
+from marketing.telemetry import stage as tel_stage
 from org.kernel.department import Department
 
 logger = logging.getLogger("marketing.tts")
@@ -112,24 +113,36 @@ def synthesize_package(
     assets: list[AssetRef] = []
     timings: list[WordTiming] = []
     total_chars = 0
-    for i, scene in enumerate(package.scenes):
-        path = out / f"{package.package_id}-scene{i:02d}.mp3"
-        words = synth(scene.voice_text, voice, path)
-        if not words:
-            raise TtsError(f"escena {i}: el backend no devolvió word boundaries")
-        total_chars += len(scene.voice_text)
-        assets.append(
-            AssetRef(
-                kind="audio",
-                path=str(path),
-                source=f"tts:azure:{voice}@{VERSION}",
-                license_note="voz sintética propia — sin restricciones",
-                scene_index=i,
+    speech_ms = 0.0
+    with tel_stage(dept, package.package_id, "tts") as info:
+        for i, scene in enumerate(package.scenes):
+            path = out / f"{package.package_id}-scene{i:02d}.mp3"
+            words = synth(scene.voice_text, voice, path)
+            if not words:
+                raise TtsError(f"escena {i}: el backend no devolvió word boundaries")
+            total_chars += len(scene.voice_text)
+            speech_ms += max(e for _, _, e in words)
+            assets.append(
+                AssetRef(
+                    kind="audio",
+                    path=str(path),
+                    source=f"tts:azure:{voice}@{VERSION}",
+                    license_note="voz sintética propia — sin restricciones",
+                    scene_index=i,
+                )
             )
-        )
-        timings.extend(
-            WordTiming(scene_index=i, word=w, start_ms=s, end_ms=e) for w, s, e in words
-        )
+            timings.extend(
+                WordTiming(scene_index=i, word=w, start_ms=s, end_ms=e) for w, s, e in words
+            )
+        info.update(chars=total_chars, speech_ms=round(speech_ms, 1))
+        # Directriz #13: estándar 20-30 s. El gate (F1.7) rechaza; aquí queda medido.
+        if speech_ms > 32_000:
+            logger.warning(
+                "tts: %s dura %.1fs hablado — fuera del estándar 20-30s",
+                package.package_id,
+                speech_ms / 1000,
+            )
+            info["over_duration"] = 1
 
     usd = round(total_chars * PRICE_USD_PER_MCHAR / 1_000_000, 6)
     dept.meter.record(

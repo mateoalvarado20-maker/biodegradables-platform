@@ -22,6 +22,7 @@ import subprocess
 from pathlib import Path
 
 from marketing.models import AssetRef, ContentPackage
+from marketing.telemetry import stage as tel_stage
 from org.kernel.department import Department
 
 logger = logging.getLogger("marketing.render")
@@ -138,16 +139,17 @@ def render_package(
 
     mp4 = out / f"{package.package_id}.mp4"
     cover = out / f"{package.package_id}-cover.jpg"
-    run(["render", ENTRY, COMPOSITION, str(mp4), f"--props={props_path}"])
-    run(["still", ENTRY, COMPOSITION, str(cover), f"--props={props_path}", f"--frame={COVER_FRAME}"])
-
-    # QA técnico (F1.5): el render existe y pesa lo razonable; props deterministas
-    if not mp4.exists() or mp4.stat().st_size < MIN_MP4_BYTES:
-        raise RenderError(f"QA: {mp4} no existe o pesa menos de {MIN_MP4_BYTES} bytes")
-    if not cover.exists() or cover.stat().st_size == 0:
-        raise RenderError(f"QA: portada {cover} inválida")
-
     total_ms = sum(s["duration_ms"] for s in props["scenes"])
+    with tel_stage(dept, package.package_id, "render") as info:
+        run(["render", ENTRY, COMPOSITION, str(mp4), f"--props={props_path}"])
+        run(["still", ENTRY, COMPOSITION, str(cover), f"--props={props_path}", f"--frame={COVER_FRAME}"])
+
+        # QA técnico (F1.5): el render existe y pesa lo razonable; props deterministas
+        if not mp4.exists() or mp4.stat().st_size < MIN_MP4_BYTES:
+            raise RenderError(f"QA: {mp4} no existe o pesa menos de {MIN_MP4_BYTES} bytes")
+        if not cover.exists() or cover.stat().st_size == 0:
+            raise RenderError(f"QA: portada {cover} inválida")
+        info.update(duration_ms=total_ms, mp4_bytes=mp4.stat().st_size)
     dept.meter.record(
         "render", qty=1, usd=0.0, meta={"engine": f"remotion@{VERSION}", "duration_ms": total_ms}
     )

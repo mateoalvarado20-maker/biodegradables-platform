@@ -1,5 +1,6 @@
 import React from 'react';
 import {Composition} from 'remotion';
+import {Carousel, CarouselProps} from './Carousel';
 import {VerticalVideo, VideoProps, FPS} from './VerticalVideo';
 
 const defaultProps: VideoProps = {
@@ -9,8 +10,16 @@ const defaultProps: VideoProps = {
   scenes: [],
 };
 
+const defaultCarousel: CarouselProps = {
+  brand_color: '#1B7A43',
+  brand_name: 'Marca',
+  cta: 'Escríbenos',
+  slides: [{title: 'Slide', body: 'Cuerpo'}],
+};
+
 export const Root: React.FC = () => {
   return (
+    <>
     <Composition
       id="VerticalVideo"
       component={VerticalVideo}
@@ -26,5 +35,18 @@ export const Root: React.FC = () => {
         };
       }}
     />
+    <Composition
+      id="CarouselSlide"
+      component={Carousel}
+      width={1080}
+      height={1920}
+      fps={1}
+      durationInFrames={1}
+      defaultProps={defaultCarousel}
+      calculateMetadata={({props}) => ({
+        durationInFrames: Math.max(props.slides.length, 1),
+      })}
+    />
+    </>
   );
 };

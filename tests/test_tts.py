@@ -78,7 +78,7 @@ def test_sintesis_persiste_audio_y_timings(dept, tmp_path):
 
 def test_sintesis_rechaza_package_sin_escenas(dept, tmp_path):
     # un package de carrusel puede no tener escenas — para TTS es un error
-    from marketing.models import ContentPackage, ExperimentLabels
+    from marketing.models import ContentPackage, ExperimentLabels, Slide
 
     carousel = ContentPackage(
         package_id="pkg-carousel-01",
@@ -99,6 +99,11 @@ def test_sintesis_rechaza_package_sin_escenas(dept, tmp_path):
         ),
         title="Título",
         hook="Hook",
+        slides=[
+            Slide(title="Uno", body="Cuerpo uno"),
+            Slide(title="Dos", body="Cuerpo dos"),
+            Slide(title="Tres", body="Cuerpo tres"),
+        ],
         caption_master="c",
         cta="cta",
         created_at="2026-07-07",

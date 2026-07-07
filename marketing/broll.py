@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable
 
 from marketing.models import AssetRef, ContentPackage
+from marketing.telemetry import stage as tel_stage
 from org.kernel.department import Department
 
 logger = logging.getLogger("marketing.broll")
@@ -29,8 +30,9 @@ logger = logging.getLogger("marketing.broll")
 VERSION = "0.1"
 _API = "https://api.pexels.com/videos/search"
 
-# FetchFn: (query, out_dir, exclude_ids) -> (ruta_local, source_id, atribución)
-FetchFn = Callable[[str, Path, set[str]], tuple[Path, str, str]]
+# FetchFn: (query, out_dir, exclude_ids) -> (ruta, source_id, atribución, reused)
+# reused=True cuando el clip ya estaba en el cache local (no se re-descargó).
+FetchFn = Callable[[str, Path, set[str]], tuple[Path, str, str, bool]]
 
 
 class BrollError(RuntimeError):
@@ -72,7 +74,8 @@ def _pexels_fetch(query: str, out_dir: Path, exclude_ids: set[str]) -> tuple[Pat
         if not best:
             continue
         path = out_dir / f"pexels-{vid}.mp4"
-        if not path.exists():
+        reused = path.exists()
+        if not reused:
             with httpx.stream("GET", best["link"], timeout=120, follow_redirects=True) as r:
                 r.raise_for_status()
                 with open(path, "wb") as fh:
@@ -80,7 +83,7 @@ def _pexels_fetch(query: str, out_dir: Path, exclude_ids: set[str]) -> tuple[Pat
                         fh.write(chunk)
         author = (video.get("user") or {}).get("name", "desconocido")
         attribution = f"Pexels License · {author} · {video.get('url', '')}"
-        return path, vid, attribution
+        return path, vid, attribution, reused
     raise BrollError(f"sin resultados verticales nuevos en Pexels para {query!r}")
 
 
@@ -104,25 +107,31 @@ def fetch_broll_for_package(
     fallback_query = package.labels.pillar.replace("-", " ")
     used_ids: set[str] = set()
     assets: list[AssetRef] = []
-    for i, scene in enumerate(package.scenes):
-        query = " ".join(scene.broll_keywords) or fallback_query
-        try:
-            path, source_id, attribution = fetch(query, out, used_ids)
-        except BrollError:
-            if query == fallback_query:
-                raise
-            logger.warning("broll: sin resultados para %r; fallback %r", query, fallback_query)
-            path, source_id, attribution = fetch(fallback_query, out, used_ids)
-        used_ids.add(source_id)
-        assets.append(
-            AssetRef(
-                kind="video",
-                path=str(path),
-                source=f"pexels:{source_id}",
-                license_note=attribution,
-                scene_index=i,
+    reused_count = 0
+    with tel_stage(dept, package.package_id, "broll") as info:
+        for i, scene in enumerate(package.scenes):
+            query = " ".join(scene.broll_keywords) or fallback_query
+            try:
+                path, source_id, attribution, reused = fetch(query, out, used_ids)
+            except BrollError:
+                if query == fallback_query:
+                    raise
+                logger.warning(
+                    "broll: sin resultados para %r; fallback %r", query, fallback_query
+                )
+                path, source_id, attribution, reused = fetch(fallback_query, out, used_ids)
+            used_ids.add(source_id)
+            reused_count += int(reused)
+            assets.append(
+                AssetRef(
+                    kind="video",
+                    path=str(path),
+                    source=f"pexels:{source_id}",
+                    license_note=attribution,
+                    scene_index=i,
+                )
             )
-        )
+        info.update(clips=len(assets), reused_from_cache=reused_count)
 
     dept.meter.record("broll_clip", qty=len(assets), usd=0.0, meta={"provider": "pexels"})
     dept.decide(

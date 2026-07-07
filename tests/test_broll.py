@@ -27,10 +27,11 @@ def _fake_fetch_factory(log=None):
         vid = f"vid-{counter['n']}"
         assert vid not in exclude_ids
         path = out_dir / f"pexels-{vid}.mp4"
+        reused = path.exists()
         path.write_bytes(b"mp4")
         if log is not None:
             log.append(query)
-        return path, vid, f"Pexels License · Autor {counter['n']}"
+        return path, vid, f"Pexels License · Autor {counter['n']}", reused
 
     return fake_fetch
 
@@ -73,7 +74,7 @@ def test_broll_fallback_al_pilar(dept, tmp_path):
             raise BrollError("sin resultados")
         path = out_dir / f"pexels-p{len(queries)}.mp4"
         path.write_bytes(b"mp4")
-        return path, f"p{len(queries)}", "Pexels License · X"
+        return path, f"p{len(queries)}", "Pexels License · X", False
 
     out = fetch_broll_for_package(dept, pkg, tmp_path, fetch_fn=fetch_solo_pilar)
     assert len([a for a in out.assets if a.kind == "video"]) == 2

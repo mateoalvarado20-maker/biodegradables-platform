@@ -73,6 +73,13 @@ class Scene(StrictModel):
     on_screen_text: str | None = None
 
 
+class Slide(StrictModel):
+    """Slide de un carrusel (photo post). Textos cortos: se leen en 2-3 s."""
+
+    title: str = Field(min_length=3, max_length=60)
+    body: str = Field(min_length=3, max_length=220)
+
+
 class WordTiming(StrictModel):
     """Timestamp de una palabra hablada (word boundary del TTS, F1.3).
 
@@ -109,6 +116,7 @@ class ContentPackage(StrictModel):
     title: str = Field(min_length=3)
     hook: str = Field(min_length=3)
     scenes: list[Scene] = Field(default_factory=list)
+    slides: list[Slide] = Field(default_factory=list)  # solo formato carousel
     caption_master: str = Field(min_length=1)
     hashtags_master: list[str] = Field(default_factory=list)
     cta: str = Field(min_length=2)
@@ -127,9 +135,11 @@ class ContentPackage(StrictModel):
         return v
 
     @model_validator(mode="after")
-    def _video_exige_escenas(self):
+    def _formato_exige_su_contenido(self):
         if self.labels.format == "video" and not self.scenes:
             raise ValueError("un package de video exige al menos una escena")
+        if self.labels.format == "carousel" and len(self.slides) < 3:
+            raise ValueError("un package de carrusel exige al menos 3 slides")
         return self
 
 

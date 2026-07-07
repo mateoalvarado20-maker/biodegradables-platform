@@ -44,6 +44,17 @@ El registro de esas revisiones vive al final de este archivo.
     y se propone su generalización (datos del cliente a `tenants/`, lógica a
     módulos genéricos).
 
+**Directrices del board (2026-07-07, tras F1.5):**
+12. **Economía sublineal:** el costo marginal por pieza tiende a cero. Orden de
+    palancas: caching de prompts → contexto destilado → modelo más barato con
+    A/B de calidad → Batch API → open source local SOLO con evidencia de
+    calidad comparable (experimento gated, no default). Meta F1: <$0.01/video.
+13. **Duración estándar 20–30 s.** Ningún componente produce piezas más largas
+    salvo evidencia experimental de que un formato específico rinde mejor.
+14. **Telemetría de eficiencia permanente:** cada etapa registra tiempo, costo,
+    tokens y reuso de caché (unidad `stage_ms` del meter). Lo inmedible no se
+    optimiza.
+
 ---
 
 ## Decisiones adoptadas (línea base aprobada) y pendientes humanas
@@ -103,7 +114,8 @@ Pilares confirmados por el board 2026-07-06 (como hipótesis) — desbloqueada.
 | F1.3 | TTS Azure neural es-EC con word boundaries persistidos (`marketing/tts.py`, voz como dato del tenant, SDK justificado en `requirements-marketing.txt`) | F1.1 | Audio + timestamps por palabra en el package | ✅ (2026-07-07: guion real → 6 MP3 es-EC + 127 WordTimings, $0 tier F0) |
 | F1.4 | B-roll Pexels por keywords del guion (`marketing/broll.py`: backend inyectable, dedup por package, fallback al pilar, cache por archivo) | F1.2 | Assets descargados y atribuidos en el package | ✅ (2026-07-07: 4 clips verticales reales, únicos, atribuidos, scene_index para el render) |
 | F1.5 | Render Remotion 1080×1920 + subtítulos karaoke desde timestamps TTS + portada (`marketing/render_video.py` + template React en `marketing/render/`; Node 22 portable en `C:\Users\Mateo\tools`) | F1.3, F1.4 | Video H.264 válido; QA técnico automático pasa (loudness → deuda F1) | ✅ (2026-07-07: pipeline completo real guion→voz→b-roll→MP4 31MB/31s `produced`, $0.049) |
-| F1.6 | Carruseles: plantillas HTML → PNG 1080×1920 (Playwright local) | F1.1 | 5–10 slides de marca desde un package | ⬜ |
+| F1.6 | Carruseles → PNG 1080×1920 (**cambio justificado:** stills de Remotion en vez de HTML+Playwright — misma estética que el video, CERO dependencias nuevas, un solo stack de plantillas; regla #3) | F1.1 | 5–10 slides de marca desde un package | ✅ (2026-07-07: 7 PNG reales de marca desde guion Claude) |
+| F1.6b | **Eficiencia (directrices #12-14):** prompt caching (system estable por tenant+formato), duración estándar 20-30 s en brief+prompt+telemetría, telemetría `stage_ms` (tiempo/tokens/cache/reuso por etapa) en guion/tts/broll/render/carousel + `stage_stats()` | F1.2–F1.6 | cache_read > 0 verificado; guiones en 55-80 palabras; stats por etapa consultables | ✅ (2026-07-07: 5.636 tokens de cache leídos → **$0.0129/guion, -72%**; guiones reales de 57 y 68 palabras) |
 | F1.7 | Gate de calidad: revisor Claude con rúbrica de marca + claims prohibidos del charter | F1.2 | Pieza con claim vetado → rechazada con razón | ⬜ |
 | F1.8 | Demo: 10 piezas (8 videos + 2 carruseles) para aprobación de gerencia | F1.5–F1.7 | 👤 gerencia aprueba calidad | ⬜ |
 | F1.9 | Revisión técnica de fase | todo F1 | Acta | ⬜ 👤 |
