@@ -28,6 +28,18 @@ def load_tts_voice(tenant_slug: str, base_dir: str | Path | None = None) -> str:
     return str(voice)
 
 
+def load_hard_rules(tenant_slug: str, base_dir: str | Path | None = None) -> dict:
+    """Reglas duras de marketing del tenant para el charter (claims prohibidos).
+    El gate las hace cumplir SIN LLM — son del board, no del modelo."""
+    tenants_dir = Path(base_dir) if base_dir is not None else _REPO_ROOT / "tenants"
+    cfg_path = tenants_dir / tenant_slug / "marketing.yaml"
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"el tenant {tenant_slug!r} no tiene marketing.yaml")
+    with open(cfg_path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    return {"claims_prohibidos": [str(c) for c in data.get("claims_prohibidos", [])]}
+
+
 def load_brand_context(tenant_slug: str, base_dir: str | Path | None = None) -> str:
     """`base_dir` es el directorio de tenants (default: <repo>/tenants). El
     brand_context_file se resuelve relativo al padre de ese directorio."""

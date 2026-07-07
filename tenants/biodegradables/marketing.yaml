@@ -9,6 +9,16 @@ brand_context_file: company_context.md
 # Voz TTS del tenant (catálogo Azure Speech; es-EC = acento ecuatoriano)
 tts_voice: es-EC-AndreaNeural
 
+# Claims que el contenido JAMÁS puede afirmar (regla dura del charter — el
+# gate rechaza sin pasar por el revisor). Frases en minúsculas, match textual.
+claims_prohibidos:
+  - "100% biodegradable certificado"
+  - "cero impacto ambiental"
+  - "certificado por el ministerio"
+  - "el más barato del mercado"
+  - "aprobado por la fda"
+  - "elimina el plástico del planeta"
+
 content_pillars:
   - id: educacion-sostenibilidad
     name: Educación sobre sostenibilidad
