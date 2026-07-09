@@ -76,12 +76,38 @@ def _default_llm_call(system: str, messages: list[dict]) -> tuple[str, Any]:
 
 
 def _package_texts(package: ContentPackage) -> str:
+    """Texto plano concatenado — SOLO para scans deterministas (emojis, claims)."""
     partes = [package.title, package.hook, package.caption_master, package.cta]
     partes += [s.voice_text for s in package.scenes]
     partes += [s.on_screen_text or "" for s in package.scenes]
     partes += [f"{s.title} {s.body}" for s in package.slides]
     partes += package.hashtags_master
     return "\n".join(p for p in partes if p)
+
+
+def _package_for_review(package: ContentPackage) -> str:
+    """Presentación ETIQUETADA por superficie para el revisor. Sin esto, el
+    juez lee el caption (que resume el guion) como 'contenido duplicado'
+    (hallazgo del run 2 del lote FPY)."""
+    partes = [f"TÍTULO: {package.title}", f"HOOK (primeros 2s): {package.hook}"]
+    if package.scenes:
+        partes.append("GUION HABLADO (lo que dice la voz, por escena):")
+        partes += [f"  escena {i}: {s.voice_text}" for i, s in enumerate(package.scenes)]
+        overlays = [
+            f"  escena {i}: {s.on_screen_text}"
+            for i, s in enumerate(package.scenes)
+            if s.on_screen_text
+        ]
+        if overlays:
+            partes.append("TEXTOS EN PANTALLA (overlays):")
+            partes += overlays
+    if package.slides:
+        partes.append("SLIDES DEL CARRUSEL:")
+        partes += [f"  slide {i}: {s.title} — {s.body}" for i, s in enumerate(package.slides)]
+    partes.append(f"CAPTION (texto bajo el video — superficie DISTINTA al guion):\n{package.caption_master}")
+    partes.append(f"CTA: {package.cta}")
+    partes.append(f"HASHTAGS: {' '.join(package.hashtags_master)}")
+    return "\n".join(partes)
 
 
 def copy_checks(
@@ -178,6 +204,14 @@ DISTINGUE CON PRECISIÓN dos categorías:
 - MEJORA: sugerencia que haría la pieza mejor pero NO impide publicarla
   (matices de tono, hook que podría ser más fuerte, ritmo).
 
+POLÍTICA EDITORIAL DE SUPERFICIES (no confundir con duplicación):
+- El CAPTION es una superficie DISTINTA al guion hablado: que resuma o
+  parafrasee el guion es CORRECTO, no es contenido duplicado.
+- Un CTA hablado al final del guion + el mismo CTA escrito en el caption es
+  CORRECTO (superficies distintas). SÍ es blocker: CTAs en escenas
+  intermedias, dos CTAs contradictorios, o la misma frase repetida dos veces
+  DENTRO de la misma superficie.
+
 Una pieza SIN blockers es publicable aunque sea mejorable — NO la bloquees por
 preferencias de estilo. Todo rechazo debe ser accionable.
 
@@ -209,7 +243,7 @@ def _llm_review(
     dept.ensure_budget(0.05)
     user = (
         f"Pilar: {package.labels.pillar}. Formato: {package.labels.format}. "
-        f"Hipótesis: {package.hypothesis.question}\n\nPIEZA:\n{_package_texts(package)}"
+        f"Hipótesis: {package.hypothesis.question}\n\nPIEZA:\n{_package_for_review(package)}"
     )
     data: dict | None = None
     messages = [{"role": "user", "content": user}]

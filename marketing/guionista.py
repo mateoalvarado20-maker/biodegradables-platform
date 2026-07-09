@@ -111,8 +111,12 @@ RESTRICCIONES:
 
 REGLAS DURAS (violar cualquiera = rechazo automático de la pieza):
 - PROHIBIDO usar emojis en CUALQUIER texto: guion, caption, overlays, título, CTA.
-- UN solo CTA, únicamente al final. No lo repitas en escenas intermedias ni lo
-  dupliques en el caption.
+- CTA: UNO solo, hablado en la escena FINAL. El caption puede cerrar con ese
+  mismo CTA escrito (es otra superficie, está bien). PROHIBIDO: CTAs en escenas
+  intermedias, dos CTAs distintos, o repetir la misma frase dos veces dentro
+  del mismo campo.
+- El caption RESUME el video con palabras nuevas — no pegues frases literales
+  del guion.
 - PROHIBIDO inventar datos, cifras, tiempos, propiedades técnicas o tendencias
   que no estén textualmente en el contexto de marca. Si el contexto no da el
   dato, no lo afirmes — reformula sin la cifra.

@@ -140,7 +140,19 @@ motivo de rechazo, cambios realizados, resuelto sí/no, tiempo y costo extra.
 | F2.0c | KPI FPY: evento `content.copy_review` por intento + `fpy_stats()` (FPY, % reparadas, categorías de error frecuentes) | FPY consultable por mes; base del dashboard F4 | ✅ 2026-07-09 |
 | F2.0d | Cola persistente de packages (tabla en el TenantStore: estados draft→copy_approved→produced→qa_approved→scheduled→published/rechazado, resumible tras crash) | Kill del proceso a mitad de lote → reanuda sin duplicar ni perder | ⬜ |
 | F2.0e | Render robusto: `<Video>`→`OffthreadVideo` + duración del clip desde la API de Pexels (fix del fallo 3× reproducible) | La pieza 4 del lote F1.8 (mesa de evento) se produce | ⬜ |
-| F2.0f | Validación: lote copy-level real (≥10 briefs) midiendo FPY inicial y efectividad de reparación | Primer datapoint de FPY publicado en ROADMAP | ⬜ |
+| F2.0f | Validación: lote copy-level real (≥10 briefs) midiendo FPY inicial y efectividad de reparación | Primer datapoint de FPY publicado en ROADMAP | ✅ 2026-07-09 — 3 runs de calibración (tabla abajo) + sonda adversarial 5/5 |
+
+**Calibración FPY (mismos 10 briefs, cambios acumulativos):**
+
+| Run | FPY | Aprobadas | Cambio introducido | Aprendizaje |
+|---|---|---|---|---|
+| 1 | 0% | 0/10 (0/30 intentos) | Reglas duras del generador + ciclo de reparación (primera medición) | Reglas duras funcionaron (emojis 7/10→~0, duración→3 casos); el juez "aprueba solo si perfecto" NUNCA aprueba — inútil |
+| 2 | 10% | 6/10 (1 directa + 5 reparadas, éxito 56%) | Contrato del juez: BLOCKERS accionables vs MEJORAS; score = telemetría | Rechazos ya accionables; nueva clase dominante "contenido/CTA duplicado" = 50% artefacto (el juez leía el caption como duplicado del guion al recibir texto sin estructura) |
+| 3 | **100%** | 10/10 al 1er intento (scores 81-88) | Superficies etiquetadas para el juez + política editorial CTA/caption en AMBOS prompts | $0.023/pieza y 25s/pieza (sin reparaciones); **sonda adversarial 5/5**: el juez sigue rechazando claim inventado, CTA intermedio, duplicación real y comparación con competidor, y aprueba la limpia |
+
+Caveats honestos: n=10 con los mismos briefs — el FPY estable se medirá de forma
+continua con briefs variados (F3); la sonda adversarial queda como test de
+regresión de calibración (correr tras cada cambio de rúbrica).
 
 ### Integración TikTok — DIFERIDA por decisión del board (2026-07-09)
 
