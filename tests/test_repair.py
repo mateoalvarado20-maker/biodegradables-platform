@@ -32,12 +32,12 @@ def _guion(caption="Caption limpio del guion.", hook="Hook potente y claro", sce
     )
 
 
-def _review_json(score, approved=None, reasons=None):
+def _review_json(score, blockers=None):
     return json.dumps(
         {
             "score": score,
-            "approved": approved if approved is not None else score >= 75,
-            "reasons": reasons or ["razón de prueba"],
+            "blockers": blockers if blockers is not None else ([] if score >= 75 else ["defecto de prueba"]),
+            "improvements": ["nota opcional"],
             "claim_issues": [],
         }
     )
@@ -175,7 +175,7 @@ def test_rechazo_definitivo_tras_max_intentos(dept):
         load_profile("tiktok"),
         "ctx",
         gen_llm_call=gen_llm,
-        review_llm_call=lambda s, m: (_review_json(50, reasons=["hook débil"]), _USAGE),
+        review_llm_call=lambda s, m: (_review_json(50, blockers=["hook débil"]), _USAGE),
     )
     assert result.approved is False
     assert result.package.status == "qa_rejected"

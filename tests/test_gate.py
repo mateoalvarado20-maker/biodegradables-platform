@@ -60,9 +60,19 @@ def pkg_producido(dept, tmp_path):
 
 
 def _approve_llm(score=90):
+    """Contrato de calibración F2.0f: aprueba = sin blockers ni claim_issues."""
+
     def call(system, messages):
+        blockers = [] if score >= 75 else ["hook débil que no genera tensión"]
         return (
-            json.dumps({"score": score, "approved": score >= 75, "reasons": ["ok"], "claim_issues": []}),
+            json.dumps(
+                {
+                    "score": score,
+                    "blockers": blockers,
+                    "improvements": ["nota opcional"],
+                    "claim_issues": [],
+                }
+            ),
             {"input_tokens": 50, "output_tokens": 30},
         )
 
@@ -136,7 +146,9 @@ def test_score_bajo_rechaza(dept, pkg_producido):
 
 
 def test_revisor_reintenta_json_invalido(dept, pkg_producido):
-    respuestas = iter(["no-json", json.dumps({"score": 88, "approved": True, "reasons": []})])
+    respuestas = iter(
+        ["no-json", json.dumps({"score": 88, "blockers": [], "improvements": [], "claim_issues": []})]
+    )
 
     def call(system, messages):
         return next(respuestas), {"input_tokens": 10, "output_tokens": 10}

@@ -166,14 +166,26 @@ de contenido ANTES de su publicación, contra el contexto de marca.
 CONTEXTO DE MARCA (única fuente de verdad para validar claims):
 {brand_context}
 
-RÚBRICA (pondera): claims sustentados por el contexto (40%), hook con fuerza
-en 2 segundos (20%), tono de marca cercano y profesional en español latino
-(20%), CTA claro y coherencia con el pilar (20%).
+RÚBRICA (pondera para el score): claims sustentados por el contexto (40%), hook
+con fuerza en 2 segundos (20%), tono de marca cercano y profesional en español
+latino (20%), CTA claro y coherencia con el pilar (20%).
+
+DISTINGUE CON PRECISIÓN dos categorías:
+- BLOCKER: defecto objetivo que IMPIDE publicar — claim no sustentado por el
+  contexto, dato/cifra inventado, violación de regla de marca (emojis,
+  comparación con competidores, oferta no autorizada), CTA roto o duplicado,
+  contenido duplicado dentro de la pieza.
+- MEJORA: sugerencia que haría la pieza mejor pero NO impide publicarla
+  (matices de tono, hook que podría ser más fuerte, ritmo).
+
+Una pieza SIN blockers es publicable aunque sea mejorable — NO la bloquees por
+preferencias de estilo. Todo rechazo debe ser accionable.
 
 Responde SOLO con un objeto JSON, sin markdown:
-{{"score": int 0-100, "approved": bool, "reasons": [str, máx 4 razones concretas],
-"claim_issues": [str, claims dudosos o no sustentados, vacío si ninguno]}}
-Sé exigente: approved=true solo si publicarías la pieza tal cual hoy."""
+{{"score": int 0-100,
+"blockers": [str — defectos que impiden publicar, vacío si ninguno],
+"improvements": [str — sugerencias no bloqueantes, máx 3],
+"claim_issues": [str — claims sin sustento en el contexto, vacío si ninguno]}}"""
 
 
 def _extract_json(text: str) -> dict:
@@ -213,11 +225,15 @@ def _llm_review(
     if data is None:
         raise GateError(f"revisor sin JSON válido para {package.package_id}")
     score = int(data.get("score", 0))
-    approved = bool(data.get("approved", False)) and score >= min_score
-    reasons = [str(r) for r in data.get("reasons", [])] + [
-        f"claim dudoso: {c}" for c in data.get("claim_issues", [])
-    ]
-    return approved, score, reasons
+    blockers = [str(b) for b in data.get("blockers", [])]
+    claim_issues = [f"claim sin sustento: {c}" for c in data.get("claim_issues", [])]
+    # Contrato del gate (calibración F2.0f): se aprueba cuando NO hay defectos
+    # objetivos. Todo rechazo viene con blockers accionables — el score es
+    # telemetría, no umbral (un juez que nunca aprueba es inútil; run 1 del
+    # lote FPY: 0/30 aprobaciones con scores de hasta 81).
+    approved = not blockers and not claim_issues
+    _ = min_score  # conservado en la firma para calibraciones futuras
+    return approved, score, blockers + claim_issues
 
 
 class CopyVerdict:
