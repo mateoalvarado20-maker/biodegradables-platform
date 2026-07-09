@@ -54,3 +54,73 @@ def stage_stats(dept: Department, month: str | None = None) -> dict:
         s["avg_ms"] = round(s["total_ms"] / s["runs"], 1)
         s["total_ms"] = round(s["total_ms"], 1)
     return out
+
+
+# --- KPI First Pass Yield (board 2026-07-09; objetivo >80%) ---------------------
+
+_ERROR_CATEGORIES = {
+    "emojis": ("emoji",),
+    "claims": ("claim", "sustenta", "inventad", "respald"),
+    "duración": ("duración", "duracion"),
+    "cta": ("cta",),
+    "estilo/tono": ("tono", "emoji", "marca"),
+}
+
+
+def _categorize(reason: str) -> str:
+    low = reason.lower()
+    for cat, keys in _ERROR_CATEGORIES.items():
+        if any(k in low for k in keys):
+            return cat
+    return "otros"
+
+
+def fpy_stats(dept: Department, month: str | None = None) -> dict:
+    """First Pass Yield del mes + % reparadas + categorías de error frecuentes.
+    Fuente: eventos `content.copy_review` (uno por intento del ciclo F2.0)."""
+    from datetime import datetime, timezone
+
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    events = [
+        e
+        for e in dept.events.fetch(types=["content.copy_review"], limit=10_000)
+        if e.occurred_at.startswith(month)
+    ]
+    por_pieza: dict[str, list] = {}
+    for e in events:
+        por_pieza.setdefault(e.payload["package_id"], []).append(e.payload)
+
+    total = len(por_pieza)
+    first_pass = 0
+    approved_after_repair = 0
+    rejected = 0
+    categorias: dict[str, int] = {}
+    for intentos in por_pieza.values():
+        intentos.sort(key=lambda p: p["attempt"])
+        if intentos[0]["approved"]:
+            first_pass += 1
+        elif any(p["approved"] for p in intentos):
+            approved_after_repair += 1
+        else:
+            rejected += 1
+        for p in intentos:
+            if not p["approved"]:
+                for r in p.get("reasons", []):
+                    cat = _categorize(r)
+                    categorias[cat] = categorias.get(cat, 0) + 1
+
+    return {
+        "month": month,
+        "pieces": total,
+        "fpy": round(first_pass / total, 3) if total else None,
+        "first_pass": first_pass,
+        "approved_after_repair": approved_after_repair,
+        "rejected_final": rejected,
+        "repair_success_rate": (
+            round(approved_after_repair / (total - first_pass), 3)
+            if total - first_pass > 0
+            else None
+        ),
+        "error_categories": dict(sorted(categorias.items(), key=lambda kv: -kv[1])),
+        "target_fpy": 0.80,
+    }

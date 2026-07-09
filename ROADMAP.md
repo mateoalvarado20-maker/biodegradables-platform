@@ -117,12 +117,32 @@ Pilares confirmados por el board 2026-07-06 (como hipótesis) — desbloqueada.
 | F1.6 | Carruseles → PNG 1080×1920 (**cambio justificado:** stills de Remotion en vez de HTML+Playwright — misma estética que el video, CERO dependencias nuevas, un solo stack de plantillas; regla #3) | F1.1 | 5–10 slides de marca desde un package | ✅ (2026-07-07: 7 PNG reales de marca desde guion Claude) |
 | F1.6b | **Eficiencia (directrices #12-14):** prompt caching (system estable por tenant+formato), duración estándar 20-30 s en brief+prompt+telemetría, telemetría `stage_ms` (tiempo/tokens/cache/reuso por etapa) en guion/tts/broll/render/carousel + `stage_stats()` | F1.2–F1.6 | cache_read > 0 verificado; guiones en 55-80 palabras; stats por etapa consultables | ✅ (2026-07-07: 5.636 tokens de cache leídos → **$0.0129/guion, -72%**; guiones reales de 57 y 68 palabras) |
 | F1.7 | Gate de calidad en 2 capas (`marketing/gate.py`): checks deterministas $0 (estado, assets, duración 20-30s, límites de red, claims del charter — rechazo sin gastar LLM) → revisor Claude con rúbrica de marca (score ≥75) | F1.2 | Pieza con claim vetado → rechazada con razón | ✅ (2026-07-07; verificación con pieza real saboteada en el lote F1.8) |
-| F1.8 | Demo: 10 piezas (8 videos + 2 carruseles) + 1 saboteada, pipeline completo con gate real | F1.5–F1.7 | 👤 gerencia aprueba calidad | 🔨 lote producido 2026-07-09; **0/10 aprobadas por el propio gate** (mejores: 81/78/74 — defectos de copy, no de producción); revisión completa en `docs/retro-fase1.md` — pendiente veredicto 👤 |
-| F1.9 | Revisión técnica de fase + retrospectiva formal | todo F1 | Acta | 🔨 retro entregada (`docs/retro-fase1.md`) — pendiente decisión del board 👤 |
+| F1.8 | Demo: 10 piezas (8 videos + 2 carruseles) + 1 saboteada, pipeline completo con gate real | F1.5–F1.7 | 👤 gerencia aprueba calidad | ✅ lote producido 2026-07-09; 0/10 aprobadas por el propio gate — el board APROBÓ el diagnóstico ("problema de iteración, no de pipeline") |
+| F1.9 | Revisión técnica de fase + retrospectiva formal | todo F1 | Acta | ✅ acta abajo; `docs/retro-fase1.md` |
 
-## Fase 2 — Publicación L0 (TikTok)
+**FASE 1 CERRADA — 2026-07-09** (veredicto del board: estándar de calidad
+funcionando; el QA no es trámite; F2 empieza por el ciclo de reparación, NO por
+el publisher).
 
-**Bloqueada por:** cuenta Zernia/Buffer + cuenta TikTok de prueba (👤), OKRs (👤).
+## Fase 2 — Iteración + robustez + publicación L0 (TikTok)
+
+**KPI principal (board 2026-07-09): First Pass Yield (FPY)** — % de piezas que
+pasan el gate al primer intento. **Objetivo: >80%.** Cuando lo alcancemos, el
+sistema genera contenido publicable de forma autónoma. Métricas por intento:
+motivo de rechazo, cambios realizados, resuelto sí/no, tiempo y costo extra.
+
+### F2.0 — Ciclo de reparación y robustez (ANTES del publisher — orden del board)
+
+| ID | Tarea | Criterio | Estado |
+|---|---|---|---|
+| F2.0a | Reglas duras de estilo en el guionista (sin emojis, UN solo CTA, no inventar datos/cifras fuera del contexto, 60-78 palabras) + checks deterministas nuevos en el gate (regex emojis, duración estimada en borrador) | Violación de estilo → rechazo $0 sin LLM | ⬜ |
+| F2.0b | `review_copy` (gate sobre BORRADOR, pre-producción) + ciclo Generador→Gate→Feedback→Reparación→Gate (máx 2 reparaciones); cada intento registra motivo/cambios/resuelto/tiempo/costo en journal+meter | Pieza con defecto reparable → aprobada en ≤3 intentos; todo auditado | ⬜ |
+| F2.0c | KPI FPY: evento `content.copy_review` por intento + `fpy_stats()` (FPY, % reparadas, categorías de error frecuentes) | FPY consultable por mes; base del dashboard F4 | ⬜ |
+| F2.0d | Cola persistente de packages (tabla en el TenantStore: estados draft→copy_approved→produced→qa_approved→scheduled→published/rechazado, resumible tras crash) | Kill del proceso a mitad de lote → reanuda sin duplicar ni perder | ⬜ |
+| F2.0e | Render robusto: `<Video>`→`OffthreadVideo` + duración del clip desde la API de Pexels (fix del fallo 3× reproducible) | La pieza 4 del lote F1.8 (mesa de evento) se produce | ⬜ |
+| F2.0f | Validación: lote copy-level real (≥10 briefs) midiendo FPY inicial y efectividad de reparación | Primer datapoint de FPY publicado en ROADMAP | ⬜ |
+
+### F2.1+ — Publicación (bloqueada por F2.0 + cuenta Zernio/Buffer 👤 + OKRs 👤)
 
 | ID | Tarea | Depende de | Criterio | Estado |
 |---|---|---|---|---|
@@ -173,6 +193,7 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 
 | Fase | Fecha | Decisión sobre VER-OS | Acta |
 |---|---|---|---|
+| F1 | 2026-07-09 | **Sin cambios a v0.1.** Veredicto del board: el rechazo 10/10 del lote demuestra que el estándar funciona ("me da más confianza que aprobar contenido mediocre"); el problema es de ITERACIÓN, no de pipeline ni arquitectura. Decisiones: F2 arranca con el ciclo de reparación (flujo Generador→Gate→Feedback→Reparación→Gate, máx 2 reparaciones, todo registrado); **FPY = KPI principal, objetivo >80%**; OffthreadVideo y cola persistente ANTES del scheduler; honestidad como política permanente. Aprendizajes → backlog v1.0: persistencia de artefactos de dominio desde F0 del departamento; colas resumibles como norma para pipelines largos. | `docs/retro-fase1.md` |
 | F0 | 2026-07-06 | **Sin cambios a v0.1.** Ratificadas las 3 decisiones de implementación: (1) SQLite por tenant con enforcement del motor (camino limpio a Postgres+RLS en H2); (2) validador de contratos propio, con la condición de señalar ANTES de ampliarlo si empieza a replicar jsonschema (regla permanente #6); (3) idempotencia por claims. **Aprendizaje promovido al backlog de v1.0:** la separación registro-de-metering (best-effort, jamás lanza) vs enforcement-de-presupuesto (duro, antes de gastar) entra al estándar como aprendizaje extraído, no como supuesto. | Board aprobó cierre; 5 reglas permanentes nuevas (arriba) |
 
 ## Deuda técnica (regla permanente #1)

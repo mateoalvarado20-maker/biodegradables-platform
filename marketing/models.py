@@ -20,7 +20,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 Format = Literal["video", "carousel", "story"]
 
 PackageStatus = Literal[
-    "draft", "produced", "qa_approved", "qa_rejected", "scheduled", "published"
+    "draft",
+    "copy_approved",  # pasó el gate de copy (pre-producción, ciclo F2.0)
+    "produced",
+    "qa_approved",
+    "qa_rejected",
+    "scheduled",
+    "published",
 ]
 
 PillarStatus = Literal["hypothesis", "validated", "retired"]
