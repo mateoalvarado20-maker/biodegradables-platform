@@ -31,7 +31,7 @@ def _fake_fetch_factory(log=None):
         path.write_bytes(b"mp4")
         if log is not None:
             log.append(query)
-        return path, vid, f"Pexels License · Autor {counter['n']}", reused
+        return path, vid, f"Pexels License · Autor {counter['n']}", reused, 8.0
 
     return fake_fetch
 
@@ -46,6 +46,7 @@ def test_broll_un_clip_por_escena_con_atribucion(dept, tmp_path):
     assert [v.scene_index for v in videos] == [0, 1]
     assert all(v.source.startswith("pexels:") for v in videos)
     assert all("Pexels License" in v.license_note for v in videos)
+    assert all(v.duration_s == 8.0 for v in videos)  # para el Loop del render
     # dedup: ids distintos por escena
     assert len({v.source for v in videos}) == 2
     # la primera escena usó sus keywords; la segunda (sin keywords) el pilar
@@ -74,7 +75,7 @@ def test_broll_fallback_al_pilar(dept, tmp_path):
             raise BrollError("sin resultados")
         path = out_dir / f"pexels-p{len(queries)}.mp4"
         path.write_bytes(b"mp4")
-        return path, f"p{len(queries)}", "Pexels License · X", False
+        return path, f"p{len(queries)}", "Pexels License · X", False, None
 
     out = fetch_broll_for_package(dept, pkg, tmp_path, fetch_fn=fetch_solo_pilar)
     assert len([a for a in out.assets if a.kind == "video"]) == 2

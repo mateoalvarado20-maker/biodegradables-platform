@@ -48,6 +48,7 @@ def test_build_props_deriva_duraciones_de_los_timings(pkg_completo):
     assert len(props["scenes"]) == 2
     # escena 0: 3 palabras fake → última termina en 850ms → clamp a MIN_SCENE_MS
     assert props["scenes"][0]["duration_ms"] == 1500.0
+    assert props["scenes"][0]["video_duration_ms"] == 8000.0  # del fake fetch (Loop)
     assert props["scenes"][0]["audio"].endswith("scene00.mp3")
     assert [w["word"] for w in props["scenes"][0]["words"]] == ["hola", "mundo", "sostenible"]
     assert props["brand_color"] == "#123456"

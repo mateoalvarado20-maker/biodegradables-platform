@@ -135,14 +135,24 @@ motivo de rechazo, cambios realizados, resuelto sí/no, tiempo y costo extra.
 
 | ID | Tarea | Criterio | Estado |
 |---|---|---|---|
-| F2.0a | Reglas duras de estilo en el guionista (sin emojis, UN solo CTA, no inventar datos/cifras fuera del contexto, 60-78 palabras) + checks deterministas nuevos en el gate (regex emojis, duración estimada en borrador) | Violación de estilo → rechazo $0 sin LLM | ⬜ |
-| F2.0b | `review_copy` (gate sobre BORRADOR, pre-producción) + ciclo Generador→Gate→Feedback→Reparación→Gate (máx 2 reparaciones); cada intento registra motivo/cambios/resuelto/tiempo/costo en journal+meter | Pieza con defecto reparable → aprobada en ≤3 intentos; todo auditado | ⬜ |
-| F2.0c | KPI FPY: evento `content.copy_review` por intento + `fpy_stats()` (FPY, % reparadas, categorías de error frecuentes) | FPY consultable por mes; base del dashboard F4 | ⬜ |
+| F2.0a | Reglas duras de estilo en el guionista (sin emojis, UN solo CTA, no inventar datos/cifras fuera del contexto, 60-78 palabras) + checks deterministas nuevos en el gate (regex emojis, duración estimada en borrador) | Violación de estilo → rechazo $0 sin LLM | ✅ 2026-07-09 |
+| F2.0b | `review_copy` (gate sobre BORRADOR, pre-producción) + ciclo Generador→Gate→Feedback→Reparación→Gate (máx 2 reparaciones); cada intento registra motivo/cambios/resuelto/tiempo/costo en journal+meter | Pieza con defecto reparable → aprobada en ≤3 intentos; todo auditado | ✅ 2026-07-09 (el ciclo corre sobre el borrador: reparar copy = centavos; el gate final post-producción se mantiene) |
+| F2.0c | KPI FPY: evento `content.copy_review` por intento + `fpy_stats()` (FPY, % reparadas, categorías de error frecuentes) | FPY consultable por mes; base del dashboard F4 | ✅ 2026-07-09 |
 | F2.0d | Cola persistente de packages (tabla en el TenantStore: estados draft→copy_approved→produced→qa_approved→scheduled→published/rechazado, resumible tras crash) | Kill del proceso a mitad de lote → reanuda sin duplicar ni perder | ⬜ |
 | F2.0e | Render robusto: `<Video>`→`OffthreadVideo` + duración del clip desde la API de Pexels (fix del fallo 3× reproducible) | La pieza 4 del lote F1.8 (mesa de evento) se produce | ⬜ |
 | F2.0f | Validación: lote copy-level real (≥10 briefs) midiendo FPY inicial y efectividad de reparación | Primer datapoint de FPY publicado en ROADMAP | ⬜ |
 
-### F2.1+ — Publicación (bloqueada por F2.0 + cuenta Zernio/Buffer 👤 + OKRs 👤)
+### Integración TikTok — DIFERIDA por decisión del board (2026-07-09)
+
+**No se conecta ninguna cuenta (ni de prueba) hasta que TODAS las fases del
+sistema estén completas y estables.** Cuando llegue ese momento, será una fase
+propia con: integración del método de publicación seleccionado, manejo seguro
+de credenciales, cuenta de pruebas, monitoreo de errores y validación del flujo
+completo — y solo después, cuentas reales. Las tareas F2.1–F2.6 originales
+(publisher/ledger/scheduler/L0) se reprograman a esa fase. Las acciones humanas
+"cuenta Zernio/Buffer + cuenta TikTok de prueba" dejan de ser pendientes activos.
+
+### F2.1+ — continúa el desarrollo interno según roadmap (sin publicar)
 
 | ID | Tarea | Depende de | Criterio | Estado |
 |---|---|---|---|---|

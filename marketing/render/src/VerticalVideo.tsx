@@ -2,8 +2,9 @@ import React from 'react';
 import {
   AbsoluteFill,
   Audio,
+  Loop,
+  OffthreadVideo,
   Sequence,
-  Video,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
@@ -17,6 +18,7 @@ export type SceneProps = {
   audio: string; // ruta relativa a public/
   video: string; // ruta relativa a public/
   duration_ms: number;
+  video_duration_ms: number | null; // duración del clip b-roll (para Loop)
   words: Word[];
 };
 
@@ -108,6 +110,26 @@ const HookOverlay: React.FC<{hook: string; brandColor: string}> = ({hook, brandC
   </AbsoluteFill>
 );
 
+// OffthreadVideo decodifica con ffmpeg (no con el <video> del browser) —
+// elimina los delayRender timeouts que hicieron fallar 3x la pieza 4 del
+// lote F1.8. No soporta `loop`, así que cuando el clip es más corto que la
+// escena lo envolvemos en <Loop> con su duración real (viene de la API).
+const BRoll: React.FC<{scene: SceneProps}> = ({scene}) => {
+  const clip = (
+    <OffthreadVideo
+      src={staticFile(scene.video)}
+      muted
+      style={{width: '100%', height: '100%', objectFit: 'cover'}}
+    />
+  );
+  const clipMs = scene.video_duration_ms;
+  if (clipMs && clipMs < scene.duration_ms) {
+    const frames = Math.max(Math.floor((clipMs / 1000) * FPS) - 1, 1);
+    return <Loop durationInFrames={frames}>{clip}</Loop>;
+  }
+  return clip;
+};
+
 const Scene: React.FC<{
   scene: SceneProps;
   isFirst: boolean;
@@ -116,12 +138,7 @@ const Scene: React.FC<{
 }> = ({scene, isFirst, hook, brandColor}) => {
   return (
     <AbsoluteFill style={{backgroundColor: 'black'}}>
-      <Video
-        src={staticFile(scene.video)}
-        muted
-        loop
-        style={{width: '100%', height: '100%', objectFit: 'cover'}}
-      />
+      <BRoll scene={scene} />
       <Audio src={staticFile(scene.audio)} />
       {isFirst ? <HookOverlay hook={hook} brandColor={brandColor} /> : null}
       <Captions words={scene.words} brandColor={brandColor} />

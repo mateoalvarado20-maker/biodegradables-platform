@@ -111,6 +111,7 @@ class AssetRef(StrictModel):
     source: str = ""  # p.ej. "pexels:12345", "tts:azure:es-EC-AndreaNeural"
     license_note: str = ""
     scene_index: int | None = None  # a qué escena pertenece (None = asset global)
+    duration_s: float | None = None  # duración del clip (para Loop en el render)
 
 
 class ContentPackage(StrictModel):

@@ -85,11 +85,13 @@ def build_props(package: ContentPackage, brand_color: str) -> dict:
         if not words:
             raise RenderError(f"escena {i} sin word timings")
         duration = max(max(w.end_ms for w in words) + PAD_MS, MIN_SCENE_MS)
+        clip_dur = videos[i].duration_s
         scenes.append(
             {
                 "audio": f"{package.package_id}/scene{i:02d}.mp3",
                 "video": f"{package.package_id}/scene{i:02d}.mp4",
                 "duration_ms": duration,
+                "video_duration_ms": clip_dur * 1000 if clip_dur else None,
                 "words": [
                     {"word": w.word, "start_ms": w.start_ms, "end_ms": w.end_ms} for w in words
                 ],

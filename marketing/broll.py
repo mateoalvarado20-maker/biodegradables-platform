@@ -30,9 +30,10 @@ logger = logging.getLogger("marketing.broll")
 VERSION = "0.1"
 _API = "https://api.pexels.com/videos/search"
 
-# FetchFn: (query, out_dir, exclude_ids) -> (ruta, source_id, atribución, reused)
+# FetchFn: (query, out_dir, exclude_ids) -> (ruta, source_id, atribución, reused, duración_s)
 # reused=True cuando el clip ya estaba en el cache local (no se re-descargó).
-FetchFn = Callable[[str, Path, set[str]], tuple[Path, str, str, bool]]
+# duración_s viene de la API (para el Loop del render); None si no se conoce.
+FetchFn = Callable[[str, Path, set[str]], tuple[Path, str, str, bool, float | None]]
 
 
 class BrollError(RuntimeError):
@@ -87,7 +88,8 @@ def _pexels_fetch(query: str, out_dir: Path, exclude_ids: set[str]) -> tuple[Pat
                         fh.write(chunk)
         author = (video.get("user") or {}).get("name", "desconocido")
         attribution = f"Pexels License · {author} · {video.get('url', '')}"
-        return path, vid, attribution, reused
+        duration = float(video["duration"]) if video.get("duration") else None
+        return path, vid, attribution, reused, duration
     raise BrollError(f"sin resultados verticales nuevos en Pexels para {query!r}")
 
 
@@ -116,14 +118,16 @@ def fetch_broll_for_package(
         for i, scene in enumerate(package.scenes):
             query = " ".join(scene.broll_keywords) or fallback_query
             try:
-                path, source_id, attribution, reused = fetch(query, out, used_ids)
+                path, source_id, attribution, reused, duration = fetch(query, out, used_ids)
             except BrollError:
                 if query == fallback_query:
                     raise
                 logger.warning(
                     "broll: sin resultados para %r; fallback %r", query, fallback_query
                 )
-                path, source_id, attribution, reused = fetch(fallback_query, out, used_ids)
+                path, source_id, attribution, reused, duration = fetch(
+                    fallback_query, out, used_ids
+                )
             used_ids.add(source_id)
             reused_count += int(reused)
             assets.append(
@@ -133,6 +137,7 @@ def fetch_broll_for_package(
                     source=f"pexels:{source_id}",
                     license_note=attribution,
                     scene_index=i,
+                    duration_s=duration,
                 )
             )
         info.update(clips=len(assets), reused_from_cache=reused_count)
