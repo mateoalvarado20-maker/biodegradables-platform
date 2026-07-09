@@ -117,8 +117,8 @@ Pilares confirmados por el board 2026-07-06 (como hipótesis) — desbloqueada.
 | F1.6 | Carruseles → PNG 1080×1920 (**cambio justificado:** stills de Remotion en vez de HTML+Playwright — misma estética que el video, CERO dependencias nuevas, un solo stack de plantillas; regla #3) | F1.1 | 5–10 slides de marca desde un package | ✅ (2026-07-07: 7 PNG reales de marca desde guion Claude) |
 | F1.6b | **Eficiencia (directrices #12-14):** prompt caching (system estable por tenant+formato), duración estándar 20-30 s en brief+prompt+telemetría, telemetría `stage_ms` (tiempo/tokens/cache/reuso por etapa) en guion/tts/broll/render/carousel + `stage_stats()` | F1.2–F1.6 | cache_read > 0 verificado; guiones en 55-80 palabras; stats por etapa consultables | ✅ (2026-07-07: 5.636 tokens de cache leídos → **$0.0129/guion, -72%**; guiones reales de 57 y 68 palabras) |
 | F1.7 | Gate de calidad en 2 capas (`marketing/gate.py`): checks deterministas $0 (estado, assets, duración 20-30s, límites de red, claims del charter — rechazo sin gastar LLM) → revisor Claude con rúbrica de marca (score ≥75) | F1.2 | Pieza con claim vetado → rechazada con razón | ✅ (2026-07-07; verificación con pieza real saboteada en el lote F1.8) |
-| F1.8 | Demo: 10 piezas (8 videos + 2 carruseles) para aprobación de gerencia | F1.5–F1.7 | 👤 gerencia aprueba calidad | ⬜ |
-| F1.9 | Revisión técnica de fase | todo F1 | Acta | ⬜ 👤 |
+| F1.8 | Demo: 10 piezas (8 videos + 2 carruseles) + 1 saboteada, pipeline completo con gate real | F1.5–F1.7 | 👤 gerencia aprueba calidad | 🔨 lote producido 2026-07-09; **0/10 aprobadas por el propio gate** (mejores: 81/78/74 — defectos de copy, no de producción); revisión completa en `docs/retro-fase1.md` — pendiente veredicto 👤 |
+| F1.9 | Revisión técnica de fase + retrospectiva formal | todo F1 | Acta | 🔨 retro entregada (`docs/retro-fase1.md`) — pendiente decisión del board 👤 |
 
 ## Fase 2 — Publicación L0 (TikTok)
 
@@ -195,3 +195,7 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 | `render/public/<pkg>/` no se limpia tras el render | Disco crece con cada video | Baja | F1.8 (limpieza post-QA) |
 | Tiempo de render en estado estable sin medir (la 1ª corrida incluyó descargas: 827s totales) | Estimación de throughput | Baja | F1.8 (medir en la demo de 10 piezas) |
 | Node portable + Chrome de Remotion viven solo en la PC de Mateo | SPOF conocido del plan | Media | F7 (Container Apps Job) |
+| `<Video>` del browser en el template → 2 fallos UHD en el lote (mitigado con cap ≤2048 en `_pick_file`) | Confiabilidad del render | Media | F2 (refactor a OffthreadVideo + duración del clip desde la API) |
+| Sin ciclo de reparación gate→guionista (las piezas rechazadas mueren) | 0/10 aprobadas en el lote | **Alta** | **F2.0 — primera tarea de F2** |
+| Sin persistencia de ContentPackages (viven en memoria; auditoría los reconstruyó desde props) | Operabilidad/auditoría | Alta | F2.0 (cola persistente) |
+| Guionista sin reglas duras de estilo (emojis 7/10, CTA 3×, duración mínima floja) | Tasa de rechazo del gate | Alta | F2.0 (prompt + checks deterministas) |

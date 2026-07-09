@@ -141,7 +141,9 @@ def render_package(
     cover = out / f"{package.package_id}-cover.jpg"
     total_ms = sum(s["duration_ms"] for s in props["scenes"])
     with tel_stage(dept, package.package_id, "render") as info:
-        run(["render", ENTRY, COMPOSITION, str(mp4), f"--props={props_path}"])
+        # --timeout: el delayRender default (28s) se queda corto decodificando
+        # b-roll pesado en CPU modesta (falló la pieza 4 del lote F1.8)
+        run(["render", ENTRY, COMPOSITION, str(mp4), f"--props={props_path}", "--timeout=120000"])
         run(["still", ENTRY, COMPOSITION, str(cover), f"--props={props_path}", f"--frame={COVER_FRAME}"])
 
         # QA técnico (F1.5): el render existe y pesa lo razonable; props deterministas

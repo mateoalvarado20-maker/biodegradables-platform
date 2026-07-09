@@ -83,6 +83,23 @@ def test_broll_fallback_al_pilar(dept, tmp_path):
     assert queries[1] == pkg.labels.pillar.replace("-", " ")
 
 
+def test_pick_file_evita_uhd_y_prefiere_1920():
+    from marketing.broll import _pick_file
+
+    video = {
+        "video_files": [
+            {"width": 2160, "height": 3840, "link": "uhd"},
+            {"width": 1080, "height": 1920, "link": "fhd"},
+            {"width": 720, "height": 1280, "link": "hd"},
+            {"width": 1920, "height": 1080, "link": "horizontal"},
+        ]
+    }
+    assert _pick_file(video)["link"] == "fhd"
+    # si solo hay UHD vertical, se usa (mejor que nada)
+    solo_uhd = {"video_files": [{"width": 2160, "height": 3840, "link": "uhd"}]}
+    assert _pick_file(solo_uhd)["link"] == "uhd"
+
+
 def test_broll_sin_escenas(dept, tmp_path):
     # model_copy no re-valida: sirve para simular un package sin escenas
     pkg = _package_con_escenas(dept).model_copy(update={"scenes": []})

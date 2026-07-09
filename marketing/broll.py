@@ -40,7 +40,11 @@ class BrollError(RuntimeError):
 
 
 def _pick_file(video: dict) -> dict | None:
-    """Mejor variante: vertical y lo más cercana (por arriba) a 1920 de alto."""
+    """Mejor variante: vertical, cercana a 1920 de alto y NUNCA UHD.
+
+    Los archivos 2160×3840 de Pexels tardan >2 min en decodificar en CPU
+    modesta y revientan el delayRender del render (pieza 4 del lote F1.8,
+    dos veces). El render sale a 1920: un UHD no aporta calidad visible."""
     candidates = [
         f
         for f in video.get("video_files", [])
@@ -48,9 +52,9 @@ def _pick_file(video: dict) -> dict | None:
     ]
     if not candidates:
         return None
-    tall = [f for f in candidates if f["height"] >= 1920]
-    pool = tall or candidates
-    return min(pool, key=lambda f: abs(f["height"] - 1920))
+    usable = [f for f in candidates if f["height"] <= 2048] or candidates
+    tall = [f for f in usable if f["height"] >= 1440] or usable
+    return min(tall, key=lambda f: abs(f["height"] - 1920))
 
 
 def _pexels_fetch(query: str, out_dir: Path, exclude_ids: set[str]) -> tuple[Path, str, str]:
