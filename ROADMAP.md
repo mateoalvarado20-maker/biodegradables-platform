@@ -195,7 +195,7 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 | `render/public/<pkg>/` no se limpia tras el render | Disco crece con cada video | Baja | F1.8 (limpieza post-QA) |
 | Tiempo de render en estado estable sin medir (la 1ª corrida incluyó descargas: 827s totales) | Estimación de throughput | Baja | F1.8 (medir en la demo de 10 piezas) |
 | Node portable + Chrome de Remotion viven solo en la PC de Mateo | SPOF conocido del plan | Media | F7 (Container Apps Job) |
-| `<Video>` del browser en el template → 2 fallos UHD en el lote (mitigado con cap ≤2048 en `_pick_file`) | Confiabilidad del render | Media | F2 (refactor a OffthreadVideo + duración del clip desde la API) |
+| `<Video>` del browser en el template → **3 fallos reproducibles** en el lote (el cap ≤2048 NO alcanzó: es el decode del browser, no la resolución) | Confiabilidad del render — pieza 4 imposible de producir | **Alta** | **F2.0** (refactor a OffthreadVideo + duración del clip desde la API de Pexels) |
 | Sin ciclo de reparación gate→guionista (las piezas rechazadas mueren) | 0/10 aprobadas en el lote | **Alta** | **F2.0 — primera tarea de F2** |
 | Sin persistencia de ContentPackages (viven en memoria; auditoría los reconstruyó desde props) | Operabilidad/auditoría | Alta | F2.0 (cola persistente) |
 | Guionista sin reglas duras de estilo (emojis 7/10, CTA 3×, duración mínima floja) | Tasa de rechazo del gate | Alta | F2.0 (prompt + checks deterministas) |

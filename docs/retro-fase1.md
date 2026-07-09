@@ -41,7 +41,7 @@ repararse. Ese ciclo de reparación es la pieza faltante #1 (ver §6).
 | 8 | Tendencia Quito (video) | 41 | ✗ | **Hook con dato inventado** (restaurantes que descuentan) — desinformación |
 | 7 | Detrás de cámaras bodega | 0 | ✗ det. | Duración 16 s < estándar 20-30 s |
 | 11 | Saboteada (F1.7) | 0 | ✗ det. | Claim prohibido del charter + duración — **rechazo correcto sin gastar LLM** |
-| 4 | Mesa de evento | — | ⚠ render | Falló 2× por clips UHD (fix aplicado; 3er intento en curso) |
+| 4 | Mesa de evento | — | ⚠ render | Falló 3× (delayRender en `<Video>`), incluso con cap de resolución — **caso reproducible que confirma el refactor a OffthreadVideo como fix, no como mejora** (F2.0) |
 
 **Mejores 3:** carrusel checklist (9), carrusel mitos (10), error-al-pedir (5).
 **Peores 3:** tendencia Quito (8, dato inventado — la más peligrosa), saboteada (11,
