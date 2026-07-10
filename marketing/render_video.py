@@ -19,6 +19,7 @@ import json
 import logging
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from marketing.models import AssetRef, ContentPackage
@@ -145,7 +146,19 @@ def render_package(
     with tel_stage(dept, package.package_id, "render") as info:
         # --timeout: el delayRender default (28s) se queda corto decodificando
         # b-roll pesado en CPU modesta (falló la pieza 4 del lote F1.8)
-        run(["render", ENTRY, COMPOSITION, str(mp4), f"--props={props_path}", "--timeout=120000"])
+        render_args = ["render", ENTRY, COMPOSITION, str(mp4), f"--props={props_path}", "--timeout=120000"]
+        try:
+            run(render_args)
+        except RenderError as exc:
+            # El compositor de Remotion falla esporádico en Windows cuando el
+            # render arranca segundos después de descargar los clips (sospecha:
+            # Defender escaneando archivos recién escritos mientras ffmpeg los
+            # abre — validación F2.0e: el mismo render manual salió limpio).
+            # Un reintento con pausa lo resuelve; queda medido en telemetría.
+            logger.warning("render falló (transitorio?), reintento en 10s: %s", str(exc)[:300])
+            info["render_retried"] = 1
+            time.sleep(10)
+            run(render_args)
         run(["still", ENTRY, COMPOSITION, str(cover), f"--props={props_path}", f"--frame={COVER_FRAME}"])
 
         # QA técnico (F1.5): el render existe y pesa lo razonable; props deterministas
