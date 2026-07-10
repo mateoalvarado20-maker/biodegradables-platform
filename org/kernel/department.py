@@ -66,6 +66,12 @@ class Department:
         self.meter = Meter(store, self.dept_id)
         self.state = DeptState(store, self.dept_id, autonomy_default=manifest.autonomy_default)
 
+    # --- storage propio (invariante #3: los datos de dominio pertenecen al
+    # departamento; sus módulos crean/usan sus tablas en el store del tenant) --
+    @property
+    def storage(self) -> TenantStore:
+        return self._store
+
     # --- permisos (componente #4) -------------------------------------------
     def ensure_capability(self, name: str) -> None:
         if name not in self._granted:

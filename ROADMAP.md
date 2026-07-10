@@ -54,6 +54,12 @@ El registro de esas revisiones vive al final de este archivo.
 14. **Telemetría de eficiencia permanente:** cada etapa registra tiempo, costo,
     tokens y reuso de caché (unidad `stage_ms` del meter). Lo inmedible no se
     optimiza.
+15. **(2026-07-10) Escepticismo ante resultados extraordinarios:** ningún
+    problema se declara resuelto solo porque un experimento dio 100%. Ante un
+    resultado extraordinario se asume primero sesgo/error de medición/muestra
+    insuficiente y se intenta REFUTAR (prueba adversarial, más volumen, datos
+    nuevos) antes de aceptar la conclusión. Referencia: sonda adversarial del
+    revisor (run 3 FPY).
 
 ---
 
@@ -138,7 +144,7 @@ motivo de rechazo, cambios realizados, resuelto sí/no, tiempo y costo extra.
 | F2.0a | Reglas duras de estilo en el guionista (sin emojis, UN solo CTA, no inventar datos/cifras fuera del contexto, 60-78 palabras) + checks deterministas nuevos en el gate (regex emojis, duración estimada en borrador) | Violación de estilo → rechazo $0 sin LLM | ✅ 2026-07-09 |
 | F2.0b | `review_copy` (gate sobre BORRADOR, pre-producción) + ciclo Generador→Gate→Feedback→Reparación→Gate (máx 2 reparaciones); cada intento registra motivo/cambios/resuelto/tiempo/costo en journal+meter | Pieza con defecto reparable → aprobada en ≤3 intentos; todo auditado | ✅ 2026-07-09 (el ciclo corre sobre el borrador: reparar copy = centavos; el gate final post-producción se mantiene) |
 | F2.0c | KPI FPY: evento `content.copy_review` por intento + `fpy_stats()` (FPY, % reparadas, categorías de error frecuentes) | FPY consultable por mes; base del dashboard F4 | ✅ 2026-07-09 |
-| F2.0d | Cola persistente de packages (tabla en el TenantStore: estados draft→copy_approved→produced→qa_approved→scheduled→published/rechazado, resumible tras crash) | Kill del proceso a mitad de lote → reanuda sin duplicar ni perder | ⬜ |
+| F2.0d | Cola persistente de packages (`marketing/queue.py` + runner `pipeline.py`: estados persistidos en tabla `mkt_content_queue` del TenantStore, `submit/advance/run_pending`, errores de etapa con reintento acotado a 3 y revisión manual después) | Kill del proceso a mitad de lote → reanuda sin duplicar ni perder | ✅ 2026-07-10 — test de crash-resume verificado por metering (el render no se re-ejecuta tras reanudar); la sonda del juez ahora vive en `marketing/calibration_probe.py` como test de regresión de rúbrica |
 | F2.0e | Render robusto: `<Video>`→`OffthreadVideo` + duración del clip desde la API + reintento ante fallo transitorio del compositor (esporádico en Windows tras descargar clips; sospecha Defender) | La pieza 4 del lote F1.8 (mesa de evento) se produce | ✅ 2026-07-10 — pieza "mesa de evento" producida E2E (24.3 MB); el reintento atrapó un fallo transitorio real en su primer uso (medido en telemetría `render_retried`) |
 | F2.0f | Validación: lote copy-level real (≥10 briefs) midiendo FPY inicial y efectividad de reparación | Primer datapoint de FPY publicado en ROADMAP | ✅ 2026-07-09 — 3 runs de calibración (tabla abajo) + sonda adversarial 5/5 |
 
