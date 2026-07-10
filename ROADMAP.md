@@ -80,6 +80,16 @@ El registro de esas revisiones vive al final de este archivo.
     conclusión incluye explícitamente: nivel de confianza, tamaño de muestra,
     evidencia utilizada, posibles factores de confusión, y qué datos
     adicionales subirían la confianza.
+20. **(2026-07-10) El Analista nunca modifica el conocimiento — solo PROPONE:**
+    entre Analista y Playbook existe el **Knowledge Manager**, único que decide
+    si una propuesta se vuelve conocimiento. Toda propuesta incluye 8 campos:
+    conocimiento a modificar, evidencia a favor, evidencia en contra, riesgos de
+    aceptar, riesgos de no aceptar, impacto esperado, confianza, reversibilidad.
+    Cada regla del playbook tiene MADUREZ (experimental → validada → consolidada
+    → obsoleta) — una hipótesis nueva jamás pesa igual que una regla probada
+    durante meses. Todo cambio es reversible con historial completo (quién
+    propuso, con qué evidencia, qué la validó, cuándo/por qué cambió, qué
+    impacto produjo).
 
 ---
 
@@ -226,7 +236,7 @@ integración sin tocar el motor (mismo puerto).
 | F3.1 | Métricas con propósito: puerto `MetricsSource` + snapshots persistidos donde CADA campo está mapeado a su pregunta de negocio (regla #16, mapa `PURPOSES` en `marketing/metrics.py`) + simulador `BiasedSimulator` con sesgos configurables, determinista, con curva de maduración | Campo sin pregunta → no se puede almacenar (validado); snapshots en serie temporal | ✅ 2026-07-10 (watch-time documentado como NO disponible, no olvidado) |
 | F3.2 | Scoring normalizado (`marketing/scoring.py`): views proyectadas por curva de maduración + engagement ponderado por poder predictivo (shares 3.0 > comments 2.0 > saves 1.5 > likes 1.0; followers 4.0); mínimo 12 h de señal | Score reproducible y testeado; sin watch-time (límite documentado) | ✅ 2026-07-10 |
 | F3.3 | Registro de experimentos (`marketing/experiments.py`) con los 4 veredictos de la regla #19 computados por t de Welch conservadora (sin LLM, sin deps nuevas): n≥5 por grupo, \|t\|≥2 media / ≥3 alta, efecto ≤10% con muestra = rechazada, detección de confusores (baja la confianza), historial append-only por hipótesis (base del KPI LA) | Sesgo sembrado → confirmada; sin sesgo → NO confirmada (control negativo); n chico → requiere_más_datos aunque el sesgo sea enorme | ✅ 2026-07-10 (6 tests de veredictos + confusores + historial) |
-| F3.4 | Analista CONSERVADOR (#17): propone cambios de playbook solo con evidencia suficiente (n≥5, confianza definida, decay temporal); cambios versionados; los estratégicos se proponen al board | **Descubre el sesgo sembrado del simulador y NO "descubre" sesgos inexistentes** (control negativo) | ⬜ |
+| F3.4 | Trío de conocimiento (regla #20): **Analista** (`analista.py` — observa/evalúa/PROPONE con los 8 campos; test de capas: no puede ni importar el playbook) → **Knowledge Manager** (`knowledge.py` — política determinista: crear=experimental; promoción solo con 2/4 confirmaciones consecutivas; degradación asimétrica: experimental muere directo, consolidada baja de a un nivel) → **Playbook** (`playbook.py` — revisiones append-only, madurez experimental→validada→consolidada→obsoleta, revert sin perder historial, peso por madurez para el Planificador) | **Descubre el sesgo sembrado y NO "descubre" sesgos inexistentes** (control negativo) | ✅ 2026-07-10 (8 tests: ciclo completo, escalera de madurez, contradicción, revert, capas) |
 | F3.5 | Planificador 80/20: genera briefs variados desde pilares+playbook (explota 80 / explora 20) | Distribución verificada; **FPY de producción medido con briefs nuevos** (deuda F2) | ⬜ |
 | F3.6 | KPIs Learning Velocity + Learning Accuracy (#18): hipótesis evaluadas/confirmadas/descartadas, cambios reales de playbook, impacto posterior; LA = % de confirmadas que sobreviven a más datos | LV y LA consultables por mes, SIEMPRE juntos; entran al self-report | ⬜ |
 | F3.7 | Primer ciclo cerrado: métrica (simulada) → veredicto → regla de playbook → brief del Planificador influido por la regla | Journal lo evidencia end-to-end | ⬜ |
