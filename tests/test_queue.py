@@ -79,6 +79,10 @@ def test_run_pending_lleva_a_terminal(env):
     final = queue.get(r.package.package_id)
     assert final.status == "qa_approved"
     assert any(a.kind == "video" and a.scene_index is None for a in final.assets)
+    # F3.9: el staging del render se limpia tras el gate final
+    from marketing.render_video import RENDER_DIR
+
+    assert not (RENDER_DIR / "public" / r.package.package_id).exists()
 
 
 def test_crash_a_mitad_reanuda_sin_duplicar(env, tmp_path):

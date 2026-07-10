@@ -110,6 +110,19 @@ El registro de esas revisiones vive al final de este archivo.
     mayor retorno de aprendizaje y cuáles generaron valor comercial. El
     objetivo no es producir mejores videos: es tomar mejores decisiones cada
     semana que la anterior.
+24. **(2026-07-10) PIVOT A VALOR — decisión de board:** el objetivo deja de ser
+    construir capacidades y pasa a ser DEMOSTRAR VALOR. El motor de aprendizaje
+    queda CONGELADO salvo correcciones críticas. Prioridad: operación diaria,
+    estabilidad y validación con clientes reales. Toda funcionalidad nueva
+    responde primero: **"¿esto nos acerca a un cliente pagando por VER-IA?"** —
+    si no, versión posterior. Pensar como CTO de SaaS, no como investigador:
+    producto estable, onboarding sencillo, operación confiable, cliente
+    satisfecho, negocio escalable.
+25. **(2026-07-10) KPI ejecutivo Time to Value (TTV):** días desde que un
+    cliente instala VER-IA hasta su primer resultado tangible. KPI principal
+    del producto junto a FPY y LV/LA. Propuesta de objetivo (a ratificar):
+    TTV ≤ 7 días hasta el primer contenido aprobado listo, ≤ 14 hasta la
+    primera publicación real.
 
 ---
 
@@ -260,9 +273,34 @@ integración sin tocar el motor (mismo puerto).
 | F3.5 | Planificador como Media Manager (regla #22, `marketing/planner.py`): cada brief con propósito explícito — **explotar** reglas del playbook ponderadas por madurez (su hipótesis re-testea la regla → alimenta LA) o **explorar** produciendo exactamente los datos que el registro declaró faltantes (agenda = veredictos requiere_más_datos/inconclusa + catálogo sin medir); sin playbook → 100% exploración honesta; `explain()` responde las 6 preguntas del board; determinista, sin LLM | Distribución 80/20 verificada; todo brief con propósito completo | ✅ 2026-07-10 (+fix regla #19: los valores sub-muestreados ahora SÍ se registran como requiere_más_datos — antes el Analista los saltaba sin dejar constancia) — **FPY con briefs nuevos pendiente en F3.7 (demo)** |
 | F3.6 | **Objetivos de negocio en todo el motor (regla #23)** + KPIs LV+LA (`learning_report.py`): `objective` obligatorio en piezas/briefs, scoring con pesos por objetivo (leads/sales con proxies honestos hasta `LeadOutcome`), Analista segmenta por objetivo (mezclar = error), conocimiento por objetivo (`regla:objetivo/dim=valor`); LV (evaluaciones + cambios reales del playbook) SIEMPRE con LA (% de confirmadas que sobreviven — sin re-evaluaciones devuelve None, no 100%); reporte semanal responde las 6 preguntas del board (aprendimos/dejamos de creer/nacidas/degradadas/retorno de aprendizaje/valor comercial) | LV y LA consultables, SIEMPRE juntos; reporte con las 6 preguntas; segmentación E2E testeada | ✅ 2026-07-10 (500 tests) |
 | F3.7 | Primer ciclo cerrado: métrica (simulada) → veredicto → regla de playbook → brief del Planificador influido por la regla | Journal lo evidencia end-to-end | ⬜ |
-| F3.8 | Tarjeta diaria de historia asistida (asset+caption listos vía bot Teams) | Entrega diaria + métrica de cumplimiento | ⬜ (requiere integración con el bot — evaluar si pasa a F4 junto al dashboard) |
-| F3.9 | Limpieza de `render/public/` post-gate (deuda F1/F2) | Staging no crece sin límite | ⬜ |
-| F3.10 | Demo funcional + revisión técnica de fase | Acta | ⬜ 👤 |
+| F3.8 | Tarjeta diaria de historia asistida | — | ➡️ movida a M3 (es parte del flujo de publicación TikTok) |
+| F3.7 | Ciclo cerrado E2E: métrica → veredicto → regla → plan influido | Journal lo evidencia | ✅ 2026-07-10 — demo: regla `leads/hook=pregunta` creada y promovida; el plan 2 la EXPLOTA en 4/5 briefs; reporte LV+LA |
+| F3.9 | Limpieza de `render/public/` post-gate (deuda F1/F2) | Staging no crece sin límite | ✅ 2026-07-10 (`cleanup_staging` tras el gate final, testeado) |
+| F3.10 | Demo funcional + revisión técnica de fase | Acta | ✅ demo ejecutada — **FPY REAL con briefs nuevos del Planificador: 67% (4/6 al 1er intento, 2 reparadas con éxito, 0 rechazos definitivos)** — baseline honesto de producción vs el 100% de briefs de calibración; pendiente veredicto 👤 |
+
+**Datapoint FPY de producción (2026-07-10):** 67% con briefs jamás vistos —
+por debajo del objetivo 80%, con el ciclo de reparación rescatando el 100% de
+las fallas. Es el baseline que la etapa MVP debe subir con datos reales.
+
+---
+
+## ETAPA MVP — Operación y validación (aprobada por el board 2026-07-10)
+
+**Pregunta de cada tarea: ¿nos acerca a un cliente pagando? KPIs ejecutivos:
+TTV (regla #25) + FPY + LV/LA. Motor de aprendizaje CONGELADO (regla #24).**
+
+| Fase | Alcance | Criterio de salida |
+|---|---|---|
+| **M1 — Operación diaria** | Jobs programados sobre la cola (plan del Planificador → producción → QA → cola de aprobación), gate L0 por tarjeta Teams (infra del bot existente), alertas de error, runbook | 5 días hábiles seguidos generando el plan diario sin intervención manual (sin publicar aún) |
+| **M2 — Visibilidad** | Dashboard esencial (`/media/*` patrón admin_api): cola, piezas, FPY/LV/LA, costos por pieza, decisiones del playbook; self-report semanal a gerencia (usa `render_report`) | Daniel puede responder "¿qué hizo el sistema esta semana y cuánto costó?" sin preguntarme |
+| **M3 — Fase TikTok (5 pasos del board)** | Publisher tercero + credenciales seguras + cuenta de PRUEBA + monitoreo + validación E2E; historia asistida; luego cuenta real | 1 semana publicando en cuenta de prueba con FPY y ledger limpios → go/no-go del board para cuenta real |
+| **M4 — TTV y onboarding** | Instrumentar TTV (evento install→primer resultado); empaquetar onboarding (intake del Brand Brain guiado); ensayo completo con tenant demo (Andex) midiendo TTV real | TTV medido y publicado; onboarding reproducible sin artesanía |
+
+**Pospuesto a versión posterior (regla #24):** comunidad (F5), canal SEO (F6),
+Profession Brain/CEO etapa 1 (F7), experimentos de costo (Haiku A/B, Batch API),
+mejoras del motor de aprendizaje. **Acciones no técnicas en paralelo (👤):**
+separación corporativa; ficha técnica del producto al Brand Brain; OKRs
+numéricos del charter.
 
 ## Fase 4 — Autonomía L1 + dashboard + self-report
 
@@ -291,6 +329,7 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 
 | Fase | Fecha | Decisión sobre VER-OS | Acta |
 |---|---|---|---|
+| F3 | 2026-07-10 | **Sin cambios a v0.1.** Propuesta de acta (pendiente 👤): motor de aprendizaje completo y validado de forma falsable; FPY real 67% como baseline de producción. **Candidatos a v1.0:** (1) los objetivos de negocio como dimensión de segmentación del conocimiento son generalizables a cualquier departamento; (2) validar motores de decisión contra simuladores con ground-truth sembrado + control negativo = patrón estándar VER-OS; (3) derivar parámetros de los datos (no pasarlos) elimina clases enteras de bugs de desalineación. **Board pivota a VALOR (reglas #24-25): motor congelado, etapa MVP aprobada, KPI TTV.** | demo F3.7 + revisión ejecutiva |
 | F2 | 2026-07-10 | **Sin cambios a v0.1.** Board aprobó formalmente (4 condiciones cumplidas). **Promovido a v1.0:** (1) los pipelines largos se construyen como colas persistentes y resumibles POR DEFECTO; (2) todo revisor LLM usa contrato blockers/mejoras + pruebas adversariales periódicas de calibración. Directrices nuevas para F3: métricas con propósito (#16), Analista conservador (#17), KPI Learning Velocity (#18). | Demo E2E por la cola (FPY 1.0, $0.115/2 piezas) |
 | F1 | 2026-07-09 | **Sin cambios a v0.1.** Veredicto del board: el rechazo 10/10 del lote demuestra que el estándar funciona ("me da más confianza que aprobar contenido mediocre"); el problema es de ITERACIÓN, no de pipeline ni arquitectura. Decisiones: F2 arranca con el ciclo de reparación (flujo Generador→Gate→Feedback→Reparación→Gate, máx 2 reparaciones, todo registrado); **FPY = KPI principal, objetivo >80%**; OffthreadVideo y cola persistente ANTES del scheduler; honestidad como política permanente. Aprendizajes → backlog v1.0: persistencia de artefactos de dominio desde F0 del departamento; colas resumibles como norma para pipelines largos. | `docs/retro-fase1.md` |
 | F0 | 2026-07-06 | **Sin cambios a v0.1.** Ratificadas las 3 decisiones de implementación: (1) SQLite por tenant con enforcement del motor (camino limpio a Postgres+RLS en H2); (2) validador de contratos propio, con la condición de señalar ANTES de ampliarlo si empieza a replicar jsonschema (regla permanente #6); (3) idempotencia por claims. **Aprendizaje promovido al backlog de v1.0:** la separación registro-de-metering (best-effort, jamás lanza) vs enforcement-de-presupuesto (duro, antes de gastar) entra al estándar como aprendizaje extraído, no como supuesto. | Board aprobó cierre; 5 reglas permanentes nuevas (arriba) |
@@ -306,6 +345,15 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 | `TenantStore` es single-process (lock de hilos, no cross-proceso) — coherente con el "1 worker deliberado" de la plataforma | Concurrencia futura | Baja | H2, junto con Postgres |
 | `health()` no emite heartbeat a ningún control plane (no existe aún) | Observabilidad de flota | Baja | F7 (control plane) |
 | Sin CLI de inspección de journal/eventos (solo API Python y demo) | DX/auditoría manual | Baja | F4 (dashboard los expone) |
+
+### Creada en F3
+
+| Deuda | Impacto | Prioridad | Resolver en |
+|---|---|---|---|
+| Pesos de leads/sales con PROXIES (saves/comments) hasta el contrato `LeadOutcome` | El "valor comercial" es aproximado | Media | Fase TikTok (métricas reales) + departamento Comercial (conversión real) |
+| `objective_by_pillar` vive como parámetro, no como dato del tenant | Onboarding manual | Media | M1 (mover a `tenants/<slug>/marketing.yaml`) |
+| FPY real 67% < objetivo 80% (briefs nuevos) | Calidad de primera pasada | Media | Etapa MVP: analizar los 2 rechazos de 1er intento y ajustar prompt/gate con evidencia |
+| Todo el aprendizaje validado SOLO contra simulador | El riesgo #1 del proyecto | **Alta** | M3 (primeras métricas reales) — no hay atajo honesto |
 
 ### Creada en F2
 

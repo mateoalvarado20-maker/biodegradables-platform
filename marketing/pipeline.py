@@ -20,7 +20,7 @@ from marketing.gate import review_package
 from marketing.guionista import ScriptBrief
 from marketing.models import ContentPackage, PlatformProfile
 from marketing.queue import ContentQueue
-from marketing.render_video import render_package
+from marketing.render_video import cleanup_staging, render_package
 from marketing.repair import RepairResult, generate_with_repair
 from marketing.tts import synthesize_package
 from org.kernel.department import Department
@@ -102,6 +102,7 @@ def advance(
             llm_call=services.review_llm_call,
         )
         queue.save(package)  # status: qa_approved | qa_rejected
+        cleanup_staging(package.package_id)  # F3.9: el staging no sobrevive al gate
         return package
 
     return package  # terminal o fuera del alcance del runner (scheduled/published)

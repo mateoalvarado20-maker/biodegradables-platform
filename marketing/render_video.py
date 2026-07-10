@@ -64,6 +64,13 @@ def _real_runner(args: list[str]) -> None:
         raise RenderError(f"remotion {args[0]} falló (exit {result.returncode}): {result.stderr[-2000:]}")
 
 
+def cleanup_staging(package_id: str) -> None:
+    """Borra el staging de un package (F3.9 — deuda F1/F2: el disco no crece
+    sin límite). Se llama tras el gate final; los assets fuente siguen en el
+    out_dir del pipeline y el MP4/PNG final ya salió de aquí."""
+    shutil.rmtree(RENDER_DIR / "public" / package_id, ignore_errors=True)
+
+
 def _scene_assets(package: ContentPackage, kind: str) -> dict[int, AssetRef]:
     return {
         a.scene_index: a
