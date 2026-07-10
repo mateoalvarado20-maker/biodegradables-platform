@@ -68,11 +68,18 @@ El registro de esas revisiones vive al final de este archivo.
     playbook por un experimento exitoso único; todo cambio importante exige
     evidencia suficiente y nivel de confianza definido (y los estratégicos se
     PROPONEN al board — regla #9).
-18. **(2026-07-10) KPI Learning Velocity (LV):** medir qué tan rápido aprende
-    el sistema, no solo cuánto produce — hipótesis evaluadas / confirmadas /
-    descartadas, modificaciones reales del playbook, e impacto de cada
-    aprendizaje en los indicadores posteriores. KPI principal de valor de
-    VER-IA como plataforma.
+18. **(2026-07-10) KPIs de aprendizaje — Learning Velocity + Learning Accuracy:**
+    LV mide qué tan rápido aprende el sistema (hipótesis evaluadas / confirmadas
+    / descartadas, modificaciones reales del playbook, impacto posterior de cada
+    aprendizaje). **LA mide qué tan CORRECTAMENTE aprende**: % de hipótesis
+    confirmadas que siguen siendo correctas cuando llegan más datos. LV nunca se
+    reporta sin LA — no se premia aprender rápido lo que luego hay que corregir.
+19. **(2026-07-10) El sistema debe saber cuándo no sabe:** el Analista tiene 4
+    veredictos (confirmada / rechazada / inconclusa / requiere más datos) y
+    prefiere "no hay evidencia suficiente" antes que un aprendizaje falso. Toda
+    conclusión incluye explícitamente: nivel de confianza, tamaño de muestra,
+    evidencia utilizada, posibles factores de confusión, y qué datos
+    adicionales subirían la confianza.
 
 ---
 
@@ -217,11 +224,11 @@ integración sin tocar el motor (mismo puerto).
 | ID | Tarea | Criterio | Estado |
 |---|---|---|---|
 | F3.1 | Métricas con propósito: puerto `MetricsSource` + snapshots persistidos donde CADA campo está mapeado a su pregunta de negocio (regla #16, mapa `PURPOSES` en `marketing/metrics.py`) + simulador `BiasedSimulator` con sesgos configurables, determinista, con curva de maduración | Campo sin pregunta → no se puede almacenar (validado); snapshots en serie temporal | ✅ 2026-07-10 (watch-time documentado como NO disponible, no olvidado) |
-| F3.2 | Scoring normalizado por edad del post y franja + atribución a labels/hipótesis | Score reproducible y testeado; sin señal de watch-time (límite de plataforma documentado) | ⬜ |
-| F3.3 | Registro de experimentos: hipótesis → piezas → resultados → veredicto (confirmada/descartada/evidencia-insuficiente) con niveles de confianza definidos | Veredictos solo con n mínimo; todo con procedencia | ⬜ |
+| F3.2 | Scoring normalizado (`marketing/scoring.py`): views proyectadas por curva de maduración + engagement ponderado por poder predictivo (shares 3.0 > comments 2.0 > saves 1.5 > likes 1.0; followers 4.0); mínimo 12 h de señal | Score reproducible y testeado; sin watch-time (límite documentado) | ✅ 2026-07-10 |
+| F3.3 | Registro de experimentos (`marketing/experiments.py`) con los 4 veredictos de la regla #19 computados por t de Welch conservadora (sin LLM, sin deps nuevas): n≥5 por grupo, \|t\|≥2 media / ≥3 alta, efecto ≤10% con muestra = rechazada, detección de confusores (baja la confianza), historial append-only por hipótesis (base del KPI LA) | Sesgo sembrado → confirmada; sin sesgo → NO confirmada (control negativo); n chico → requiere_más_datos aunque el sesgo sea enorme | ✅ 2026-07-10 (6 tests de veredictos + confusores + historial) |
 | F3.4 | Analista CONSERVADOR (#17): propone cambios de playbook solo con evidencia suficiente (n≥5, confianza definida, decay temporal); cambios versionados; los estratégicos se proponen al board | **Descubre el sesgo sembrado del simulador y NO "descubre" sesgos inexistentes** (control negativo) | ⬜ |
 | F3.5 | Planificador 80/20: genera briefs variados desde pilares+playbook (explota 80 / explora 20) | Distribución verificada; **FPY de producción medido con briefs nuevos** (deuda F2) | ⬜ |
-| F3.6 | KPI Learning Velocity (#18): hipótesis evaluadas/confirmadas/descartadas, cambios reales de playbook, impacto posterior de cada aprendizaje | LV consultable por mes; entra al self-report | ⬜ |
+| F3.6 | KPIs Learning Velocity + Learning Accuracy (#18): hipótesis evaluadas/confirmadas/descartadas, cambios reales de playbook, impacto posterior; LA = % de confirmadas que sobreviven a más datos | LV y LA consultables por mes, SIEMPRE juntos; entran al self-report | ⬜ |
 | F3.7 | Primer ciclo cerrado: métrica (simulada) → veredicto → regla de playbook → brief del Planificador influido por la regla | Journal lo evidencia end-to-end | ⬜ |
 | F3.8 | Tarjeta diaria de historia asistida (asset+caption listos vía bot Teams) | Entrega diaria + métrica de cumplimiento | ⬜ (requiere integración con el bot — evaluar si pasa a F4 junto al dashboard) |
 | F3.9 | Limpieza de `render/public/` post-gate (deuda F1/F2) | Staging no crece sin límite | ⬜ |
