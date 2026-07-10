@@ -170,6 +170,15 @@ completo — y solo después, cuentas reales. Las tareas F2.1–F2.6 originales
 (publisher/ledger/scheduler/L0) se reprograman a esa fase. Las acciones humanas
 "cuenta Zernio/Buffer + cuenta TikTok de prueba" dejan de ser pendientes activos.
 
+**Demostración funcional de cierre de F2 (2026-07-10):** 2 briefs reales (video +
+carrusel) por el flujo completo SOBRE LA COLA: submit (reparación) →
+`run_pending` → gate final. Ambos `copy_approved` al 1er intento (FPY 1.0) y
+ambos `qa_approved`: video 27.9 MB + portada, carrusel 7 slides. Costo total
+$0.115, 10.9 min. Archivos: `~/.ver-os/demo-f2/`.
+
+**F2 CERRADA (alcance redefinido = F2.0; publicación diferida por el board)** —
+pendiente veredicto 👤 de la revisión técnica de fase.
+
 ### F2.1+ — continúa el desarrollo interno según roadmap (sin publicar)
 
 | ID | Tarea | Depende de | Criterio | Estado |
@@ -236,7 +245,17 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 | `health()` no emite heartbeat a ningún control plane (no existe aún) | Observabilidad de flota | Baja | F7 (control plane) |
 | Sin CLI de inspección de journal/eventos (solo API Python y demo) | DX/auditoría manual | Baja | F4 (dashboard los expone) |
 
-### Creada en F1 (fase abierta — se consolida al cierre)
+### Creada en F2
+
+| Deuda | Impacto | Prioridad | Resolver en |
+|---|---|---|---|
+| La sonda de calibración usa API real y es manual (no corre en CI) | Riesgo de olvidarla tras un cambio de rúbrica | Media | F4 (job opcional en CI con secret, o checklist de PR) |
+| Duración en borrador = estimación a 2.6 palabras/s (la real la mide el TTS) | Desvío estimado-vs-real posible en guiones atípicos | Baja | Vigilar con telemetría (`speech_ms` vs estimado); ajustar la constante con datos |
+| Cola single-process (sin lease multi-worker) — coherente con el "1 worker deliberado" de la plataforma | Concurrencia futura | Baja | H2 (junto con Postgres) |
+| `render/public/` sigue sin limpieza (0.6 GB acumulados; deuda F1 arrastrada) | Disco | Media | F3 (limpieza post-gate-final en el runner) |
+| FPY medido con los mismos 10 briefs de calibración | El 100% no es todavía un FPY de producción | Media | F3 (el Planificador genera briefs variados; FPY continuo) |
+
+### Creada en F1
 
 | Deuda | Impacto | Prioridad | Resolver en |
 |---|---|---|---|
