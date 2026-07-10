@@ -64,7 +64,10 @@ def test_ciclo_descubre_sesgo_y_crea_regla_experimental(env):
 
 def test_control_negativo_no_toca_el_playbook(env):
     dept, playbook, registry, km = env
-    sim = BiasedSimulator(biases={})
+    # noise=0: el control negativo testea el CAMINO LÓGICO de forma determinista
+    # (con ruido y ~2 hipótesis a α≈5%, un falso positivo ocasional es esperable;
+    # en producción lo absorbe la escalera de madurez del KM: exige rachas)
+    sim = BiasedSimulator(biases={}, noise=0.0)
     _, proposals, _, _ = _ciclo(dept, playbook, registry, km, sim)
     assert proposals == []
     assert playbook.rules() == {}

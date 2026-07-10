@@ -90,6 +90,16 @@ El registro de esas revisiones vive al final de este archivo.
     durante meses. Todo cambio es reversible con historial completo (quién
     propuso, con qué evidencia, qué la validó, cuándo/por qué cambió, qué
     impacto produjo).
+21. **(2026-07-10) Toda capa nueva de arquitectura justifica su valor:** si una
+    funcionalidad no mejora calidad del contenido, velocidad de producción,
+    costos, capacidad de aprendizaje, facilidad de venta de VER-IA o
+    mantenibilidad — se deja para una versión futura. La arquitectura base de
+    aprendizaje se considera suficiente; el foco pasa al PRODUCTO.
+22. **(2026-07-10) Contenido con propósito:** cada pieza existe porque ayuda a
+    vender más o porque ayuda al sistema a aprender algo nuevo — nunca por
+    generar volumen. El Planificador debe poder responder: qué publicar mañana,
+    por qué, qué hipótesis valida, qué conocimiento explota, qué % explora, y
+    qué se aprende aunque la pieza tenga pocas views.
 
 ---
 
@@ -237,7 +247,7 @@ integración sin tocar el motor (mismo puerto).
 | F3.2 | Scoring normalizado (`marketing/scoring.py`): views proyectadas por curva de maduración + engagement ponderado por poder predictivo (shares 3.0 > comments 2.0 > saves 1.5 > likes 1.0; followers 4.0); mínimo 12 h de señal | Score reproducible y testeado; sin watch-time (límite documentado) | ✅ 2026-07-10 |
 | F3.3 | Registro de experimentos (`marketing/experiments.py`) con los 4 veredictos de la regla #19 computados por t de Welch conservadora (sin LLM, sin deps nuevas): n≥5 por grupo, \|t\|≥2 media / ≥3 alta, efecto ≤10% con muestra = rechazada, detección de confusores (baja la confianza), historial append-only por hipótesis (base del KPI LA) | Sesgo sembrado → confirmada; sin sesgo → NO confirmada (control negativo); n chico → requiere_más_datos aunque el sesgo sea enorme | ✅ 2026-07-10 (6 tests de veredictos + confusores + historial) |
 | F3.4 | Trío de conocimiento (regla #20): **Analista** (`analista.py` — observa/evalúa/PROPONE con los 8 campos; test de capas: no puede ni importar el playbook) → **Knowledge Manager** (`knowledge.py` — política determinista: crear=experimental; promoción solo con 2/4 confirmaciones consecutivas; degradación asimétrica: experimental muere directo, consolidada baja de a un nivel) → **Playbook** (`playbook.py` — revisiones append-only, madurez experimental→validada→consolidada→obsoleta, revert sin perder historial, peso por madurez para el Planificador) | **Descubre el sesgo sembrado y NO "descubre" sesgos inexistentes** (control negativo) | ✅ 2026-07-10 (8 tests: ciclo completo, escalera de madurez, contradicción, revert, capas) |
-| F3.5 | Planificador 80/20: genera briefs variados desde pilares+playbook (explota 80 / explora 20) | Distribución verificada; **FPY de producción medido con briefs nuevos** (deuda F2) | ⬜ |
+| F3.5 | Planificador como Media Manager (regla #22, `marketing/planner.py`): cada brief con propósito explícito — **explotar** reglas del playbook ponderadas por madurez (su hipótesis re-testea la regla → alimenta LA) o **explorar** produciendo exactamente los datos que el registro declaró faltantes (agenda = veredictos requiere_más_datos/inconclusa + catálogo sin medir); sin playbook → 100% exploración honesta; `explain()` responde las 6 preguntas del board; determinista, sin LLM | Distribución 80/20 verificada; todo brief con propósito completo | ✅ 2026-07-10 (+fix regla #19: los valores sub-muestreados ahora SÍ se registran como requiere_más_datos — antes el Analista los saltaba sin dejar constancia) — **FPY con briefs nuevos pendiente en F3.7 (demo)** |
 | F3.6 | KPIs Learning Velocity + Learning Accuracy (#18): hipótesis evaluadas/confirmadas/descartadas, cambios reales de playbook, impacto posterior; LA = % de confirmadas que sobreviven a más datos | LV y LA consultables por mes, SIEMPRE juntos; entran al self-report | ⬜ |
 | F3.7 | Primer ciclo cerrado: métrica (simulada) → veredicto → regla de playbook → brief del Planificador influido por la regla | Journal lo evidencia end-to-end | ⬜ |
 | F3.8 | Tarjeta diaria de historia asistida (asset+caption listos vía bot Teams) | Entrega diaria + métrica de cumplimiento | ⬜ (requiere integración con el bot — evaluar si pasa a F4 junto al dashboard) |

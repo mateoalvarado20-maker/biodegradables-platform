@@ -77,8 +77,10 @@ def test_sesgo_sembrado_se_confirma(dept):
 
 
 def test_control_negativo_no_confirma(dept):
-    """Sin sesgo sembrado, el sistema NO debe 'descubrir' un aprendizaje."""
-    sim = BiasedSimulator(biases={})
+    """Sin sesgo sembrado, el sistema NO debe 'descubrir' un aprendizaje.
+    noise=0 para determinismo (los falsos positivos estadísticos de producción
+    los absorbe la escalera de madurez del Knowledge Manager)."""
+    sim = BiasedSimulator(biases={}, noise=0.0)
     c = evaluate_hypothesis("hook_type", "pregunta", _scored(dept, sim, 8, 8))
     assert c.verdict != "confirmada"
     assert c.verdict in ("rechazada", "inconclusa", "requiere_mas_datos")

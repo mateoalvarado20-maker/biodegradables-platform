@@ -49,13 +49,17 @@ class ChangeProposal:
 def _candidate_values(
     scored: list[tuple[ContentPackage, PieceScore]], dimension: str
 ) -> list[str]:
+    """Valores con presencia mínima en ambos grupos. OJO: el umbral es bajo
+    (2) a propósito — los valores sub-muestreados TAMBIÉN se evalúan, para que
+    el veredicto 'requiere_mas_datos' quede REGISTRADO (regla #19: saber cuándo
+    no sabe incluye dejar constancia) y alimente la agenda de exploración del
+    Planificador. El rigor del veredicto lo pone evaluate_hypothesis."""
     counts: dict[str, int] = {}
     for p, _ in scored:
         v = getattr(p.labels, dimension)
         counts[v] = counts.get(v, 0) + 1
-    # solo valores con muestra mínima Y con "resto" suficiente
     total = len(scored)
-    return [v for v, n in counts.items() if n >= MIN_N_PER_GROUP and total - n >= MIN_N_PER_GROUP]
+    return [v for v, n in counts.items() if n >= 2 and total - n >= 2]
 
 
 def _proposal_from(

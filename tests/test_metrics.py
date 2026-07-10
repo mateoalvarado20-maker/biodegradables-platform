@@ -100,7 +100,7 @@ def test_sesgo_sembrado_es_detectable(dept):
 
 def test_sin_sesgo_no_hay_separacion_sistematica(dept):
     """Control negativo: sin sesgo sembrado, las medias deben ser comparables."""
-    sim = BiasedSimulator(biases={})
+    sim = BiasedSimulator(biases={}, noise=0.0)
     grupo_a = [_pkg(dept, hook_type="pregunta") for _ in range(8)]
     grupo_b = [_pkg(dept, hook_type="lista") for _ in range(8)]
     media_a = sum(sim(p, 48.0).values["views"] for p in grupo_a) / 8
