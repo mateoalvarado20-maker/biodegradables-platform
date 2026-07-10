@@ -60,6 +60,19 @@ El registro de esas revisiones vive al final de este archivo.
     insuficiente y se intenta REFUTAR (prueba adversarial, más volumen, datos
     nuevos) antes de aceptar la conclusión. Referencia: sonda adversarial del
     revisor (run 3 FPY).
+16. **(2026-07-10, F3) Métricas con propósito:** toda métrica almacenada debe
+    responder, tarde o temprano, una pregunta de negocio (¿qué hook retiene?,
+    ¿qué CTA convierte?, ¿qué pilar/horario/duración rinde?). Dato sin decisión
+    asociada = dato que se cuestiona antes de almacenarse.
+17. **(2026-07-10, F3) Analista conservador:** ningún cambio automático del
+    playbook por un experimento exitoso único; todo cambio importante exige
+    evidencia suficiente y nivel de confianza definido (y los estratégicos se
+    PROPONEN al board — regla #9).
+18. **(2026-07-10) KPI Learning Velocity (LV):** medir qué tan rápido aprende
+    el sistema, no solo cuánto produce — hipótesis evaluadas / confirmadas /
+    descartadas, modificaciones reales del playbook, e impacto de cada
+    aprendizaje en los indicadores posteriores. KPI principal de valor de
+    VER-IA como plataforma.
 
 ---
 
@@ -176,8 +189,8 @@ carrusel) por el flujo completo SOBRE LA COLA: submit (reparación) →
 ambos `qa_approved`: video 27.9 MB + portada, carrusel 7 slides. Costo total
 $0.115, 10.9 min. Archivos: `~/.ver-os/demo-f2/`.
 
-**F2 CERRADA (alcance redefinido = F2.0; publicación diferida por el board)** —
-pendiente veredicto 👤 de la revisión técnica de fase.
+**FASE 2 CERRADA — 2026-07-10** (aprobación formal del board: 4 condiciones de
+cierre cumplidas; 2 aprendizajes promovidos a VER-OS v1.0).
 
 ### F2.1+ — continúa el desarrollo interno según roadmap (sin publicar)
 
@@ -191,17 +204,28 @@ pendiente veredicto 👤 de la revisión técnica de fase.
 | F2.6 | 1 semana a 2 videos/día en cuenta de prueba sin incidentes | F2.1–F2.5 | Ledger limpio, 0 duplicados, 0 huérfanos | ⬜ |
 | F2.7 | Revisión técnica de fase | todo F2 | Acta | ⬜ 👤 |
 
-## Fase 3 — Ciclo de aprendizaje
+## Fase 3 — Ciclo de aprendizaje 🔨 EN CURSO
+
+**Directrices del board para toda la fase:** métricas con propósito (#16),
+Analista conservador (#17), KPI Learning Velocity (#18). Como la publicación
+está diferida, el motor se valida contra un **simulador de métricas con sesgos
+sembrados conocidos**: el criterio de aprendizaje es objetivo — el Analista
+debe DESCUBRIR el sesgo que nosotros plantamos, con la evidencia y confianza
+exigidas. El `MetricsSource` real de TikTok se enchufa en la fase de
+integración sin tocar el motor (mismo puerto).
 
 | ID | Tarea | Criterio | Estado |
 |---|---|---|---|
-| F3.1 | `MetricsSource` TikTok (views/likes/comments/shares + followers) con snapshots | Serie temporal por post en DB | ⬜ |
-| F3.2 | Scoring normalizado por hora/edad + experiment registry | Score reproducible en test | ⬜ |
-| F3.3 | Analista: actualización de playbook CON procedencia (regla→exp_ids→confianza) | Ninguna regla sin evidencia n≥5; decay temporal | ⬜ |
-| F3.4 | Asignación 80/20 explota/explora en el Planificador | Distribución verificada en test | ⬜ |
-| F3.5 | Tarjeta diaria de historia asistida (asset+caption listos) | Entrega 18:00 + métrica de cumplimiento | ⬜ |
-| F3.6 | Primer ciclo cerrado métrica→regla→post mejorado | Journal lo evidencia end-to-end | ⬜ |
-| F3.7 | Revisión técnica de fase | Acta | ⬜ 👤 |
+| F3.1 | Métricas con propósito: puerto `MetricsSource` + snapshots persistidos donde CADA campo está mapeado a su pregunta de negocio (regla #16, mapa `PURPOSES` en `marketing/metrics.py`) + simulador `BiasedSimulator` con sesgos configurables, determinista, con curva de maduración | Campo sin pregunta → no se puede almacenar (validado); snapshots en serie temporal | ✅ 2026-07-10 (watch-time documentado como NO disponible, no olvidado) |
+| F3.2 | Scoring normalizado por edad del post y franja + atribución a labels/hipótesis | Score reproducible y testeado; sin señal de watch-time (límite de plataforma documentado) | ⬜ |
+| F3.3 | Registro de experimentos: hipótesis → piezas → resultados → veredicto (confirmada/descartada/evidencia-insuficiente) con niveles de confianza definidos | Veredictos solo con n mínimo; todo con procedencia | ⬜ |
+| F3.4 | Analista CONSERVADOR (#17): propone cambios de playbook solo con evidencia suficiente (n≥5, confianza definida, decay temporal); cambios versionados; los estratégicos se proponen al board | **Descubre el sesgo sembrado del simulador y NO "descubre" sesgos inexistentes** (control negativo) | ⬜ |
+| F3.5 | Planificador 80/20: genera briefs variados desde pilares+playbook (explota 80 / explora 20) | Distribución verificada; **FPY de producción medido con briefs nuevos** (deuda F2) | ⬜ |
+| F3.6 | KPI Learning Velocity (#18): hipótesis evaluadas/confirmadas/descartadas, cambios reales de playbook, impacto posterior de cada aprendizaje | LV consultable por mes; entra al self-report | ⬜ |
+| F3.7 | Primer ciclo cerrado: métrica (simulada) → veredicto → regla de playbook → brief del Planificador influido por la regla | Journal lo evidencia end-to-end | ⬜ |
+| F3.8 | Tarjeta diaria de historia asistida (asset+caption listos vía bot Teams) | Entrega diaria + métrica de cumplimiento | ⬜ (requiere integración con el bot — evaluar si pasa a F4 junto al dashboard) |
+| F3.9 | Limpieza de `render/public/` post-gate (deuda F1/F2) | Staging no crece sin límite | ⬜ |
+| F3.10 | Demo funcional + revisión técnica de fase | Acta | ⬜ 👤 |
 
 ## Fase 4 — Autonomía L1 + dashboard + self-report
 
@@ -230,6 +254,7 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 
 | Fase | Fecha | Decisión sobre VER-OS | Acta |
 |---|---|---|---|
+| F2 | 2026-07-10 | **Sin cambios a v0.1.** Board aprobó formalmente (4 condiciones cumplidas). **Promovido a v1.0:** (1) los pipelines largos se construyen como colas persistentes y resumibles POR DEFECTO; (2) todo revisor LLM usa contrato blockers/mejoras + pruebas adversariales periódicas de calibración. Directrices nuevas para F3: métricas con propósito (#16), Analista conservador (#17), KPI Learning Velocity (#18). | Demo E2E por la cola (FPY 1.0, $0.115/2 piezas) |
 | F1 | 2026-07-09 | **Sin cambios a v0.1.** Veredicto del board: el rechazo 10/10 del lote demuestra que el estándar funciona ("me da más confianza que aprobar contenido mediocre"); el problema es de ITERACIÓN, no de pipeline ni arquitectura. Decisiones: F2 arranca con el ciclo de reparación (flujo Generador→Gate→Feedback→Reparación→Gate, máx 2 reparaciones, todo registrado); **FPY = KPI principal, objetivo >80%**; OffthreadVideo y cola persistente ANTES del scheduler; honestidad como política permanente. Aprendizajes → backlog v1.0: persistencia de artefactos de dominio desde F0 del departamento; colas resumibles como norma para pipelines largos. | `docs/retro-fase1.md` |
 | F0 | 2026-07-06 | **Sin cambios a v0.1.** Ratificadas las 3 decisiones de implementación: (1) SQLite por tenant con enforcement del motor (camino limpio a Postgres+RLS en H2); (2) validador de contratos propio, con la condición de señalar ANTES de ampliarlo si empieza a replicar jsonschema (regla permanente #6); (3) idempotencia por claims. **Aprendizaje promovido al backlog de v1.0:** la separación registro-de-metering (best-effort, jamás lanza) vs enforcement-de-presupuesto (duro, antes de gastar) entra al estándar como aprendizaje extraído, no como supuesto. | Board aprobó cierre; 5 reglas permanentes nuevas (arriba) |
 
