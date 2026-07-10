@@ -89,6 +89,7 @@ def test_sintesis_rechaza_package_sin_escenas(dept, tmp_path):
             format="carousel",
             time_slot="18:00-21:00",
             cta_type="contacto",
+            objective="leads",
         ),
         hypothesis=Hypothesis(
             question="¿pregunta suficientemente larga?",

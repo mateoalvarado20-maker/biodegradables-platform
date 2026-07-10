@@ -76,9 +76,11 @@ class DailyPlan:
         return "\n".join(lineas)
 
 
-def _exploration_agenda(latest_verdicts: dict[str, dict], rules: list[dict]) -> list[dict]:
+def _exploration_agenda(
+    latest_verdicts: dict[str, dict], rules: list[dict], default_objective: str
+) -> list[dict]:
     """Los huecos de evidencia, priorizados: requiere_mas_datos > inconclusa >
-    valores del catálogo jamás medidos."""
+    valores del catálogo jamás medidos. Cada entrada lleva su objetivo (#23)."""
     agenda = [v for v in latest_verdicts.values() if v["verdict"] == "requiere_mas_datos"]
     agenda += [v for v in latest_verdicts.values() if v["verdict"] == "inconclusa"]
     conocidos = {v["hypothesis_key"] for v in latest_verdicts.values()}
@@ -89,6 +91,7 @@ def _exploration_agenda(latest_verdicts: dict[str, dict], rules: list[dict]) -> 
                 agenda.append(
                     {
                         "hypothesis_key": f"{dim}={value}",
+                        "objective": None,  # se asigna por pilar al armar el brief
                         "verdict": "sin_medir",
                         "next_data_needed": f"primeras {MIN_N_PER_GROUP} piezas con {dim}={value}",
                     }
@@ -96,10 +99,10 @@ def _exploration_agenda(latest_verdicts: dict[str, dict], rules: list[dict]) -> 
     return agenda
 
 
-def _base_brief(tenant_id, pillar, fmt, hook, cta, slot, hypothesis) -> ScriptBrief:
+def _base_brief(tenant_id, pillar, fmt, hook, cta, slot, objective, hypothesis) -> ScriptBrief:
     return ScriptBrief(
         tenant_id=tenant_id, pillar_id=pillar, format=fmt, hook_type=hook,
-        cta_type=cta, time_slot=slot, hypothesis=hypothesis,
+        cta_type=cta, time_slot=slot, objective=objective, hypothesis=hypothesis,
     )
 
 
@@ -113,15 +116,19 @@ def plan_day(
     profile: PlatformProfile,
     n_briefs: int = 2,
     explore_ratio: float = EXPLORE_RATIO,
+    objective_by_pillar: dict[str, str] | None = None,
+    default_objective: str = "awareness",
     rng: random.Random | None = None,
 ) -> DailyPlan:
     """El plan de mañana. Recibe conocimiento y evidencia como DATOS (regla #20:
-    el Planificador lee, no escribe)."""
+    el Planificador lee, no escribe). `objective_by_pillar` mapea cada pilar a
+    su prioridad de negocio (regla #23) — dato del tenant."""
     if not pillars:
         raise ValueError("sin pilares activos no hay plan (Brand Brain vacío)")
     rng = rng or random.Random(0)
+    obj_map = objective_by_pillar or {}
     slots = list(profile.posting_windows)
-    agenda = _exploration_agenda(latest_verdicts, rules)
+    agenda = _exploration_agenda(latest_verdicts, rules, default_objective)
     n_explore = max(1, round(n_briefs * explore_ratio)) if n_briefs > 1 else (1 if not rules else 0)
     if not rules:
         n_explore = n_briefs  # sin conocimiento aún: todo es aprendizaje honesto
@@ -141,24 +148,25 @@ def plan_day(
         if explorar and agenda:
             target = agenda[i % len(agenda)]
             dim, value = target["hypothesis_key"].split("=", 1)
+            objective = target.get("objective") or obj_map.get(pillar, default_objective)
             hook = value if dim == "hook_type" else rng.choice(CATALOG["hook_type"])
             cta = value if dim == "cta_type" else rng.choice(CATALOG["cta_type"])
             if dim == "pillar":
                 pillar = value
             hyp = Hypothesis(
-                question=f"¿{target['hypothesis_key']} rinde mejor que el resto?",
-                metric="score compuesto",
+                question=f"¿{target['hypothesis_key']} rinde mejor que el resto (objetivo {objective})?",
+                metric=f"score compuesto del objetivo {objective}",
                 success_criteria=f"veredicto del Analista con n≥{MIN_N_PER_GROUP} por grupo",
                 decision_if_true="el Analista propondrá la regla al Knowledge Manager",
                 decision_if_false="descartar la variante y no volver a explorarla pronto",
             )
             planned.append(
                 PlannedBrief(
-                    brief=_base_brief(tenant_id, pillar, fmt, hook, cta, slot, hyp),
+                    brief=_base_brief(tenant_id, pillar, fmt, hook, cta, slot, objective, hyp),
                     intent="explorar",
                     rationale=(
-                        f"el registro marca {target['hypothesis_key']} como "
-                        f"'{target['verdict']}' — esta pieza produce el dato que falta"
+                        f"el registro marca {target['hypothesis_key']} (objetivo {objective}) "
+                        f"como '{target['verdict']}' — esta pieza produce el dato que falta"
                     ),
                     expected_learning=target.get("next_data_needed", "sumar muestra al hueco de evidencia"),
                 )
@@ -180,16 +188,17 @@ def plan_day(
                 dim, value = rule["dimension"], rule["value"]
                 hook = value if dim == "hook_type" else rng.choice(CATALOG["hook_type"])
             usados.add((pillar, hook, fmt))
+            objective = rule["objective"]
             hyp = Hypothesis(
                 question=f"¿la regla {rule['rule_id']} ({rule['status']}) sigue rindiendo con piezas nuevas?",
-                metric="score compuesto",
+                metric=f"score compuesto del objetivo {objective}",
                 success_criteria="mantener el efecto medido en la próxima evaluación",
                 decision_if_true="la racha de confirmaciones sostiene o sube su madurez",
                 decision_if_false="el Analista propondrá degradarla (alimenta el KPI LA)",
             )
             planned.append(
                 PlannedBrief(
-                    brief=_base_brief(tenant_id, pillar, fmt, hook, cta, slot, hyp),
+                    brief=_base_brief(tenant_id, pillar, fmt, hook, cta, slot, objective, hyp),
                     intent="explotar",
                     rationale=(
                         f"aplica {rule['rule_id']} en estado {rule['status']} "

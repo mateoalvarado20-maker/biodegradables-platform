@@ -100,6 +100,16 @@ El registro de esas revisiones vive al final de este archivo.
     generar volumen. El Planificador debe poder responder: qué publicar mañana,
     por qué, qué hipótesis valida, qué conocimiento explota, qué % explora, y
     qué se aprende aunque la pieza tenga pocas views.
+23. **(2026-07-10) Optimizar por impacto de negocio, no por métricas aisladas:**
+    todo experimento lleva PRIORIDAD DE NEGOCIO (awareness / engagement / leads
+    / conversaciones / ventas / fidelización / educación del mercado); el
+    scoring pondera distinto por objetivo y **jamás se comparan piezas con
+    objetivos diferentes como equivalentes** (el Analista segmenta). El
+    aprendizaje es acumulativo: el reporte semanal responde qué aprendimos, qué
+    dejamos de creer, qué reglas nacieron/degradaron, qué experimentos tuvieron
+    mayor retorno de aprendizaje y cuáles generaron valor comercial. El
+    objetivo no es producir mejores videos: es tomar mejores decisiones cada
+    semana que la anterior.
 
 ---
 
@@ -248,7 +258,7 @@ integración sin tocar el motor (mismo puerto).
 | F3.3 | Registro de experimentos (`marketing/experiments.py`) con los 4 veredictos de la regla #19 computados por t de Welch conservadora (sin LLM, sin deps nuevas): n≥5 por grupo, \|t\|≥2 media / ≥3 alta, efecto ≤10% con muestra = rechazada, detección de confusores (baja la confianza), historial append-only por hipótesis (base del KPI LA) | Sesgo sembrado → confirmada; sin sesgo → NO confirmada (control negativo); n chico → requiere_más_datos aunque el sesgo sea enorme | ✅ 2026-07-10 (6 tests de veredictos + confusores + historial) |
 | F3.4 | Trío de conocimiento (regla #20): **Analista** (`analista.py` — observa/evalúa/PROPONE con los 8 campos; test de capas: no puede ni importar el playbook) → **Knowledge Manager** (`knowledge.py` — política determinista: crear=experimental; promoción solo con 2/4 confirmaciones consecutivas; degradación asimétrica: experimental muere directo, consolidada baja de a un nivel) → **Playbook** (`playbook.py` — revisiones append-only, madurez experimental→validada→consolidada→obsoleta, revert sin perder historial, peso por madurez para el Planificador) | **Descubre el sesgo sembrado y NO "descubre" sesgos inexistentes** (control negativo) | ✅ 2026-07-10 (8 tests: ciclo completo, escalera de madurez, contradicción, revert, capas) |
 | F3.5 | Planificador como Media Manager (regla #22, `marketing/planner.py`): cada brief con propósito explícito — **explotar** reglas del playbook ponderadas por madurez (su hipótesis re-testea la regla → alimenta LA) o **explorar** produciendo exactamente los datos que el registro declaró faltantes (agenda = veredictos requiere_más_datos/inconclusa + catálogo sin medir); sin playbook → 100% exploración honesta; `explain()` responde las 6 preguntas del board; determinista, sin LLM | Distribución 80/20 verificada; todo brief con propósito completo | ✅ 2026-07-10 (+fix regla #19: los valores sub-muestreados ahora SÍ se registran como requiere_más_datos — antes el Analista los saltaba sin dejar constancia) — **FPY con briefs nuevos pendiente en F3.7 (demo)** |
-| F3.6 | KPIs Learning Velocity + Learning Accuracy (#18): hipótesis evaluadas/confirmadas/descartadas, cambios reales de playbook, impacto posterior; LA = % de confirmadas que sobreviven a más datos | LV y LA consultables por mes, SIEMPRE juntos; entran al self-report | ⬜ |
+| F3.6 | **Objetivos de negocio en todo el motor (regla #23)** + KPIs LV+LA (`learning_report.py`): `objective` obligatorio en piezas/briefs, scoring con pesos por objetivo (leads/sales con proxies honestos hasta `LeadOutcome`), Analista segmenta por objetivo (mezclar = error), conocimiento por objetivo (`regla:objetivo/dim=valor`); LV (evaluaciones + cambios reales del playbook) SIEMPRE con LA (% de confirmadas que sobreviven — sin re-evaluaciones devuelve None, no 100%); reporte semanal responde las 6 preguntas del board (aprendimos/dejamos de creer/nacidas/degradadas/retorno de aprendizaje/valor comercial) | LV y LA consultables, SIEMPRE juntos; reporte con las 6 preguntas; segmentación E2E testeada | ✅ 2026-07-10 (500 tests) |
 | F3.7 | Primer ciclo cerrado: métrica (simulada) → veredicto → regla de playbook → brief del Planificador influido por la regla | Journal lo evidencia end-to-end | ⬜ |
 | F3.8 | Tarjeta diaria de historia asistida (asset+caption listos vía bot Teams) | Entrega diaria + métrica de cumplimiento | ⬜ (requiere integración con el bot — evaluar si pasa a F4 junto al dashboard) |
 | F3.9 | Limpieza de `render/public/` post-gate (deuda F1/F2) | Staging no crece sin límite | ⬜ |

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS mkt_playbook_revisions (
     action      TEXT NOT NULL,
     dimension   TEXT NOT NULL,
     value       TEXT NOT NULL,
+    objective   TEXT NOT NULL DEFAULT 'awareness',
     proposed_by TEXT NOT NULL,
     decided_by  TEXT NOT NULL,
     rationale   TEXT NOT NULL,
@@ -104,6 +105,7 @@ class Playbook:
         action: str,
         dimension: str,
         value: str,
+        objective: str = "awareness",
         proposed_by: str,
         decided_by: str,
         rationale: str,
@@ -115,9 +117,9 @@ class Playbook:
         revision = (prev["revision"] + 1) if prev else 1
         self._store.execute(
             "INSERT INTO mkt_playbook_revisions"
-            " (rule_id, revision, status, action, dimension, value, proposed_by,"
-            "  decided_by, rationale, evidence, impact_notes, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " (rule_id, revision, status, action, dimension, value, objective,"
+            "  proposed_by, decided_by, rationale, evidence, impact_notes, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 rule_id,
                 revision,
@@ -125,6 +127,7 @@ class Playbook:
                 action,
                 dimension,
                 value,
+                objective,
                 proposed_by,
                 decided_by,
                 rationale,
@@ -154,6 +157,7 @@ class Playbook:
             action=target["action"],
             dimension=target["dimension"],
             value=target["value"],
+            objective=target["objective"],
             proposed_by=target["proposed_by"],
             decided_by=decided_by,
             rationale=f"REVERT a revisión {to_revision}: {reason}",

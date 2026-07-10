@@ -24,8 +24,20 @@ import math
 from dataclasses import dataclass
 
 MIN_AGE_HOURS = 12.0  # antes de esto la señal es puro arranque — no se puntúa
-ENGAGEMENT_WEIGHTS = {"shares": 3.0, "comments": 2.0, "saves": 1.5, "likes": 1.0}
-FOLLOWER_WEIGHT = 4.0
+
+# Pesos por OBJETIVO DE NEGOCIO (regla #23): una pieza de conversación no se
+# mide como una de awareness. HONESTIDAD sobre leads/sales: hasta que llegue
+# el contrato LeadOutcome (conversión real desde Comercial), se aproximan con
+# proxies — saves (intención de referencia/compra) y comments (interés activo).
+OBJECTIVE_WEIGHTS: dict[str, dict[str, float]] = {
+    "awareness": {"shares": 3.0, "comments": 1.5, "saves": 0.5, "likes": 1.0, "follower_delta": 2.0},
+    "engagement": {"shares": 2.0, "comments": 4.0, "saves": 1.0, "likes": 2.0, "follower_delta": 1.0},
+    "conversations": {"shares": 1.0, "comments": 5.0, "saves": 0.5, "likes": 0.5, "follower_delta": 1.0},
+    "leads": {"shares": 1.0, "comments": 2.5, "saves": 3.0, "likes": 0.5, "follower_delta": 2.0},
+    "sales": {"shares": 1.0, "comments": 2.0, "saves": 3.5, "likes": 0.5, "follower_delta": 1.5},
+    "loyalty": {"shares": 1.0, "comments": 3.0, "saves": 1.0, "likes": 2.0, "follower_delta": 4.0},
+    "market_education": {"shares": 2.5, "comments": 1.5, "saves": 3.0, "likes": 0.5, "follower_delta": 1.0},
+}
 
 
 class ScoringError(ValueError):
@@ -47,8 +59,16 @@ class PieceScore:
     sample_note: str = ""
 
 
-def score_piece(package_id: str, latest: dict[str, float], age_hours: float) -> PieceScore:
-    """Score de una pieza desde su último snapshot. Determinista."""
+def score_piece(
+    package_id: str,
+    latest: dict[str, float],
+    age_hours: float,
+    objective: str = "awareness",
+) -> PieceScore:
+    """Score de una pieza desde su último snapshot, ponderado por su OBJETIVO
+    de negocio (regla #23). Determinista."""
+    if objective not in OBJECTIVE_WEIGHTS:
+        raise ScoringError(f"objetivo de negocio desconocido: {objective!r}")
     if age_hours < MIN_AGE_HOURS:
         raise ScoringError(
             f"{package_id}: {age_hours:.0f}h < {MIN_AGE_HOURS:.0f}h — señal demasiado "
@@ -59,10 +79,8 @@ def score_piece(package_id: str, latest: dict[str, float], age_hours: float) -> 
         raise ScoringError(f"{package_id}: sin views en el snapshot — nada que puntuar")
 
     projected = views / maturity_factor(age_hours)
-    weighted = sum(
-        w * float(latest.get(name, 0.0)) for name, w in ENGAGEMENT_WEIGHTS.items()
-    )
-    weighted += FOLLOWER_WEIGHT * float(latest.get("follower_delta", 0.0))
+    weights = OBJECTIVE_WEIGHTS[objective]
+    weighted = sum(w * float(latest.get(name, 0.0)) for name, w in weights.items())
     engagement_rate = weighted / views
     return PieceScore(
         package_id=package_id,

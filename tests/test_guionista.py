@@ -69,6 +69,7 @@ def _brief():
         hook_type="dato",
         cta_type="contacto",
         time_slot="18:00-21:00",
+        objective="leads",
         hypothesis=Hypothesis(
             question="¿Los tips de errores comunes generan más shares que los de beneficios?",
             metric="shares",

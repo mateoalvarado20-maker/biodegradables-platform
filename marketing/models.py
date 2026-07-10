@@ -19,6 +19,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Format = Literal["video", "carousel", "story"]
 
+# Prioridad de negocio de cada pieza/experimento (regla #23 del board):
+# el scoring pondera distinto por objetivo y JAMÁS se comparan piezas con
+# objetivos diferentes como equivalentes.
+Objective = Literal[
+    "awareness",
+    "engagement",
+    "leads",
+    "conversations",
+    "sales",
+    "loyalty",
+    "market_education",
+]
+
 PackageStatus = Literal[
     "draft",
     "copy_approved",  # pasó el gate de copy (pre-producción, ciclo F2.0)
@@ -71,6 +84,7 @@ class ExperimentLabels(StrictModel):
     format: Format
     time_slot: str = Field(pattern=r"^\d{2}:\d{2}-\d{2}:\d{2}$")
     cta_type: str = Field(min_length=2)
+    objective: Objective  # prioridad de negocio — obligatoria (regla #23)
 
 
 class Scene(StrictModel):

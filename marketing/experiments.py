@@ -44,6 +44,7 @@ DIMENSIONS = ("pillar", "hook_type", "format", "time_slot", "cta_type")
 @dataclass(frozen=True)
 class ExperimentConclusion:
     hypothesis_key: str  # p.ej. "hook_type=pregunta"
+    objective: str  # regla #23: los veredictos viven DENTRO de un objetivo
     hypothesis: str
     verdict: Verdict
     confidence: Confidence
@@ -86,19 +87,31 @@ def evaluate_hypothesis(
     value: str,
     scored: list[tuple[ContentPackage, PieceScore]],
 ) -> ExperimentConclusion:
-    """Evalúa "las piezas con <dimension>=<value> rinden mejor que el resto"."""
+    """Evalúa "las piezas con <dimension>=<value> rinden mejor que el resto",
+    DENTRO de un objetivo de negocio (regla #23). El objetivo se DERIVA de las
+    piezas (fuente única de verdad): mezclar objetivos es error, no warning."""
     if dimension not in DIMENSIONS:
         raise ValueError(f"dimensión desconocida: {dimension!r}")
+    if not scored:
+        raise ValueError("sin piezas no hay evaluación")
+    mixed = {p.labels.objective for p, _ in scored}
+    if len(mixed) > 1:
+        raise ValueError(
+            f"regla #23 violada: piezas con objetivos mezclados {sorted(mixed)} — "
+            "segmentar por objetivo antes de evaluar"
+        )
+    objective = next(iter(mixed))
     group = [(p, s) for p, s in scored if getattr(p.labels, dimension) == value]
     rest = [(p, s) for p, s in scored if getattr(p.labels, dimension) != value]
     key = f"{dimension}={value}"
-    hypothesis = f"las piezas con {key} rinden mejor que el resto"
+    hypothesis = f"las piezas con {key} rinden mejor que el resto (objetivo {objective})"
     n_g, n_r = len(group), len(rest)
     sample = {"grupo": n_g, "resto": n_r}
 
     if n_g < MIN_N_PER_GROUP or n_r < MIN_N_PER_GROUP:
         return ExperimentConclusion(
             hypothesis_key=key,
+            objective=objective,
             hypothesis=hypothesis,
             verdict="requiere_mas_datos",
             confidence="baja",
@@ -148,6 +161,7 @@ def evaluate_hypothesis(
 
     return ExperimentConclusion(
         hypothesis_key=key,
+        objective=objective,
         hypothesis=hypothesis,
         verdict=verdict,
         confidence=confidence,
@@ -163,6 +177,7 @@ _DDL = """
 CREATE TABLE IF NOT EXISTS mkt_experiments (
     row_id         INTEGER PRIMARY KEY AUTOINCREMENT,
     hypothesis_key TEXT NOT NULL,
+    objective      TEXT NOT NULL,
     verdict        TEXT NOT NULL,
     confidence     TEXT NOT NULL,
     effect         REAL NOT NULL,
@@ -183,10 +198,11 @@ class ExperimentRegistry:
     def record(self, conclusion: ExperimentConclusion) -> None:
         self._store.execute(
             "INSERT INTO mkt_experiments"
-            " (hypothesis_key, verdict, confidence, effect, payload, evaluated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            " (hypothesis_key, objective, verdict, confidence, effect, payload, evaluated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 conclusion.hypothesis_key,
+                conclusion.objective,
                 conclusion.verdict,
                 conclusion.confidence,
                 conclusion.effect,
@@ -206,18 +222,33 @@ class ExperimentRegistry:
             correlation_id=conclusion.hypothesis_key,
         )
 
-    def history(self, hypothesis_key: str) -> list[dict]:
+    def history(self, hypothesis_key: str, objective: str = "awareness") -> list[dict]:
         return [
             json.loads(r["payload"])
             for r in self._store.query(
                 "SELECT payload FROM mkt_experiments WHERE hypothesis_key = ?"
-                " ORDER BY row_id",
-                (hypothesis_key,),
+                " AND objective = ? ORDER BY row_id",
+                (hypothesis_key, objective),
             )
         ]
 
     def latest_verdicts(self) -> dict[str, dict]:
+        """Último veredicto por (objetivo, hipótesis) — clave 'objetivo/dim=valor'."""
         rows = self._store.query(
-            "SELECT hypothesis_key, payload FROM mkt_experiments ORDER BY row_id"
+            "SELECT hypothesis_key, objective, payload FROM mkt_experiments ORDER BY row_id"
         )
-        return {r["hypothesis_key"]: json.loads(r["payload"]) for r in rows}
+        return {
+            f"{r['objective']}/{r['hypothesis_key']}": json.loads(r["payload"])
+            for r in rows
+        }
+
+    def since(self, iso_date: str) -> list[dict]:
+        """Evaluaciones desde una fecha (para los reportes de aprendizaje)."""
+        return [
+            {**json.loads(r["payload"]), "evaluated_at": r["evaluated_at"]}
+            for r in self._store.query(
+                "SELECT payload, evaluated_at FROM mkt_experiments"
+                " WHERE evaluated_at >= ? ORDER BY row_id",
+                (iso_date,),
+            )
+        ]

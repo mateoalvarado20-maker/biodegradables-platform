@@ -51,6 +51,7 @@ def _brief():
         hook_type="lista",
         cta_type="contacto",
         time_slot="18:00-21:00",
+        objective="leads",
         hypothesis=Hypothesis(
             question="¿la cola persiste y reanuda correctamente?",
             metric="views",

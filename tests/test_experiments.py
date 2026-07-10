@@ -125,9 +125,9 @@ def test_registro_historial_y_journal(dept):
     c2 = evaluate_hypothesis("hook_type", "pregunta", _scored(dept, sim, 8, 8))
     reg.record(c2)
 
-    hist = reg.history("hook_type=pregunta")
+    hist = reg.history("hook_type=pregunta", "leads")  # las piezas del fixture son objetivo leads
     assert [h["verdict"] for h in hist] == ["requiere_mas_datos", "confirmada"]
-    assert reg.latest_verdicts()["hook_type=pregunta"]["verdict"] == "confirmada"
+    assert reg.latest_verdicts()["leads/hook_type=pregunta"]["verdict"] == "confirmada"
     # auditoría: cada evaluación queda en el journal con confusores y datos-que-faltan
     entries = dept.journal.entries()
     assert any("experimento hook_type=pregunta" in e["decision"] for e in entries)

@@ -1,4 +1,4 @@
-"""Tests de F3.4 — Analista propone / Knowledge Manager decide / Playbook
+﻿"""Tests de F3.4 — Analista propone / Knowledge Manager decide / Playbook
 versionado con madurez (regla #20). Validado contra el simulador sesgado."""
 
 import pytest
@@ -54,7 +54,7 @@ def test_ciclo_descubre_sesgo_y_crea_regla_experimental(env):
     _, proposals, decisions, _ = _ciclo(dept, playbook, registry, km, sim)
 
     assert any(p.dimension == "hook_type" and p.value == "pregunta" for p in proposals)
-    regla = playbook.get("regla:hook_type=pregunta")
+    regla = playbook.get("regla:leads/hook_type=pregunta")
     assert regla is not None and regla["status"] == "experimental"
     # los 8 campos de la propuesta viajaron al journal
     refs = " ".join(r for e in dept.journal.entries() for r in e["context_refs"])
@@ -78,15 +78,15 @@ def test_madurez_experimental_a_validada_a_consolidada(env):
     sim = BiasedSimulator(biases={("hook_type", "pregunta"): 2.0})
     # ciclo 1: crea experimental (1 confirmación)
     _ciclo(dept, playbook, registry, km, sim)
-    assert playbook.get("regla:hook_type=pregunta")["status"] == "experimental"
+    assert playbook.get("regla:leads/hook_type=pregunta")["status"] == "experimental"
     # ciclo 2: 2 confirmaciones consecutivas → validada
     _ciclo(dept, playbook, registry, km, sim)
-    assert playbook.get("regla:hook_type=pregunta")["status"] == "validada"
+    assert playbook.get("regla:leads/hook_type=pregunta")["status"] == "validada"
     # ciclos 3-4: 4 consecutivas → consolidada (nunca se salta niveles)
     _ciclo(dept, playbook, registry, km, sim)
-    assert playbook.get("regla:hook_type=pregunta")["status"] == "validada"
+    assert playbook.get("regla:leads/hook_type=pregunta")["status"] == "validada"
     _ciclo(dept, playbook, registry, km, sim)
-    assert playbook.get("regla:hook_type=pregunta")["status"] == "consolidada"
+    assert playbook.get("regla:leads/hook_type=pregunta")["status"] == "consolidada"
 
 
 def test_contradiccion_degrada_de_a_un_nivel(env):
@@ -94,12 +94,12 @@ def test_contradiccion_degrada_de_a_un_nivel(env):
     sim = BiasedSimulator(biases={("hook_type", "pregunta"): 2.0})
     for _ in range(4):  # hasta consolidada
         _ciclo(dept, playbook, registry, km, sim)
-    assert playbook.get("regla:hook_type=pregunta")["status"] == "consolidada"
+    assert playbook.get("regla:leads/hook_type=pregunta")["status"] == "consolidada"
     # el mundo cambia: ahora el sesgo se invierte
     sim_invertido = BiasedSimulator(biases={("hook_type", "lista"): 2.0})
     _ciclo(dept, playbook, registry, km, sim_invertido)
     # consolidada NO muere de golpe: baja un nivel
-    assert playbook.get("regla:hook_type=pregunta")["status"] == "validada"
+    assert playbook.get("regla:leads/hook_type=pregunta")["status"] == "validada"
 
 
 def test_experimental_contradicha_muere_directo(env):
@@ -108,7 +108,7 @@ def test_experimental_contradicha_muere_directo(env):
     _ciclo(dept, playbook, registry, km, sim)  # experimental
     sim_invertido = BiasedSimulator(biases={("hook_type", "lista"): 2.5})
     _ciclo(dept, playbook, registry, km, sim_invertido)
-    regla = playbook.get("regla:hook_type=pregunta")
+    regla = playbook.get("regla:leads/hook_type=pregunta")
     assert regla["status"] == "obsoleta"
     assert regla["rule_id"] not in playbook.rules()  # fuera de las activas
 
@@ -118,12 +118,12 @@ def test_revert_restaura_sin_perder_historial(env):
     sim = BiasedSimulator(biases={("hook_type", "pregunta"): 2.0})
     _ciclo(dept, playbook, registry, km, sim)
     _ciclo(dept, playbook, registry, km, sim)  # validada (revisión 2)
-    hist_antes = playbook.history("regla:hook_type=pregunta")
-    rev = playbook.revert("regla:hook_type=pregunta", 1, reason="prueba del board", decided_by="board")
-    regla = playbook.get("regla:hook_type=pregunta")
+    hist_antes = playbook.history("regla:leads/hook_type=pregunta")
+    rev = playbook.revert("regla:leads/hook_type=pregunta", 1, reason="prueba del board", decided_by="board")
+    regla = playbook.get("regla:leads/hook_type=pregunta")
     assert regla["status"] == "experimental"  # exactamente el estado de la rev 1
     assert regla["revision"] == rev == len(hist_antes) + 1  # historial intacto + 1
-    hist = playbook.history("regla:hook_type=pregunta")
+    hist = playbook.history("regla:leads/hook_type=pregunta")
     assert [h["revision"] for h in hist] == list(range(1, rev + 1))
     assert "REVERT" in hist[-1]["rationale"]
 
@@ -138,6 +138,7 @@ def test_confianza_baja_rechazada_por_el_km(env):
         kind="crear",
         dimension="hook_type",
         value="x",
+        objective="awareness",
         evidence_for=["algo"],
         evidence_against=[],
         risks_accept="r1",

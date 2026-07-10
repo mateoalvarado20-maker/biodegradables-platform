@@ -71,7 +71,9 @@ def test_con_conocimiento_respeta_80_20(env):
     assert n_explore == 2  # 20% de 10
     # los briefs de explotación referencian la regla real y su madurez
     exploits = [p for p in plan.briefs if p.intent == "explotar"]
-    assert all(p.knowledge_used == ["regla:hook_type=pregunta"] for p in exploits)
+    assert all(p.knowledge_used == ["regla:leads/hook_type=pregunta"] for p in exploits)
+    # regla #23: el brief hereda el objetivo de negocio de la regla que explota
+    assert all(p.brief.objective == "leads" for p in exploits)
     assert all("validada" in p.rationale for p in exploits)
     # y su hipótesis alimenta el KPI LA
     assert all("LA" in p.brief.hypothesis.decision_if_false for p in exploits)
@@ -82,7 +84,7 @@ def test_exploracion_sale_de_los_huecos_del_registro(env):
     sim = BiasedSimulator(biases={("hook_type", "pregunta"): 3.0})
     # muestra chica → el registro queda con 'requiere_mas_datos'
     _ciclo(dept, playbook, registry, km, sim, n_pregunta=3, n_lista=8)
-    assert registry.latest_verdicts()["hook_type=pregunta"]["verdict"] == "requiere_mas_datos"
+    assert registry.latest_verdicts()["leads/hook_type=pregunta"]["verdict"] == "requiere_mas_datos"
     plan = _plan(dept, playbook, registry, n=5)
     exploradores = [p for p in plan.briefs if p.intent == "explorar"]
     # el primer explorador ataca exactamente ese hueco de evidencia

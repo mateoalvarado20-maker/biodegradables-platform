@@ -74,7 +74,7 @@ class KnowledgeManager:
     def consider(self, proposal: ChangeProposal) -> Decision:
         """Decide sobre una propuesta del Analista."""
         key = f"{proposal.dimension}={proposal.value}"
-        rule_id = f"regla:{key}"
+        rule_id = f"regla:{proposal.objective}/{key}"  # el conocimiento vive por objetivo (#23)
 
         # los 8 campos son obligatorios (regla #20)
         obligatorios = (
@@ -106,6 +106,7 @@ class KnowledgeManager:
                 action=proposal.proposed_action,
                 dimension=proposal.dimension,
                 value=proposal.value,
+                objective=proposal.objective,
                 proposed_by=proposal.proposed_by,
                 decided_by=DECIDER,
                 rationale=(
@@ -141,6 +142,7 @@ class KnowledgeManager:
             action=existing["action"],
             dimension=proposal.dimension,
             value=proposal.value,
+            objective=proposal.objective,
             proposed_by=proposal.proposed_by,
             decided_by=DECIDER,
             rationale=(
@@ -162,7 +164,7 @@ class KnowledgeManager:
         out: list[Decision] = []
         for rule_id, rule in self._playbook.rules().items():
             key = f"{rule['dimension']}={rule['value']}"
-            hist = self._registry.history(key)
+            hist = self._registry.history(key, rule["objective"])
             streak = 0
             for h in reversed(hist):
                 if h["verdict"] == "confirmada":
@@ -181,6 +183,7 @@ class KnowledgeManager:
                     action=rule["action"],
                     dimension=rule["dimension"],
                     value=rule["value"],
+                    objective=rule["objective"],
                     proposed_by=rule["proposed_by"],
                     decided_by=DECIDER,
                     rationale=(

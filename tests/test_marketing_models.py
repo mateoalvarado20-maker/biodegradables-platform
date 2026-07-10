@@ -23,6 +23,7 @@ def _labels(**over):
         "format": "video",
         "time_slot": "18:00-21:00",
         "cta_type": "visita-web",
+        "objective": "sales",
     }
     data.update(over)
     return ExperimentLabels(**data)

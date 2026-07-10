@@ -35,6 +35,7 @@ class ChangeProposal:
     kind: str  # "crear" | "obsoletar"
     dimension: str
     value: str
+    objective: str  # regla #23: el conocimiento vive DENTRO de un objetivo
     evidence_for: list[str]
     evidence_against: list[str]
     risks_accept: str
@@ -98,6 +99,7 @@ def _proposal_from(
         kind=kind,
         dimension=dim,
         value=value,
+        objective=conclusion.objective,
         evidence_for=conclusion.evidence,
         evidence_against=against,
         risks_accept=risks_accept,
@@ -121,25 +123,34 @@ def run_analysis(
     Devuelve (todas las conclusiones registradas, propuestas para el KM)."""
     conclusions: list[ExperimentConclusion] = []
     proposals: list[ChangeProposal] = []
-    for dimension in DIMENSIONS:
-        for value in _candidate_values(scored, dimension):
-            conclusion = evaluate_hypothesis(dimension, value, scored)
-            registry.record(conclusion)
-            conclusions.append(conclusion)
-            key = conclusion.hypothesis_key
-            rule = active_rules.get(f"regla:{key}")
-            history = registry.history(key)[:-1]  # evaluaciones previas
-            if conclusion.verdict == "confirmada" and conclusion.confidence in ("media", "alta"):
-                if rule is None:
-                    proposals.append(_proposal_from(conclusion, "crear", f"NUEVA: {key}", history))
-                # si la regla ya existe, la promoción por madurez es asunto
-                # del Knowledge Manager (lee el historial), no del Analista
-            elif (
-                conclusion.verdict == "rechazada"
-                and conclusion.confidence in ("media", "alta")
-                and rule is not None
-            ):
-                proposals.append(_proposal_from(conclusion, "obsoletar", f"regla:{key}", history))
+    # Regla #23: segmentar por objetivo de negocio — JAMÁS se comparan piezas
+    # con objetivos distintos como equivalentes
+    by_objective: dict[str, list] = {}
+    for p, s in scored:
+        by_objective.setdefault(p.labels.objective, []).append((p, s))
+    for objective, segment in sorted(by_objective.items()):
+        for dimension in DIMENSIONS:
+            for value in _candidate_values(segment, dimension):
+                conclusion = evaluate_hypothesis(dimension, value, segment)
+                registry.record(conclusion)
+                conclusions.append(conclusion)
+                key = conclusion.hypothesis_key
+                rule_id = f"regla:{objective}/{key}"
+                rule = active_rules.get(rule_id)
+                history = registry.history(key, objective)[:-1]  # evaluaciones previas
+                if conclusion.verdict == "confirmada" and conclusion.confidence in ("media", "alta"):
+                    if rule is None:
+                        proposals.append(
+                            _proposal_from(conclusion, "crear", f"NUEVA: {objective}/{key}", history)
+                        )
+                    # si la regla ya existe, la promoción por madurez es asunto
+                    # del Knowledge Manager (lee el historial), no del Analista
+                elif (
+                    conclusion.verdict == "rechazada"
+                    and conclusion.confidence in ("media", "alta")
+                    and rule is not None
+                ):
+                    proposals.append(_proposal_from(conclusion, "obsoletar", rule_id, history))
     dept.decide(
         f"ciclo de análisis: {len(conclusions)} hipótesis evaluadas, "
         f"{len(proposals)} propuestas para el Knowledge Manager",

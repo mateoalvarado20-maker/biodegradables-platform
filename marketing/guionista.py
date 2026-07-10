@@ -29,6 +29,7 @@ from marketing.models import (
     ExperimentLabels,
     Format,
     Hypothesis,
+    Objective,
     PlatformProfile,
     StrictModel,
 )
@@ -58,6 +59,7 @@ class ScriptBrief(StrictModel):
     # Directriz #13 del board: estándar 20-30 s; formatos más largos solo con
     # evidencia experimental (el Analista propondrá briefs fuera de rango).
     duration_target_s: int = Field(default=25, ge=20, le=30)
+    objective: Objective  # prioridad de negocio (regla #23) — sin default
     hypothesis: Hypothesis
 
 
@@ -196,6 +198,7 @@ def generate_package(
                         format=brief.format,
                         time_slot=brief.time_slot,
                         cta_type=brief.cta_type,
+                        objective=brief.objective,
                     ),
                     hypothesis=brief.hypothesis,
                     generated_by=f"guionista@{VERSION}:{MODEL}",
