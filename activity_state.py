@@ -584,6 +584,28 @@ def add_adhoc(
 
 
 @_locked
+def set_activity_nombre(
+    activity_id: str, nombre: str, *,
+    user_email: str | None = None, wk: str | None = None,
+) -> bool:
+    """Actualiza el nombre visible de una activity existente (2026-07-06).
+    Usado por el sync de cobranzas: el monto/atraso del cliente cambia con
+    abonos y el card debe mostrar el valor actual. No toca log/avance/history.
+    Devuelve True solo si cambió algo."""
+    email = _normalize_email(user_email)
+    state = load()
+    user = _get_user_state(state, email)
+    wk = wk or week_key()
+    acts = (user["weeks"].get(wk) or {}).get("activities") or {}
+    entry = acts.get(activity_id)
+    if entry is None or entry.get("nombre") == nombre:
+        return False
+    entry["nombre"] = nombre
+    save(state)
+    return True
+
+
+@_locked
 def remove_activity(
     activity_id: str, *, user_email: str | None = None, wk: str | None = None
 ) -> bool:

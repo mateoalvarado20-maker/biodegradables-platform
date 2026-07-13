@@ -1677,108 +1677,146 @@ def _slugify(text: str, maxlen: int = 40) -> str:
 
 
 async def auto_assign_cobranzas() -> None:
-    """Cada mañana asigna las cobranzas vencidas top de cada ciudad al
-    colaborador correspondiente. Los items aparecen en el check-in card
-    del colaborador esa misma tarde.
+    """SINCRONIZA la cartera de cada asistente con Contifico (2026-07-06).
 
-    Idempotente: si una cobranza para el mismo cliente ya se asignó hoy,
-    no la duplica.
+    Antes solo AGREGABA (idempotente por semana): un cliente que pagaba en el
+    día seguía apareciendo en el card de la tarde — Gabriela B. y Gladys veían
+    clientes ya pagados. Ahora cada corrida deja el state igual a la cartera
+    REAL del momento:
+      - agrega los clientes nuevos (vencidos con crédito → `cobranza-<slug>`;
+        sin crédito con saldo → `cobranza-sc-<slug>`),
+      - actualiza el nombre (monto/atraso) de los que siguen debiendo,
+      - QUITA los que ya no aparecen en el pull (pagaron / ya no vencidos).
+    Corre a las 7:30 y de nuevo justo antes del check-in card de sucursales
+    (_job_checkin_sucursales) para que el card salga con data del momento.
+
+    Protección: si el pull de Contifico falla para un colaborador, NO se le
+    quita nada (no sabemos la verdad) — solo se loguea el error.
     """
     asignadas = 0
+    actualizadas = 0
+    removidas = 0
     errores = 0
-
-    def _asignar(activity_id: str, nombre: str, target_user: str) -> None:
-        """Crea (idempotente) una cobranza diaria. tipo="diaria" (NO "unica"):
-        el check-in renderiza el UI de cobranza (Contactado/No contactado +
-        observación) SOLO para activities diarias (ver _build_checkin_card,
-        loop `diarias`), y el submit usa mark_daily (que exige tipo diaria).
-        Con "unica" caían en `semanales` y nunca mostraban el UI. (fix 2026-06-19)
-        aid ESTABLE por cliente (2026-06-25): re-asignar el mismo cliente en la
-        semana es idempotente (add_adhoc lanza ValueError → skip)."""
-        nonlocal asignadas, errores
-        try:
-            activity_state.add_adhoc(
-                activity_id, nombre,
-                user_email=target_user,
-                tipo="diaria",
-                meta=1,
-                unidad="cliente contactado",
-            )
-            asignadas += 1
-        except ValueError:
-            pass  # Ya existe — idempotente, skip
-        except Exception as e:
-            logger.exception(
-                "Error asignando cobranza %s a %s: %s",
-                activity_id, target_user, e,
-            )
-            errores += 1
+    # target_user -> {aid: nombre} según la cartera REAL de este momento
+    deseadas: dict[str, dict[str, str]] = {}
+    # target_user -> False si algún pull suyo falló (bloquea las remociones)
+    pulls_ok: dict[str, bool] = {}
 
     for ciudad, target_user in COBRANZA_COLABORADORES.items():
-        # 1) Cartera VENCIDA — clientes CON crédito aprobado que se pasaron del
-        #    plazo. aid `cobranza-<slug>`.
+        deseadas.setdefault(target_user, {})
+        pulls_ok.setdefault(target_user, True)
+        # 1) Cartera VENCIDA — clientes CON crédito que se pasaron del plazo.
         try:
             # to_thread (fix 2026-06-23): la consulta a Contifico es síncrona y
             # tarda ~2 min; llamarla directo bloqueaba el event loop más allá del
             # --timeout 120 de gunicorn → el worker se reiniciaba y NUNCA se
-            # asignaban las cobranzas (count=0 en producción). Offload a un thread
-            # para no bloquear el loop, igual que el resto de jobs pesados.
+            # asignaban las cobranzas (count=0 en producción).
             top = await asyncio.to_thread(
                 contifico_client.cartera_vencida_por_ciudad, ciudad, n=5
             )
         except Exception as e:
             logger.exception("Cobranza pull falló para %s: %s", ciudad, e)
             errores += 1
+            pulls_ok[target_user] = False
             top = []
 
         for c in top:
-            cliente_slug = _slugify(c["cliente"])
-            activity_id = f"cobranza-{cliente_slug}"
-            nombre = (
+            aid = f"cobranza-{_slugify(c['cliente'])}"
+            deseadas[target_user][aid] = (
                 f"📞 Cobranza: {c['cliente']} — "
                 f"${c['saldo_vencido']:,.0f} "
                 f"({c['dias_atraso_max']}d atraso)"
             )
-            _asignar(activity_id, nombre, target_user)
 
-        # 2) SIN crédito — clientes que NO están en el Excel de crédito pero
-        #    igual tienen saldo (se facturó sin registrar el pago). aid
-        #    `cobranza-sc-<slug>` (mismo prefijo `cobranza-` → hereda el UI de
-        #    cobranza; el sub-prefijo `sc-` lo distingue). El colaborador debe
-        #    poner una observación de por qué el cliente no ha pagado.
+        # 2) SIN crédito — no están en el Excel pero tienen saldo (facturado
+        #    sin registrar pago). Mismo prefijo `cobranza-` → hereda el UI.
         try:
-            # n=None → TODOS los clientes sin crédito con saldo > $1 (no solo top).
             sin_cred = await asyncio.to_thread(
                 contifico_client.clientes_sin_credito_con_saldo, ciudad
             )
         except Exception as e:
             logger.exception("Cobranza sin-crédito pull falló para %s: %s", ciudad, e)
             errores += 1
+            pulls_ok[target_user] = False
             sin_cred = []
 
         for c in sin_cred:
-            cliente_slug = _slugify(c["cliente"])
-            activity_id = f"cobranza-sc-{cliente_slug}"
-            nombre = (
+            aid = f"cobranza-sc-{_slugify(c['cliente'])}"
+            deseadas[target_user][aid] = (
                 f"⚠️ Sin crédito: {c['cliente']} — "
                 f"${c['saldo_pendiente']:,.0f} "
                 f"(facturado sin registrar pago)"
             )
-            _asignar(activity_id, nombre, target_user)
 
-        if not top and not sin_cred:
-            logger.info("Cobranza %s: sin clientes vencidos ni sin-crédito hoy", ciudad)
+    for target_user, aids in deseadas.items():
+        # Agregar nuevos / refrescar montos de los existentes. tipo="diaria"
+        # (NO "unica"): el check-in renderiza el UI de cobranza solo para
+        # diarias y el submit usa mark_daily (fix 2026-06-19). aid ESTABLE por
+        # cliente (2026-06-25) → add_adhoc con ValueError = ya existe.
+        for aid, nombre in aids.items():
+            try:
+                activity_state.add_adhoc(
+                    aid, nombre,
+                    user_email=target_user,
+                    tipo="diaria",
+                    meta=1,
+                    unidad="cliente contactado",
+                )
+                asignadas += 1
+            except ValueError:
+                try:
+                    if activity_state.set_activity_nombre(
+                        aid, nombre, user_email=target_user
+                    ):
+                        actualizadas += 1
+                except Exception as e:
+                    logger.exception(
+                        "Error actualizando cobranza %s de %s: %s",
+                        aid, target_user, e,
+                    )
+                    errores += 1
+            except Exception as e:
+                logger.exception(
+                    "Error asignando cobranza %s a %s: %s",
+                    aid, target_user, e,
+                )
+                errores += 1
+
+        # Quitar las que YA NO están en la cartera (pagaron) — solo si TODOS
+        # los pulls de este colaborador fueron exitosos.
+        if not pulls_ok[target_user]:
+            logger.warning(
+                "Cobranza sync %s: pull incompleto — no se quita nada",
+                target_user,
+            )
+            continue
+        try:
+            wk_acts = activity_state.get_week(target_user)["activities"]
+            pagadas = [
+                aid for aid in list(wk_acts)
+                if aid.startswith("cobranza-") and aid not in aids
+            ]
+            for aid in pagadas:
+                if activity_state.remove_activity(aid, user_email=target_user):
+                    removidas += 1
+                    logger.info(
+                        "Cobranza sync: %s de %s removida (ya pagó / no vencida)",
+                        aid, target_user,
+                    )
+        except Exception as e:
+            logger.exception("Error removiendo pagadas de %s: %s", target_user, e)
+            errores += 1
 
     logger.info(
-        "auto_assign_cobranzas: %d asignadas, %d errores", asignadas, errores
+        "auto_assign_cobranzas: %d asignadas, %d actualizadas, %d removidas, %d errores",
+        asignadas, actualizadas, removidas, errores,
     )
-    # F0 (2026-07-02): un fallo TOTAL (solo errores, cero asignadas) debe subir
-    # a _reliable_job para retry + alerta — era el modo de fallo del incidente
-    # 2026-06-23 (0 cobranzas asignadas, 0 avisos). Un día legítimamente sin
-    # vencidos (0 errores, 0 asignadas) NO es error.
-    if errores and not asignadas:
+    # F0 (2026-07-02): un fallo TOTAL (ningún pull exitoso) debe subir a
+    # _reliable_job para retry + alerta — modo de fallo del incidente
+    # 2026-06-23. Un día legítimamente sin vencidos (0 errores) NO es error.
+    if errores and not any(pulls_ok.values()):
         raise RuntimeError(
-            f"auto_assign_cobranzas: fallo total ({errores} errores, 0 asignadas)"
+            f"auto_assign_cobranzas: fallo total ({errores} errores, ningún pull OK)"
         )
 
 
@@ -3166,6 +3204,17 @@ async def _job_checkin_sucursales() -> None:
     if not targets:
         logger.info("checkin_sucursales: todos con override hoy — skip")
         return
+    # Cobranzas AL MOMENTO (2026-07-06): re-sincroniza la cartera contra
+    # Contifico justo antes de armar el card — un cliente que pagó durante el
+    # día ya no aparece (la asignación de las 7:30 quedaba desactualizada).
+    # Si Contifico falla, el card sale igual con la data de la mañana.
+    if core_config.module_enabled("cobranzas"):
+        try:
+            await auto_assign_cobranzas()
+        except Exception as e:
+            logger.warning(
+                "refresh de cobranzas pre-card falló (card sale igual): %s", e
+            )
     await _reliable_job(
         "checkin_sucursales",
         lambda: send_daily_checkin(only=targets),
