@@ -1,0 +1,12 @@
+# Dependencias EXCLUSIVAS del pipeline de producción de Marketing (F1+).
+# NO van en requirements.txt/requirements_bot.txt: el bot no las necesita y
+# engordarían su paquete de deploy. El pipeline corre donde haya estas deps
+# (hoy la PC de Mateo; en F7 el Container Apps Job de render).
+#
+# Justificación (regla permanente #3 del board — toda dependencia se paga):
+# - azure-cognitiveservices-speech: SDK oficial de Microsoft para Azure Speech.
+#   Es la ÚNICA vía para obtener word boundaries (timestamps por palabra) del
+#   TTS — el endpoint REST simple no los expone y el Batch Synthesis REST
+#   exige tier S0 (pagado). Los word boundaries eliminan la alternativa mucho
+#   más pesada (Whisper local ~2GB + GPU para peor precisión de sync).
+azure-cognitiveservices-speech>=1.50

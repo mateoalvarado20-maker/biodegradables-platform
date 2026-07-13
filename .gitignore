@@ -9,6 +9,9 @@
 !/AUTOMATIZACIONES_EMPRESA.md
 !/PROPUESTA_ARQUITECTURA_MULTIEMPRESA.md
 !/PROPUESTA_DEMO_COMERCIAL.md
+!/PROPUESTA_TIKTOK_MEDIA_MANAGER.md
+!/PROPUESTA_VER_OS.md
+!/ROADMAP.md
 !/DEMO_GUION.md
 !/DEMO_FASE5_RUNBOOK.md
 !/.env.demo.example
@@ -19,6 +22,7 @@
 !/requirements.txt
 !/requirements_bot.txt
 !/requirements-dev.txt
+!/requirements-marketing.txt
 !/pyproject.toml
 # F4.5: imagen Docker única de la plataforma
 !/Dockerfile
@@ -44,6 +48,10 @@
 !/ops/
 !/tenants/
 !/connectors/
+# --- VER-OS: kernel organizacional (ROADMAP.md F0) ---
+!/org/
+# --- Departamento de Marketing, implementación de referencia VER-OS (F1+) ---
+!/marketing/
 
 # --- Exclusiones dentro de directorios incluidos ---
 # Staging viejo del bot (artefacto de deploy, no fuente; rollback = bot_deploy.zip)

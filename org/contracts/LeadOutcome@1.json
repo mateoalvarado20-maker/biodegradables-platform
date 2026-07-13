@@ -1,0 +1,11 @@
+{
+  "contract": "LeadOutcome@1",
+  "direction": "comercial -> marketing",
+  "description": "Resultado real de un lead entregado. Convierte el playbook de Marketing de vanity metrics a revenue.",
+  "fields": {
+    "lead_id": {"type": "string", "required": true},
+    "outcome": {"type": "string", "required": true, "enum": ["won", "lost", "discarded"]},
+    "value_usd": {"type": "number", "required": false},
+    "closed_at": {"type": "string", "required": true}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "contract": "WeeklyDeptReport@1",
+  "direction": "departamento -> CEO/board",
+  "description": "Self-report semanal estandar: resultados vs OKRs, decisiones, riesgos, plan.",
+  "fields": {
+    "dept_id": {"type": "string", "required": true},
+    "week": {"type": "string", "required": true},
+    "okr_status": {"type": "array", "required": true},
+    "decisions_count": {"type": "integer", "required": false},
+    "highlights": {"type": "array", "required": false},
+    "risks": {"type": "array", "required": false},
+    "next_week": {"type": "array", "required": false},
+    "month_spend_usd": {"type": "number", "required": false}
+  }
+}

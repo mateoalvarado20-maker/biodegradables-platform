@@ -1,0 +1,12 @@
+{
+  "contract": "LeadHandoff@1",
+  "direction": "marketing -> comercial",
+  "description": "Lead calificado que Marketing entrega a Comercial. Minimo necesario: IDs y contexto de intencion, nunca el historial del cliente.",
+  "fields": {
+    "lead_id": {"type": "string", "required": true},
+    "source_channel": {"type": "string", "required": true},
+    "source_ref": {"type": "string", "required": false},
+    "intent_context": {"type": "string", "required": false},
+    "captured_at": {"type": "string", "required": true}
+  }
+}

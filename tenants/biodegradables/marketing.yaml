@@ -1,0 +1,59 @@
+# Departamento de Marketing — datos del tenant Biodegradables Ecuador.
+# content_pillars: HIPÓTESIS iniciales aprobadas por el board 2026-07-06.
+# El Analista (F3) las promueve (validated, con exp_ids) o retira (retired)
+# según datos — no son reglas fijas. Editar aquí solo agrega hipótesis nuevas.
+
+# Contexto de marca que consume el Guionista (ruta relativa a la raíz del repo)
+brand_context_file: company_context.md
+
+# Voz TTS del tenant (catálogo Azure Speech; es-EC = acento ecuatoriano)
+tts_voice: es-EC-AndreaNeural
+
+# Prioridad de negocio por pilar (regla #23) — la consume el Planificador
+objective_by_pillar:
+  educacion-sostenibilidad: market_education
+  producto-en-uso: sales
+  tips-food-service: leads
+  detras-de-camaras: loyalty
+  tendencias-eco-ecuador: awareness
+
+# Operación diaria (M1)
+daily:
+  n_briefs: 2
+  budget_usd_month: 60.0
+  notify_from: malvarado@biodegradablesecuador.com
+  notify_to:
+    - dsanchez@biodegradablesecuador.com
+    - malvarado@biodegradablesecuador.com
+
+# Claims que el contenido JAMÁS puede afirmar (regla dura del charter — el
+# gate rechaza sin pasar por el revisor). Frases en minúsculas, match textual.
+claims_prohibidos:
+  - "100% biodegradable certificado"
+  - "cero impacto ambiental"
+  - "certificado por el ministerio"
+  - "el más barato del mercado"
+  - "aprobado por la fda"
+  - "elimina el plástico del planeta"
+
+content_pillars:
+  - id: educacion-sostenibilidad
+    name: Educación sobre sostenibilidad
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
+  - id: producto-en-uso
+    name: Productos en uso real
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
+  - id: tips-food-service
+    name: Tips para food service y negocios
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
+  - id: detras-de-camaras
+    name: Detrás de cámaras de la empresa
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
+  - id: tendencias-eco-ecuador
+    name: Tendencias de sostenibilidad en Ecuador
+    status: hypothesis
+    rationale: aprobado por board 2026-07-06 como hipótesis inicial
