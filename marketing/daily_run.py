@@ -64,6 +64,9 @@ class DailyContext:
     objective_by_pillar: dict
     tenant_id: str
     n_briefs: int = 2
+    notify_from: str = ""
+    notify_to: list = None  # type: ignore[assignment]
+    sender: object = None  # inyectable en tests
 
 
 class DailyRunner:
@@ -160,7 +163,36 @@ class DailyRunner:
             {**result, "resumed": bool(row and not row.get("finished_at") and pendientes == 0)},
             correlation_id=f"daily-{day}",
         )
+        self._notify(day, result)
         return result
+
+    def _notify(self, day: str, result: dict) -> None:
+        """Resumen diario con pendientes L0, o ALERTA si quedó incompleta.
+        Notificar jamás tumba la corrida (marketing/notify.py)."""
+        from marketing.approvals import pending_approval
+        from marketing.notify import send_alert, send_daily_summary
+
+        to = self._ctx.notify_to or []
+        if not to:
+            return
+        if not result["completa"]:
+            send_alert(
+                self._dept,
+                f"corrida {day} incompleta",
+                f"Estados: {result['estados']} — piezas atascadas en la cola; "
+                "el próximo run reintenta automáticamente.",
+                from_user=self._ctx.notify_from, to=to, sender=self._ctx.sender,
+            )
+            return
+        pending = []
+        for pid in pending_approval(self._ctx.queue):
+            p = self._ctx.queue.get(pid)
+            pending.append(
+                {"package_id": pid, "titulo": p.title[:70], "formato": p.labels.format}
+            )
+        send_daily_summary(self._dept, result, pending,
+                           from_user=self._ctx.notify_from, to=to,
+                           sender=self._ctx.sender)
 
     def status(self, day: str | None = None) -> dict:
         """Supervisión sin abrir el código (requisito 6)."""
@@ -217,6 +249,30 @@ def _cli(argv: list[str]) -> int:
     if cmd == "intervencion":
         log_manual_intervention(dept, argv[1] if len(argv) > 1 else "sin motivo declarado")
         print("intervención registrada (afecta el HOR — gracias por la honestidad)")
+        return 0
+    if cmd in ("aprobar", "rechazar"):
+        from marketing.approvals import approve, reject
+
+        if len(argv) < 2:
+            print(f"uso: {cmd} <package_id> [motivo]")
+            return 2
+        import getpass
+
+        who = f"cli:{getpass.getuser()}"
+        if cmd == "aprobar":
+            approve(dept, ctx.queue, argv[1], by=who)
+            print(f"{argv[1]} → scheduled (aprobada L0 por {who})")
+        else:
+            reject(dept, ctx.queue, argv[1], by=who,
+                   reason=" ".join(argv[2:]) or "")
+            print(f"{argv[1]} → qa_rejected (rechazada L0 por {who})")
+        return 0
+    if cmd == "pendientes":
+        from marketing.approvals import pending_approval
+
+        for pid in pending_approval(ctx.queue):
+            p = ctx.queue.get(pid)
+            print(f"{pid} · {p.labels.format} · {p.title[:70]}")
         return 0
     if cmd == "hor":
         print(json.dumps(hor_stats(dept), ensure_ascii=False, indent=2))

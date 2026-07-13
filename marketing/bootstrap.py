@@ -86,5 +86,7 @@ def build_production(tenant_slug: str, base_dir: str | Path | None = None):
         objective_by_pillar=cfg.get("objective_by_pillar", {}),
         tenant_id=tenant_slug,
         n_briefs=int(daily.get("n_briefs", 2)),
+        notify_from=str(daily.get("notify_from", "")),
+        notify_to=list(daily.get("notify_to", [])),
     )
     return dept, ctx

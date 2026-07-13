@@ -21,6 +21,10 @@ objective_by_pillar:
 daily:
   n_briefs: 2
   budget_usd_month: 60.0
+  notify_from: malvarado@biodegradablesecuador.com
+  notify_to:
+    - dsanchez@biodegradablesecuador.com
+    - malvarado@biodegradablesecuador.com
 
 # Claims que el contenido JAMÁS puede afirmar (regla dura del charter — el
 # gate rechaza sin pasar por el revisor). Frases en minúsculas, match textual.
