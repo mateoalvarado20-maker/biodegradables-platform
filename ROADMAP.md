@@ -123,6 +123,19 @@ El registro de esas revisiones vive al final de este archivo.
     del producto junto a FPY y LV/LA. Propuesta de objetivo (a ratificar):
     TTV ≤ 7 días hasta el primer contenido aprobado listo, ≤ 14 hasta la
     primera publicación real.
+26. **(2026-07-10) Nada está terminado si requiere intervención manual:**
+    todo componente de la etapa MVP debe poder (a) reiniciarse sin perder
+    información, (b) loguear claro, (c) medirse, (d) recuperarse de fallos,
+    (e) ejecutarse programado, (f) supervisarse sin abrir el código. Los
+    procesos que dependen de que un desarrollador los recuerde no existen.
+    **KPI operativo: Hands-Off Rate (HOR)** — % del pipeline que corre sin
+    intervención humana (las aprobaciones L0 son gobernanza por diseño, no
+    cuentan como intervención; los rescates manuales sí). Objetivo del MVP:
+    subir HOR progresivamente sin sacrificar calidad.
+    **Formato de reporte CTO→CEO:** toda tarea importante se presenta
+    respondiendo: qué problema de negocio resuelve, cómo acerca a un cliente
+    pagando, cuál es el criterio objetivo de terminado, y qué riesgo
+    introduce o reduce.
 
 ---
 
@@ -291,7 +304,7 @@ TTV (regla #25) + FPY + LV/LA. Motor de aprendizaje CONGELADO (regla #24).**
 
 | Fase | Alcance | Criterio de salida |
 |---|---|---|
-| **M1 — Operación diaria** | Jobs programados sobre la cola (plan del Planificador → producción → QA → cola de aprobación), gate L0 por tarjeta Teams (infra del bot existente), alertas de error, runbook | 5 días hábiles seguidos generando el plan diario sin intervención manual (sin publicar aún) |
+| **M1 — Operación diaria** 🔨 | Jobs programados sobre la cola (plan del Planificador → producción → QA → cola de aprobación), gate L0 por tarjeta Teams (infra del bot existente), alertas de error, runbook. **Hecho 2026-07-10:** `daily_run.py` (idempotente por día, resumible tras crash sin re-planificar, CLI run/status/intervencion/hor, evento `ops.daily_run`), `bootstrap.py` (wiring de producción desde `marketing.yaml` del tenant — `objective_by_pillar` y `daily:` ahora son datos del tenant: deuda F3 saldada), KPI HOR implementado (las intervenciones se DECLARAN y castigan el índice), wrapper `run_marketing_daily.bat`. **Falta:** activar la schtask 07:30 tras el merge a master; tarjeta L0 en Teams; alertas; runbook | 5 días hábiles seguidos generando el plan diario sin intervención manual (sin publicar aún) |
 | **M2 — Visibilidad** | Dashboard esencial (`/media/*` patrón admin_api): cola, piezas, FPY/LV/LA, costos por pieza, decisiones del playbook; self-report semanal a gerencia (usa `render_report`) | Daniel puede responder "¿qué hizo el sistema esta semana y cuánto costó?" sin preguntarme |
 | **M3 — Fase TikTok (5 pasos del board)** | Publisher tercero + credenciales seguras + cuenta de PRUEBA + monitoreo + validación E2E; historia asistida; luego cuenta real | 1 semana publicando en cuenta de prueba con FPY y ledger limpios → go/no-go del board para cuenta real |
 | **M4 — TTV y onboarding** | Instrumentar TTV (evento install→primer resultado); empaquetar onboarding (intake del Brand Brain guiado); ensayo completo con tenant demo (Andex) midiendo TTV real | TTV medido y publicado; onboarding reproducible sin artesanía |
@@ -329,7 +342,7 @@ onboarding marca #2 (Andex), CEO Agent etapa 1.
 
 | Fase | Fecha | Decisión sobre VER-OS | Acta |
 |---|---|---|---|
-| F3 | 2026-07-10 | **Sin cambios a v0.1.** Propuesta de acta (pendiente 👤): motor de aprendizaje completo y validado de forma falsable; FPY real 67% como baseline de producción. **Candidatos a v1.0:** (1) los objetivos de negocio como dimensión de segmentación del conocimiento son generalizables a cualquier departamento; (2) validar motores de decisión contra simuladores con ground-truth sembrado + control negativo = patrón estándar VER-OS; (3) derivar parámetros de los datos (no pasarlos) elimina clases enteras de bugs de desalineación. **Board pivota a VALOR (reglas #24-25): motor congelado, etapa MVP aprobada, KPI TTV.** | demo F3.7 + revisión ejecutiva |
+| F3 | 2026-07-10 | **Sin cambios a v0.1. ACTA APROBADA por el board.** Motor de aprendizaje completo y validado de forma falsable; FPY real 67% como baseline. **Promovidos a v1.0** ("extraídos de evidencia real, no de suposiciones"): (1) objetivos de negocio como dimensión de segmentación del conocimiento — generalizable a cualquier departamento; (2) validación de motores de decisión contra simuladores con ground-truth sembrado + control negativo como patrón estándar; (3) derivar parámetros de los datos, no pasarlos. **Board pivota a VALOR (reglas #24-26): motor congelado, etapa MVP, KPIs TTV y HOR, reporte CTO→CEO con 4 preguntas.** | demo F3.7 + revisión ejecutiva |
 | F2 | 2026-07-10 | **Sin cambios a v0.1.** Board aprobó formalmente (4 condiciones cumplidas). **Promovido a v1.0:** (1) los pipelines largos se construyen como colas persistentes y resumibles POR DEFECTO; (2) todo revisor LLM usa contrato blockers/mejoras + pruebas adversariales periódicas de calibración. Directrices nuevas para F3: métricas con propósito (#16), Analista conservador (#17), KPI Learning Velocity (#18). | Demo E2E por la cola (FPY 1.0, $0.115/2 piezas) |
 | F1 | 2026-07-09 | **Sin cambios a v0.1.** Veredicto del board: el rechazo 10/10 del lote demuestra que el estándar funciona ("me da más confianza que aprobar contenido mediocre"); el problema es de ITERACIÓN, no de pipeline ni arquitectura. Decisiones: F2 arranca con el ciclo de reparación (flujo Generador→Gate→Feedback→Reparación→Gate, máx 2 reparaciones, todo registrado); **FPY = KPI principal, objetivo >80%**; OffthreadVideo y cola persistente ANTES del scheduler; honestidad como política permanente. Aprendizajes → backlog v1.0: persistencia de artefactos de dominio desde F0 del departamento; colas resumibles como norma para pipelines largos. | `docs/retro-fase1.md` |
 | F0 | 2026-07-06 | **Sin cambios a v0.1.** Ratificadas las 3 decisiones de implementación: (1) SQLite por tenant con enforcement del motor (camino limpio a Postgres+RLS en H2); (2) validador de contratos propio, con la condición de señalar ANTES de ampliarlo si empieza a replicar jsonschema (regla permanente #6); (3) idempotencia por claims. **Aprendizaje promovido al backlog de v1.0:** la separación registro-de-metering (best-effort, jamás lanza) vs enforcement-de-presupuesto (duro, antes de gastar) entra al estándar como aprendizaje extraído, no como supuesto. | Board aprobó cierre; 5 reglas permanentes nuevas (arriba) |

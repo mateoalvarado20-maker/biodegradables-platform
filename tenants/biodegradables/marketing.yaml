@@ -9,6 +9,19 @@ brand_context_file: company_context.md
 # Voz TTS del tenant (catálogo Azure Speech; es-EC = acento ecuatoriano)
 tts_voice: es-EC-AndreaNeural
 
+# Prioridad de negocio por pilar (regla #23) — la consume el Planificador
+objective_by_pillar:
+  educacion-sostenibilidad: market_education
+  producto-en-uso: sales
+  tips-food-service: leads
+  detras-de-camaras: loyalty
+  tendencias-eco-ecuador: awareness
+
+# Operación diaria (M1)
+daily:
+  n_briefs: 2
+  budget_usd_month: 60.0
+
 # Claims que el contenido JAMÁS puede afirmar (regla dura del charter — el
 # gate rechaza sin pasar por el revisor). Frases en minúsculas, match textual.
 claims_prohibidos:
