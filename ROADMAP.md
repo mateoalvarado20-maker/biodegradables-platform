@@ -337,10 +337,14 @@ conector maneja la rotación solo.
 | M3.2 | Métricas reales (Display API) reemplazan al simulador — paga la deuda ALTA "aprendizaje validado solo contra simulador" | Analista corriendo sobre datos reales; primer reporte LV/LA real | Solo PRIVADO |
 | M3.3 | 👤 Auditoría de TikTok aprobada → go/no-go del board → cuenta real | Acta del board; primer post público | SÍ (con acta) |
 
-M3.0a-c son código puro y pueden arrancar en cuanto el board lo apruebe (en
-paralelo al cierre de M1 y sin robarle prioridad a la operación diaria);
-M3.0d/M3.3 son trámites externos que conviene iniciar YA porque dominan el
-cronograma. Decisión de arquitectura: API directa de TikTok (el modo
+**M3.0a–c HECHOS 2026-07-14** (aprobación del board del mismo día): puerto
+Publisher + kill-switch probado capa por capa + conector OAuth/PKCE con
+tokens AES-GCM fail-closed multi-tenant + endpoints del bot
+(`connect-start`/`callback`/`status`/`token`) + simulacro E2E con fake y
+ciclo crash-safe anti doble-post. 25 tests nuevos, suite 567 en verde.
+**Revisión técnica completa: `docs/revision-tecnica-m3-0.md`** — ratificar
+antes de M3.0d. M3.0d/M3.3 son trámites externos que conviene iniciar YA
+porque dominan el cronograma. Decisión de arquitectura: API directa de TikTok (el modo
 pre-auditoría cubre la validación privada) con la app propia como activo del
 producto VER-IA; terceros (Ayrshare/Buffer) quedan como fallback documentado
 detrás del mismo puerto Publisher.

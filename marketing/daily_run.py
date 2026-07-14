@@ -67,6 +67,8 @@ class DailyContext:
     notify_from: str = ""
     notify_to: list = None  # type: ignore[assignment]
     l0_approvers: list = None  # type: ignore[assignment]  # tarjeta Teams (default: notify_to)
+    publishing: dict = None  # type: ignore[assignment]  # M3.0: {"enabled": False} salvo M3.1+
+    publisher: object = None  # backend del puerto Publisher (default NullPublisher)
     sender: object = None  # inyectable en tests
 
 
@@ -128,14 +130,28 @@ class DailyRunner:
         # FASE PRODUCCIÓN: la cola reanuda lo que falte (idempotente por diseño)
         stats = run_pending(self._dept, ctx.queue, ctx.services)
 
+        # FASE PUBLICACIÓN (M3.0): kill-switch de 3 capas — con el flag del
+        # tenant apagado solo cuenta lo scheduled y sigue (regla de oro: no
+        # se publica nada hasta M3.1/M3.3)
+        from marketing.publisher import NullPublisher, publish_scheduled
+
+        publicacion = publish_scheduled(
+            self._dept, ctx.queue, ctx.publisher or NullPublisher(),
+            cfg={"publishing": ctx.publishing or {}},
+        )
+
         row = self._row(day)
         ids = json.loads(row["package_ids"])
         estados = {}
         pendientes = 0
+        # Post-gate = la producción del día terminó para esa pieza (los estados
+        # de L0/publicación avanzan por su propio camino, no bloquean el día)
+        post_gate = ("qa_approved", "qa_rejected", "scheduled",
+                     "publishing", "published", "publish_failed")
         for pid in ids:
             status = ctx.queue.get(pid).status
             estados[status] = estados.get(status, 0) + 1
-            if status not in ("qa_approved", "qa_rejected"):
+            if status not in post_gate:
                 pendientes += 1
 
         result = {
@@ -143,6 +159,7 @@ class DailyRunner:
             "plan_size": len(ids),
             "estados": estados,
             "queue_stats": stats,
+            "publicacion": publicacion,
             "fpy_mes": fpy_stats(self._dept).get("fpy"),
             "gasto_mes_usd": round(self._dept.meter.month_usd(), 4),
             "completa": pendientes == 0,

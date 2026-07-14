@@ -17,21 +17,25 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def test_los_42_endpoints_admin_siguen_montados():
-    # 39 de la extracción F4.4b + 3 de marketing L0 (M1, 2026-07-14)
+def test_los_45_endpoints_admin_siguen_montados():
+    # 39 de la extracción F4.4b + 3 de marketing L0 (M1) + 3 de TikTok (M3.0b).
+    # El callback /oauth/tiktok/callback es público (no /admin) y se verifica aparte.
     import teams_bot
     rutas_admin = {
         r.path for r in teams_bot.app.routes
         if getattr(r, "path", "").startswith("/admin")
     }
-    assert len(rutas_admin) == 42, sorted(rutas_admin)
+    assert len(rutas_admin) == 45, sorted(rutas_admin)
     # Muestras representativas de cada familia
     for path in ("/admin/trigger-checkin", "/admin/llm-usage",
                  "/admin/schedule-one-time-email", "/admin/wipe-user-from-activities",
                  "/admin/trigger-reply-agent", "/admin/state-debug",
                  "/admin/marketing/l0-cards", "/admin/marketing/l0-decisions",
-                 "/admin/marketing/l0-applied"):
+                 "/admin/marketing/l0-applied", "/admin/marketing/tiktok/connect-start",
+                 "/admin/marketing/tiktok/status", "/admin/marketing/tiktok/token"):
         assert path in rutas_admin, path
+    paths = {getattr(r, "path", "") for r in teams_bot.app.routes}
+    assert "/oauth/tiktok/callback" in paths
 
 
 def test_teams_bot_no_define_rutas_admin():

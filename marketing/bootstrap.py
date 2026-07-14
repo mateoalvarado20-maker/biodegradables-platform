@@ -32,7 +32,9 @@ MANIFEST = {
     "package": {"name": "marketing-brain", "version": "0.1.0", "publisher": "ver-ia",
                 "kind": "department"},
     "trust_tier": "first_party",
-    "capabilities": [{"llm": {}}, "notify"],
+    # "publish" se DECLARA aquí pero NO se otorga en build_production:
+    # capa 2 del kill-switch M3.0 (se otorgará recién en M3.1, con acta)
+    "capabilities": [{"llm": {}}, "notify", "publish"],
     "contracts": {"provides": ["WeeklyDeptReport@1", "LeadHandoff@1"],
                   "consumes": ["LeadOutcome@1?", "BudgetEnvelope@1?"]},
     "events": {"emits": ["content.published@1", "content.copy_review@1",
@@ -89,5 +91,6 @@ def build_production(tenant_slug: str, base_dir: str | Path | None = None):
         notify_from=str(daily.get("notify_from", "")),
         notify_to=list(daily.get("notify_to", [])),
         l0_approvers=list(daily.get("l0_approvers", [])),
+        publishing=dict(cfg.get("publishing") or {}),
     )
     return dept, ctx

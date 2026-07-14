@@ -32,6 +32,14 @@ daily:
   l0_approvers:
     - malvarado@biodegradablesecuador.com
 
+# Publicación (M3.0) — CAPA 1 del kill-switch. Prender esto NO basta para
+# publicar: además el kernel debe otorgar la capacidad "publish" (capa 2,
+# bootstrap M3.1 con acta del board) y debe registrarse un backend real
+# (capa 3, NullPublisher por defecto). Regla de oro: nada se publica hasta
+# M3.1 (privado SELF_ONLY) / M3.3 (público).
+publishing:
+  enabled: false
+
 # Claims que el contenido JAMÁS puede afirmar (regla dura del charter — el
 # gate rechaza sin pasar por el revisor). Frases en minúsculas, match textual.
 claims_prohibidos:

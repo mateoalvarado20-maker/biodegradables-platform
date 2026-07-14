@@ -39,7 +39,9 @@ PackageStatus = Literal[
     "qa_approved",
     "qa_rejected",
     "scheduled",
+    "publishing",  # M3.0: init de publicación en vuelo (ver marketing/publisher.py)
     "published",
+    "publish_failed",  # M3.0: falló el init/confirmación — NUNCA se re-postea solo
 ]
 
 PillarStatus = Literal["hypothesis", "validated", "retired"]
@@ -128,6 +130,18 @@ class AssetRef(StrictModel):
     duration_s: float | None = None  # duración del clip (para Loop en el render)
 
 
+class PostRef(StrictModel):
+    """Referencia al post en la red destino (M3.0). `publish_id` se persiste
+    ANTES de confirmar el post — es lo único que permite reconciliar tras un
+    crash sin arriesgar un doble posteo (ver marketing/publisher.py)."""
+
+    platform: str = Field(min_length=2)  # "tiktok", "fake", ...
+    publish_id: str = Field(min_length=1)  # id del init de publicación
+    post_id: str = ""  # id público del post (llega al confirmarse)
+    privacy: str = ""  # p.ej. "SELF_ONLY" (forzado pre-auditoría)
+    published_at: str = ""  # ISO al confirmarse PUBLISH_COMPLETE
+
+
 class ContentPackage(StrictModel):
     package_id: str = Field(min_length=8)
     tenant_id: str = Field(min_length=2)
@@ -146,6 +160,7 @@ class ContentPackage(StrictModel):
     word_timings: list[WordTiming] = Field(default_factory=list)  # las llena el TTS (F1.3)
     status: PackageStatus = "draft"
     created_at: str = Field(min_length=10)
+    post_ref: PostRef | None = None  # M3.0: se llena al publicar (None hasta M3.1)
 
     @field_validator("hashtags_master")
     @classmethod
