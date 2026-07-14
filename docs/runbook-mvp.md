@@ -71,6 +71,25 @@ python -m marketing.daily_run preflight     # valida TODO; instala npm ci solo s
 El preflight **auto-instala** las dependencias de render si faltan (lección del
 2026-07-13) — no hay pasos de memoria. Si preflight dice OK, quedó desplegado.
 
+## 4b. Conectar la cuenta de TikTok (una sola vez, cuando existan credenciales)
+
+Prerrequisito (M3.0d 👤): la app de VER-IA registrada en TikTok for
+Developers y sus `TIKTOK_CLIENT_KEY`/`TIKTOK_CLIENT_SECRET` cargados como
+app settings del bot (guía: `docs/tiktok-app-review.md`). Luego:
+
+```powershell
+python -m marketing.tiktok_connect biodegradables
+```
+
+Imprime y abre la URL de autorización; el dueño de la cuenta inicia sesión
+en TikTok y acepta; el comando confirma "✅ Cuenta conectada". Los tokens
+quedan cifrados en el bot y se renuevan solos. Verificación en cualquier
+momento: el mismo comando dice "ya tiene su cuenta conectada".
+
+**IMPORTANTE:** conectar la cuenta NO habilita publicar. La publicación
+sigue bloqueada por 3 capas (flag del tenant + capacidad del kernel +
+backend) hasta la activación formal de M3.1 con acta del board.
+
 ## 5. Incidentes comunes
 
 ### 5.1 No llegó el correo de la mañana
