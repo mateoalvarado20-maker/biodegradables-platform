@@ -27,8 +27,9 @@ daily:
     - malvarado@biodegradablesecuador.com
   # Quiénes reciben la tarjeta de aprobación L0 en Teams (y pueden decidir).
   # Editable sin tocar código; si se deja vacío, cae en notify_to.
+  # 2026-07-14 (decisión de Daniel): SOLO Mateo aprueba por ahora — Daniel
+  # sigue en notify_to (correo resumen) pero no recibe tarjetas L0.
   l0_approvers:
-    - dsanchez@biodegradablesecuador.com
     - malvarado@biodegradablesecuador.com
 
 # Claims que el contenido JAMÁS puede afirmar (regla dura del charter — el

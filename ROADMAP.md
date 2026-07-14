@@ -304,10 +304,46 @@ TTV (regla #25) + FPY + LV/LA. Motor de aprendizaje CONGELADO (regla #24).**
 
 | Fase | Alcance | Criterio de salida |
 |---|---|---|
-| **M1 — Operación diaria** 🔨 | Jobs programados sobre la cola (plan del Planificador → producción → QA → cola de aprobación), gate L0 por tarjeta Teams (infra del bot existente), alertas de error, runbook. **Hecho 2026-07-10:** `daily_run.py` (idempotente por día, resumible tras crash sin re-planificar, CLI run/status/intervencion/hor, evento `ops.daily_run`), `bootstrap.py` (wiring de producción desde `marketing.yaml` del tenant — `objective_by_pillar` y `daily:` ahora son datos del tenant: deuda F3 saldada), KPI HOR implementado (las intervenciones se DECLARAN y castigan el índice), wrapper `run_marketing_daily.bat`. **Hecho 2026-07-10 (parte 2):** aprobación L0 (`approvals.py`: aprobar→scheduled / rechazar-con-motivo→qa_rejected, auditado, CLI aprobar/rechazar/pendientes) + notificaciones (`notify.py`: resumen diario con pendientes L0 y ALERTA si la corrida queda incompleta; notificar jamás tumba la corrida — fallo degradado a evento `ops.notify_failed`); destinatarios como datos del tenant. **Hecho 2026-07-14 (parte 3):** `preflight.py` con auto-reparación (npm ci automático si faltan deps de render — decisión del board 2026-07-13: el gap de deploy no puede depender de memoria humana; corre antes de `run` y jamás deja gastar con el entorno roto), **Runbook Operativo MVP** (`docs/runbook-mvp.md`: mapa operativo, deploy, incidentes §5.1–5.7, intervenciones, recuperación de desastres), y **tarjeta de aprobación L0 en Teams**: store compartido de decisiones (`marketing_l0_state.py`, Azure Table `marketingl0` — la PC y el bot no comparten disco) + 3 endpoints `/admin/marketing/l0-*` + tarjeta proactiva por el Data Bot (fallback Activities) con Aprobar/Rechazar-con-motivo, anti doble-tap y deciders autorizados; la PC aplica las decisiones al inicio de cada corrida (o `aplicar`) usando las MISMAS funciones que el CLI. **Falta:** deploy del bot con la tarjeta (build_bot_package → az webapp deploy) + env vars `VERIA_BOT_BASE_URL`/`ADMIN_API_TOKEN` en la PC; 5 días del criterio (contador desde 2026-07-14) | 5 días hábiles seguidos generando el plan diario sin intervención manual (sin publicar aún) |
+| **M1 — Operación diaria** 🔨 | Jobs programados sobre la cola (plan del Planificador → producción → QA → cola de aprobación), gate L0 por tarjeta Teams (infra del bot existente), alertas de error, runbook. **Hecho 2026-07-10:** `daily_run.py` (idempotente por día, resumible tras crash sin re-planificar, CLI run/status/intervencion/hor, evento `ops.daily_run`), `bootstrap.py` (wiring de producción desde `marketing.yaml` del tenant — `objective_by_pillar` y `daily:` ahora son datos del tenant: deuda F3 saldada), KPI HOR implementado (las intervenciones se DECLARAN y castigan el índice), wrapper `run_marketing_daily.bat`. **Hecho 2026-07-10 (parte 2):** aprobación L0 (`approvals.py`: aprobar→scheduled / rechazar-con-motivo→qa_rejected, auditado, CLI aprobar/rechazar/pendientes) + notificaciones (`notify.py`: resumen diario con pendientes L0 y ALERTA si la corrida queda incompleta; notificar jamás tumba la corrida — fallo degradado a evento `ops.notify_failed`); destinatarios como datos del tenant. **Hecho 2026-07-14 (parte 3):** `preflight.py` con auto-reparación (npm ci automático si faltan deps de render — decisión del board 2026-07-13: el gap de deploy no puede depender de memoria humana; corre antes de `run` y jamás deja gastar con el entorno roto), **Runbook Operativo MVP** (`docs/runbook-mvp.md`: mapa operativo, deploy, incidentes §5.1–5.7, intervenciones, recuperación de desastres), y **tarjeta de aprobación L0 en Teams**: store compartido de decisiones (`marketing_l0_state.py`, Azure Table `marketingl0` — la PC y el bot no comparten disco) + 3 endpoints `/admin/marketing/l0-*` + tarjeta proactiva por el Data Bot (fallback Activities) con Aprobar/Rechazar-con-motivo, anti doble-tap y deciders autorizados; la PC aplica las decisiones al inicio de cada corrida (o `aplicar`) usando las MISMAS funciones que el CLI. **Hecho 2026-07-14 (parte 4):** bot DEPLOYADO a producción (55603c9, health OK) + puente configurado en la PC + **E2E completo validado con decisiones humanas reales** (tarjetas entregadas → aprobar/rechazar desde Teams → sync → `scheduled`/`qa_rejected` con auditoría `teams:<email>`); fallas probadas en vivo (bot caído → corrida sigue + evento `ops.l0_remote_failed`; sin config → skip; doble-tap y decider no autorizado → bloqueados; decisión de pieza desconocida → visible sin confirmarse en falso, runbook §5.8); incidente día 1: PC suspendida a las 07:30 → corrida manual declarada + fix raíz `StartWhenAvailable` en la schtask. Decisión de Daniel: **solo Mateo es aprobador L0** (`l0_approvers`); Daniel sigue en `notify_to`. **Falta:** 5 días del criterio (contador desde 2026-07-15) | 5 días hábiles seguidos generando el plan diario sin intervención manual (sin publicar aún) |
 | **M2 — Visibilidad** | Dashboard esencial (`/media/*` patrón admin_api): cola, piezas, FPY/LV/LA, costos por pieza, decisiones del playbook; self-report semanal a gerencia (usa `render_report`) | Daniel puede responder "¿qué hizo el sistema esta semana y cuánto costó?" sin preguntarme |
 | **M3 — Fase TikTok (5 pasos del board)** | Publisher tercero + credenciales seguras + cuenta de PRUEBA + monitoreo + validación E2E; historia asistida; luego cuenta real | 1 semana publicando en cuenta de prueba con FPY y ledger limpios → go/no-go del board para cuenta real |
 | **M4 — TTV y onboarding** | Instrumentar TTV (evento install→primer resultado); empaquetar onboarding (intake del Brand Brain guiado); ensayo completo con tenant demo (Andex) midiendo TTV real | TTV medido y publicado; onboarding reproducible sin artesanía |
+
+### Plan detallado M3 — integración TikTok (propuesto por el CTO 2026-07-14; se aprueba con el merge de este PR)
+
+**Regla de oro (board):** NO se publica absolutamente nada hasta que el
+sistema esté completamente estable y validado. Todo M3.0 se construye con la
+publicación deshabilitada por TRES capas independientes: (1)
+`publishing.enabled: false` en `marketing.yaml` del tenant, (2) regla dura
+del charter que el kernel enforcea, (3) `NullPublisher` como backend por
+defecto — el conector real solo se registra si flag + credenciales presentes.
+Test de CI: intentar publicar con el flag apagado lanza y queda auditado.
+
+**Realidades técnicas que fijan el diseño** (verificadas 2026-07-04):
+una app de TikTok for Developers SIN auditar solo puede publicar en modo
+privado/borrador (`SELF_ONLY`) — eso NO es una limitación para nosotros: es
+exactamente el modo "cuenta de prueba" del paso 3 del board. La auditoría de
+TikTok (para posts públicos) es un trámite externo de semanas y es EL cuello
+del cronograma, no el código. Tokens: access ~24 h, refresh rotativo — el
+conector maneja la rotación solo.
+
+| ID | Tarea | Criterio de salida | Publica algo |
+|---|---|---|---|
+| M3.0a | Puerto `Publisher` (interfaz + registry + `NullPublisher`) integrado post-`scheduled`; la cola gana estado `published` (inalcanzable con el flag off) | Pieza aprobada queda `scheduled` para siempre con el flag off; test de CI del kill-switch | NO |
+| M3.0b | `marketing/tiktok_connector.py`: OAuth2 con PKCE (CLI de autorización única → guarda tokens), store de tokens cifrado (DPAPI en la PC; Key Vault en SaaS), refresh con rotación automática, cliente para creator_info/publish/status con rate-limit y reintentos | Tests con HTTP fake: flujo completo, refresh, expiración, revocación; cero llamadas de red en pytest | NO |
+| M3.0c | Simulacro E2E con `FakeTikTokPublisher`: scheduled → "publicada" → PostRef + polling de estado → métricas fake ingresadas al MetricsStore | El circuito completo corre en local sin tocar TikTok; ledger sin duplicados ante reintentos | NO (fake) |
+| M3.0d | 👤 Registro de la app en TikTok for Developers (idealmente bajo la entidad VER-IA — registrarla bajo cuentas personales = deuda de migración; depende de separación corporativa F1) + solicitar scopes video.upload/video.publish | App creada, client_key/secret en el gestor de secretos | NO |
+| M3.1 | Cuenta de PRUEBA: OAuth real, publicación **forzada a SELF_ONLY (privada)** — doble candado: modo sandbox de la app + validación del conector | 1 semana de soak publicando en privado con FPY y ledger limpios | Solo PRIVADO |
+| M3.2 | Métricas reales (Display API) reemplazan al simulador — paga la deuda ALTA "aprendizaje validado solo contra simulador" | Analista corriendo sobre datos reales; primer reporte LV/LA real | Solo PRIVADO |
+| M3.3 | 👤 Auditoría de TikTok aprobada → go/no-go del board → cuenta real | Acta del board; primer post público | SÍ (con acta) |
+
+M3.0a-c son código puro y pueden arrancar en cuanto el board lo apruebe (en
+paralelo al cierre de M1 y sin robarle prioridad a la operación diaria);
+M3.0d/M3.3 son trámites externos que conviene iniciar YA porque dominan el
+cronograma. Decisión de arquitectura: API directa de TikTok (el modo
+pre-auditoría cubre la validación privada) con la app propia como activo del
+producto VER-IA; terceros (Ayrshare/Buffer) quedan como fallback documentado
+detrás del mismo puerto Publisher.
 
 **Pospuesto a versión posterior (regla #24):** comunidad (F5), canal SEO (F6),
 Profession Brain/CEO etapa 1 (F7), experimentos de costo (Haiku A/B, Batch API),
