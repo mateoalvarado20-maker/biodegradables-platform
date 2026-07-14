@@ -20,6 +20,7 @@ anthropic>=0.39
 
 # Auth / Microsoft Graph (msal usado por daily_report; graph_mail usa client_credentials nativo)
 msal>=1.30
+cryptography>=42  # tiktok_connector: cifrado AES-GCM de tokens (M3.0b)
 
 # MCP (model context protocol)
 mcp>=1.0

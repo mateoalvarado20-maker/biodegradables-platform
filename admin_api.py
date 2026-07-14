@@ -1297,3 +1297,104 @@ async def marketing_l0_applied(request: Request) -> dict[str, Any]:
     return {"status": "ok", "resultado": resultado}
 
 
+# ---------- Marketing: OAuth TikTok (M3.0b, 2026-07-14) ----------
+# El flujo OAuth vive en el bot porque es la única superficie HTTPS pública
+# de la plataforma (misma arquitectura que el puente L0). El callback es
+# PÚBLICO por necesidad (TikTok lo llama) — su seguridad es el state de un
+# solo uso + PKCE; jamás devuelve secretos. NADA de esto publica contenido:
+# el kill-switch de publicación vive en marketing/publisher.py (3 capas).
+
+@router.post("/admin/marketing/tiktok/connect-start")
+async def tiktok_connect_start(request: Request) -> dict[str, Any]:
+    """Genera la URL de autorización para conectar la cuenta TikTok de un
+    tenant. Body: {"tenant_id": "biodegradables"}. El operador abre la URL,
+    el dueño de la cuenta acepta, y TikTok redirige al callback."""
+    _require_admin(request)
+    import tiktok_connector
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    tenant_id = (body or {}).get("tenant_id", "").strip().lower()
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="tenant_id requerido")
+    try:
+        out = await asyncio.to_thread(tiktok_connector.start_connect, tenant_id)
+    except tiktok_connector.TikTokError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"status": "ok", **out}
+
+
+@router.get("/oauth/tiktok/callback")
+async def tiktok_oauth_callback(request: Request):
+    """Callback de TikTok (público). Canjea el code por tokens y los guarda
+    cifrados. Respuesta = página mínima para el humano que autorizó."""
+    from fastapi.responses import HTMLResponse
+    import tiktok_connector
+
+    params = request.query_params
+    state = params.get("state", "")
+    code = params.get("code", "")
+    error = params.get("error", "")
+
+    def _page(titulo: str, detalle: str, ok: bool) -> HTMLResponse:
+        color = "#0d8a3f" if ok else "#c53030"
+        return HTMLResponse(
+            f"<html><body style='font-family:sans-serif;margin:3em'>"
+            f"<h2 style='color:{color}'>{titulo}</h2><p>{detalle}</p></body></html>",
+            status_code=200 if ok else 400,
+        )
+
+    if error:
+        logger.warning("tiktok callback: el usuario denegó o TikTok erró: %s", error)
+        return _page("Conexión cancelada", f"TikTok reportó: {error}. "
+                     "Podés cerrar esta pestaña y reintentar.", False)
+    if not state or not code:
+        return _page("Solicitud inválida", "Faltan parámetros del callback.", False)
+    try:
+        out = await asyncio.to_thread(tiktok_connector.finish_connect, state, code)
+    except tiktok_connector.TikTokError as e:
+        logger.warning("tiktok callback falló: %s", e)
+        return _page("No se pudo conectar la cuenta", str(e), False)
+    logger.info("tiktok callback OK: %s", out)
+    return _page("✅ Cuenta de TikTok conectada",
+                 f"Tenant <b>{out['tenant_id']}</b> quedó vinculado. "
+                 "Ya podés cerrar esta pestaña — no hay nada más que hacer.", True)
+
+
+@router.get("/admin/marketing/tiktok/status")
+async def tiktok_status(request: Request, tenant_id: str = "") -> dict[str, Any]:
+    """Estado de la conexión (sin secretos): conectada, open_id, scopes,
+    cuánto falta para expirar cada token."""
+    _require_admin(request)
+    import tiktok_connector
+
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="tenant_id requerido")
+    return await asyncio.to_thread(
+        tiktok_connector.connection_status, tenant_id.strip().lower()
+    )
+
+
+@router.get("/admin/marketing/tiktok/token")
+async def tiktok_token(request: Request, tenant_id: str = "") -> dict[str, Any]:
+    """Access token VIGENTE del tenant (renueva y rota refresh si hace
+    falta). Lo consumirá el publisher de M3.1 — la PC nunca ve el refresh
+    token ni la llave de cifrado."""
+    _require_admin(request)
+    import tiktok_connector
+
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="tenant_id requerido")
+    try:
+        token = await asyncio.to_thread(
+            tiktok_connector.get_valid_access_token, tenant_id.strip().lower()
+        )
+    except tiktok_connector.NotConnected as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except tiktok_connector.TikTokError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"access_token": token}
+
+
