@@ -337,6 +337,19 @@ conector maneja la rotación solo.
 | M3.2 | Métricas reales (Display API) reemplazan al simulador — paga la deuda ALTA "aprendizaje validado solo contra simulador" | Analista corriendo sobre datos reales; primer reporte LV/LA real | Solo PRIVADO |
 | M3.3 | 👤 Auditoría de TikTok aprobada → go/no-go del board → cuenta real | Acta del board; primer post público | SÍ (con acta) |
 
+**M3.0d (parte técnica) HECHA 2026-07-14:** bot deployado con el flujo OAuth
+vivo (callback verificado en producción) + `TIKTOK_TOKEN_KEY` y
+`TIKTOK_REDIRECT_URI` en el App Service + `marketing/tiktok_publisher.py`
+(backend real del puerto: FILE_UPLOAD por chunks con el último absorbiendo
+remanente, creator_info pre-post con validación de privacidad, mapeo de
+estados, SELF_ONLY explícito — NO se instancia hasta M3.1) +
+`marketing/tiktok_connect.py` (conectar cuenta = 1 comando) + sitio
+`website/ver-ia/` (Home/About/Contact/Terms/Privacy, EN, listo para hosting)
++ `docs/tiktok-app-review.md` (guía campo por campo del registro). Falta de
+M3.0d solo lo 👤: publicar el sitio en ver-ia.com, crear
+contact@/privacy@ver-ia.com, completar el registro y cargar
+TIKTOK_CLIENT_KEY/SECRET como app settings (jamás por chat).
+
 **M3.0a–c HECHOS 2026-07-14** (aprobación del board del mismo día): puerto
 Publisher + kill-switch probado capa por capa + conector OAuth/PKCE con
 tokens AES-GCM fail-closed multi-tenant + endpoints del bot

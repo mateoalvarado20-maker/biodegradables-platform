@@ -52,6 +52,8 @@
 !/org/
 # --- Departamento de Marketing, implementación de referencia VER-OS (F1+) ---
 !/marketing/
+# --- Sitio público de VER-IA (v1 para la revisión de TikTok, M3.0d) ---
+!/website/
 
 # --- Exclusiones dentro de directorios incluidos ---
 # Staging viejo del bot (artefacto de deploy, no fuente; rollback = bot_deploy.zip)
