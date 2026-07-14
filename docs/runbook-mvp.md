@@ -115,6 +115,18 @@ El departamento alcanzó su tope mensual (`daily.budget_usd_month` en
 `marketing.yaml`). Es un freno DURO deliberado. Decisión de negocio: subir el
 presupuesto (PR al yaml) o esperar al mes siguiente.
 
+### 5.8 `aplicar` reporta "pkg-XXXX no está en la cola"
+Llegó una decisión de Teams para una pieza que la cola local no conoce
+(típico: el state de `~/.ver-os/` se reconstruyó, o la pieza es de otra
+máquina). No se pierde nada ni se confirma en falso — el error se repite en
+cada corrida hasta resolverlo. Si la decisión ya no aplica, cerrarla a mano:
+```powershell
+# (requiere VERIA_BOT_BASE_URL y ADMIN_API_TOKEN en el entorno)
+Invoke-WebRequest -Uri "$env:VERIA_BOT_BASE_URL/admin/marketing/l0-applied" -Method POST `
+  -Headers @{"X-Admin-Token"=$env:ADMIN_API_TOKEN; "Content-Type"="application/json"} `
+  -Body '{"package_ids": ["pkg-XXXX"]}'
+```
+
 ## 6. Declarar una intervención manual (obligatorio)
 
 Cada vez que un humano rescate algo (relanzar, arreglar, instalar):
@@ -147,11 +159,14 @@ maquillado** (board, 2026-07-13). Las aprobaciones L0 NO son intervenciones.
 - La corrida vive en la PC de Mateo (SPOF conocido; migra a Azure en fase SaaS).
   Si la PC está apagada a las 07:30, ese día requiere corrida manual (§5.1).
 - La tarjeta de Teams necesita en la PC las env vars `VERIA_BOT_BASE_URL`
-  (URL del App Service del bot) y `ADMIN_API_TOKEN`. Sin ellas el sistema NO
-  se rompe: lo avisa en el log y la aprobación queda solo por CLI. Los
+  (URL del App Service del bot) y `ADMIN_API_TOKEN`. **Configuradas y
+  validadas en producción el 2026-07-14** (E2E completo: tarjeta → decisión
+  → sincronización → transición en la cola). Sin ellas el sistema NO se
+  rompe: lo avisa en el log y la aprobación queda solo por CLI. Los
   aprobadores se editan en `tenants/biodegradables/marketing.yaml`
-  (`daily.l0_approvers`) — deben haber chateado al menos una vez con alguno
-  de los bots de Teams para que exista la conversación proactiva.
+  (`daily.l0_approvers` — hoy: solo Mateo, decisión de Daniel 2026-07-14) —
+  deben haber chateado al menos una vez con alguno de los bots de Teams
+  para que exista la conversación proactiva.
 - Una decisión de Teams se aplica al inicio de la SIGUIENTE corrida (o con
   `aplicar`) — no es instantánea; nada urge porque todavía no se publica.
 - Nada se publica todavía en TikTok: "aprobada" = lista en cola `scheduled`.
