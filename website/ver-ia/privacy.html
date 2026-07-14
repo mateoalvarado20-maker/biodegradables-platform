@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — VER-IA</title>
+<meta name="description" content="Privacy Policy for the VER-IA platform.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <div class="nav">
+    <a class="brand" href="index.html">VER<span>-IA</span></a>
+    <nav>
+      <a href="index.html">Home</a>
+      <a href="about.html">About</a>
+      <a href="contact.html">Contact</a>
+      <a href="terms.html">Terms</a>
+      <a href="privacy.html" aria-current="page">Privacy</a>
+    </nav>
+  </div>
+</header>
+<main class="doc">
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated: July 14, 2026</p>
+
+  <p>This Policy explains what information VER-IA ("we", "us") collects when
+  businesses use our platform (the "Service"), how we protect it, and the
+  choices available to our customers. We build for business customers: we do
+  not sell personal data, we do not serve ads, and we collect only what the
+  Service needs to operate.</p>
+
+  <h2>1. Information we store</h2>
+  <ul>
+    <li><strong>Customer account information:</strong> company name, names and
+    work email addresses of authorized users, and configuration the customer
+    provides (brand guidelines, business goals, recipients for reports).</li>
+    <li><strong>Business data processed on the customer's behalf:</strong>
+    data the customer connects from its own systems (for example ERP sales
+    records) used solely to produce that customer's reports and content.</li>
+    <li><strong>Generated content and decisions:</strong> drafts created by the
+    Service, quality-control results, and the customer's approval or rejection
+    decisions (kept as an audit trail).</li>
+    <li><strong>Service logs:</strong> technical events needed for reliability,
+    security, and billing.</li>
+  </ul>
+
+  <h2>2. What we obtain through OAuth (including TikTok)</h2>
+  <p>When a customer connects a third-party account (such as TikTok), the
+  connection uses the platform's <strong>official OAuth authorization flow</strong>:
+  the account owner signs in on the platform's own page and explicitly grants
+  specific permissions. Through that flow we receive and store only:</p>
+  <ul>
+    <li>an <strong>access token</strong> and <strong>refresh token</strong>
+    issued by the platform, scoped to the permissions granted;</li>
+    <li>the account's basic identifier (such as TikTok's <em>open_id</em>) and
+    the list of granted permissions (for TikTok: <em>user.info.basic</em> and
+    <em>video.publish</em>).</li>
+  </ul>
+  <p>We use these tokens exclusively to publish content that the account owner
+  has approved and to read the basic information needed to operate the
+  connection. <strong>We never receive, request, or store the account's
+  password.</strong></p>
+
+  <h2>3. How we protect tokens and data</h2>
+  <ul>
+    <li>OAuth tokens are <strong>encrypted at rest with AES-256-GCM</strong>
+    using keys held separately from the stored data; access requires
+    authenticated, authorized service calls.</li>
+    <li>Each customer's data — including tokens — is <strong>isolated per
+    customer</strong>; one customer's agents can never read another's data.</li>
+    <li>All data in transit is protected with TLS (HTTPS).</li>
+    <li>Access tokens are short-lived and rotated automatically; if a platform
+    revokes access, we treat the connection as disconnected immediately.</li>
+    <li>Every publication and approval decision is recorded in an auditable
+    journal.</li>
+  </ul>
+
+  <h2>4. How to revoke access</h2>
+  <p>Customers can disconnect a linked account at any time, by either method:</p>
+  <ul>
+    <li><strong>From the platform:</strong> for TikTok, in the TikTok app go to
+    <em>Settings and privacy → Security &amp; permissions → Apps and
+    services</em> (or the equivalent "Manage app permissions" page) and remove
+    VER-IA. Revocation takes effect immediately.</li>
+    <li><strong>From us:</strong> email
+    <a href="mailto:privacy@ver-ia.com">privacy@ver-ia.com</a> and we will
+    delete the stored tokens for that connection within two business days.</li>
+  </ul>
+  <p>After revocation we no longer can — nor attempt to — act on the account.
+  Stored tokens for revoked or disconnected accounts are deleted.</p>
+
+  <h2>5. Sharing</h2>
+  <p>We do not sell or rent data. We share data only with the infrastructure
+  providers needed to run the Service (cloud hosting, AI model providers used
+  to generate the customer's own content) under confidentiality obligations,
+  or when required by law.</p>
+
+  <h2>6. Retention</h2>
+  <p>We keep customer data while the customer relationship is active. Upon
+  termination, or upon request, we delete customer data and OAuth tokens,
+  except minimal records we must keep for legal or accounting purposes.</p>
+
+  <h2>7. Your rights</h2>
+  <p>Customers and their users may request access, correction, or deletion of
+  their personal data by writing to
+  <a href="mailto:privacy@ver-ia.com">privacy@ver-ia.com</a>. We answer within
+  two business days.</p>
+
+  <h2>8. Changes</h2>
+  <p>If we make material changes to this Policy we will notify customers and
+  update the date at the top of this page.</p>
+
+  <h2>9. Contact</h2>
+  <p>VER-IA — Quito, Ecuador ·
+  <a href="mailto:privacy@ver-ia.com">privacy@ver-ia.com</a></p>
+</main>
+<footer>
+  <div class="footer-inner">
+    <div>© 2026 VER-IA. All rights reserved.</div>
+    <div>
+      <a href="about.html">About</a>
+      <a href="contact.html">Contact</a>
+      <a href="terms.html">Terms of Service</a>
+      <a href="privacy.html">Privacy Policy</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
