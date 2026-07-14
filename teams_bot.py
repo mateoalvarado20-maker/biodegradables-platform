@@ -585,6 +585,19 @@ async def _on_turn_data(context: TurnContext) -> None:
     if activity.type != ActivityTypes.message:
         return
 
+    # Submit de la tarjeta L0 de Marketing (llega por el bot que la envió;
+    # el Data Bot es la superficie primaria de gerencia)
+    if activity.value and isinstance(activity.value, dict) \
+            and activity.value.get("intent") == "mkt_l0":
+        email = await _resolve_or_reject(context)
+        if not email:
+            return
+        if not _is_allowed_data(email):
+            await context.send_activity("No tenés acceso a este bot.")
+            return
+        await _handle_marketing_l0(context, activity.value, email)
+        return
+
     text = (activity.text or "").strip()
     if not text:
         return
@@ -1143,6 +1156,47 @@ async def _handle_done_activities(
     await context.send_activity("\n\n".join(partes))
 
 
+async def _handle_marketing_l0(context: TurnContext, value: dict, email: str) -> None:
+    """Decisión L0 de Marketing desde la tarjeta de Teams (M1, 2026-07-14).
+    Solo registra la decisión en el store compartido (Azure Table); la PC la
+    aplica al inicio de su siguiente corrida o con `python -m
+    marketing.daily_run aplicar`. record_decision valida autorización
+    (deciders de la pieza) y anti doble-tap."""
+    import marketing_l0_state
+
+    pid = (value.get("mkt_pid") or "").strip()
+    decision = (value.get("mkt_decision") or "").strip()
+    motivo = (value.get("mkt_motivo") or "").strip()
+    if decision == "rechazar" and not motivo:
+        await context.send_activity(
+            "❌ Para rechazar escribí el motivo en el campo de la tarjeta "
+            "(queda auditado) y volvé a tocar **Rechazar**."
+        )
+        return
+    try:
+        entry = await asyncio.to_thread(
+            marketing_l0_state.record_decision, pid, decision,
+            decided_by=email, motivo=motivo,
+        )
+    except marketing_l0_state.L0StateError as e:
+        await context.send_activity(f"⚠️ {e}")
+        return
+    except Exception:
+        logger.exception("mkt_l0: fallo registrando decisión %s de %s", pid, email)
+        await context.send_activity(
+            "⚠️ No pude registrar la decisión (error interno). Probá de nuevo "
+            "o decidí por CLI en la PC de Marketing."
+        )
+        return
+    verbo = "✅ APROBADA" if decision == "aprobar" else "❌ RECHAZADA"
+    await context.send_activity(
+        f"{verbo}: **{entry['titulo']}** (`{pid}`).\n\n"
+        "La corrida de Marketing la aplica automáticamente en su próximo "
+        "arranque (07:30)."
+    )
+    logger.info("mkt_l0: %s %s por %s", pid, decision, email)
+
+
 async def _on_turn_activities(context: TurnContext) -> None:
     activity = context.activity
 
@@ -1195,6 +1249,15 @@ async def _on_turn_activities(context: TurnContext) -> None:
             ref = TurnContext.get_conversation_reference(activity)
             _save_ref_for_user("activities", email, ref)
             await _handle_done_activities(context, activity.value, email)
+            return
+        if intent == "mkt_l0":
+            email = await _resolve_or_reject(context)
+            if not email:
+                return
+            if not _is_allowed_activities(email):
+                await context.send_activity("No tenés acceso a este bot.")
+                return
+            await _handle_marketing_l0(context, activity.value, email)
             return
         # Phase U: handlers del card de ruta de José
         if isinstance(intent, str) and intent.startswith("jose_"):

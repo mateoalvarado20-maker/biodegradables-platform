@@ -43,6 +43,7 @@ BOT_FILES = [
     "reminders.py",
     "dispatch_state.py",
     "reply_state.py",
+    "marketing_l0_state.py",
     # clientes
     "contifico_client.py",
     "credito_excel.py",
