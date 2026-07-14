@@ -57,9 +57,9 @@ def send_daily_summary(dept: Department, result: dict, pending: list[dict],
         + (
             "<p><b>Pendientes de tu aprobación L0:</b></p>"
             f"<table border='1' cellspacing='0'>{filas}</table>"
-            "<p>Decidir: <code>python -m marketing.daily_run aprobar|rechazar "
-            "&lt;package_id&gt; [motivo]</code> (la tarjeta de Teams llega con el "
-            "siguiente deploy del bot).</p>"
+            "<p>Decidir: desde la <b>tarjeta que llegó a tu Teams</b>, o por CLI "
+            "<code>python -m marketing.daily_run aprobar|rechazar "
+            "&lt;package_id&gt; [motivo]</code>.</p>"
             if pending
             else "<p>Sin piezas pendientes de aprobación.</p>"
         )

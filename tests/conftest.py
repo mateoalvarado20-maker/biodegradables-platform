@@ -19,6 +19,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _sin_bot_remoto(monkeypatch):
+    """El puente L0 de Marketing (marketing/l0_remote.py) queda deshabilitado
+    en TODA la suite: sin VERIA_BOT_BASE_URL no hay HTTP al bot (regla de la
+    casa: ningún test hace llamadas de red). Los tests que lo ejercitan
+    inyectan `caller`."""
+    monkeypatch.delenv("VERIA_BOT_BASE_URL", raising=False)
+
+
 @pytest.fixture()
 def state_env(tmp_path, monkeypatch):
     """STATE_DIR aislado + módulos de state recargados contra ese dir."""

@@ -40,6 +40,7 @@ from teams_bot import (  # noqa: E402
     AAD_OVERRIDE,
     ACTIVITIES_APP_ID,
     CIERRE_CAJA_USERS,
+    DATA_APP_ID,
     JOSE_EMAIL,
     REFS_PATH,
     SUCURSAL_POR_USER,
@@ -61,6 +62,7 @@ from teams_bot import (  # noqa: E402
     _save_refs,
     activities_adapter,
     auto_assign_cobranzas,
+    data_adapter,
     deliver_due_reminders,
     generate_daily_news_brief,
     scheduler,
@@ -1179,5 +1181,119 @@ async def state_debug(request: Request) -> dict[str, Any]:
         files_in_dir = [{"error": str(e)}]
     paths_to_check["files_in_state_dir"] = files_in_dir
     return paths_to_check
+
+
+# ---------- Marketing: tarjeta de aprobación L0 (M1, 2026-07-14) ----------
+# La PC de Marketing (pipeline local) no comparte disco con el bot; estos 3
+# endpoints son su único puente: registrar pendientes + mandar la tarjeta,
+# leer decisiones tomadas en Teams, y marcar lo ya aplicado.
+
+async def _send_marketing_l0_card(email: str, pieza: dict[str, Any]) -> str:
+    """Manda la tarjeta L0 proactiva a un aprobador. Data Bot primero (la
+    superficie de gerencia), Activities como fallback. Devuelve por cuál bot
+    salió, o "" si el user nunca conversó con ninguno."""
+    from bot_cards import build_marketing_l0_card
+
+    refs = _load_refs()
+    for bot_key, adapter, app_id in (
+        ("data", data_adapter, DATA_APP_ID),
+        ("activities", activities_adapter, ACTIVITIES_APP_ID),
+    ):
+        ref_dict = refs.get(bot_key, {}).get(email)
+        if not ref_dict:
+            continue
+        ref = ConversationReference().deserialize(ref_dict)
+        card = build_marketing_l0_card(pieza)
+
+        async def cb(turn_context: TurnContext) -> None:
+            await turn_context.send_activity(card)
+
+        await adapter.continue_conversation(ref, cb, bot_id=app_id)
+        return bot_key
+    return ""
+
+
+@router.post("/admin/marketing/l0-cards")
+async def marketing_l0_cards(request: Request) -> dict[str, Any]:
+    """Registra piezas pendientes de aprobación L0 y manda la tarjeta a los
+    aprobadores. Lo llama la PC de Marketing al final de su corrida diaria.
+
+    Body: {"piezas": [{"package_id", "titulo", "formato", "duracion_s"?,
+    "score"?, "hook"?, "caption"?, "resumen"?}], "recipients": [emails]}
+    """
+    _require_admin(request)
+    import marketing_l0_state
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    piezas = (body or {}).get("piezas") or []
+    recipients = [
+        r.strip().lower() for r in ((body or {}).get("recipients") or []) if r.strip()
+    ]
+    if not piezas or not recipients:
+        raise HTTPException(status_code=400, detail="piezas[] y recipients[] requeridos")
+
+    entregas: dict[str, Any] = {}
+    for pieza in piezas:
+        pid = str(pieza.get("package_id") or "").strip()
+        if not pid:
+            continue
+        entry = await asyncio.to_thread(
+            marketing_l0_state.create_pending,
+            pid,
+            titulo=str(pieza.get("titulo") or ""),
+            formato=str(pieza.get("formato") or ""),
+            deciders=recipients,
+            resumen=str(pieza.get("resumen") or ""),
+        )
+        if entry.get("decision"):
+            entregas[pid] = "ya decidida — no se reenvía la tarjeta"
+            continue
+        sent_to: dict[str, str] = {}
+        for email in recipients:
+            try:
+                via = await _send_marketing_l0_card(email, pieza)
+                sent_to[email] = via or "sin conversación registrada con los bots"
+            except Exception as e:
+                logger.warning("l0-cards: envío a %s falló: %s", email, e)
+                sent_to[email] = f"error: {e}"
+        entregas[pid] = sent_to
+    return {"status": "ok", "entregas": entregas}
+
+
+@router.get("/admin/marketing/l0-decisions")
+async def marketing_l0_decisions(request: Request) -> dict[str, Any]:
+    """Decisiones tomadas en Teams que la PC de Marketing aún no aplicó."""
+    _require_admin(request)
+    import marketing_l0_state
+
+    decisiones = await asyncio.to_thread(marketing_l0_state.unapplied_decisions)
+    return {"decisiones": decisiones}
+
+
+@router.post("/admin/marketing/l0-applied")
+async def marketing_l0_applied(request: Request) -> dict[str, Any]:
+    """La PC confirma qué decisiones ya aplicó a su cola local.
+
+    Body: {"package_ids": ["pkg-..."]}
+    """
+    _require_admin(request)
+    import marketing_l0_state
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ids = (body or {}).get("package_ids") or []
+    resultado: dict[str, str] = {}
+    for pid in ids:
+        try:
+            await asyncio.to_thread(marketing_l0_state.mark_applied, str(pid))
+            resultado[str(pid)] = "applied"
+        except Exception as e:
+            resultado[str(pid)] = f"error: {e}"
+    return {"status": "ok", "resultado": resultado}
 
 

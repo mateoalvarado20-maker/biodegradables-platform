@@ -25,6 +25,11 @@ daily:
   notify_to:
     - dsanchez@biodegradablesecuador.com
     - malvarado@biodegradablesecuador.com
+  # Quiénes reciben la tarjeta de aprobación L0 en Teams (y pueden decidir).
+  # Editable sin tocar código; si se deja vacío, cae en notify_to.
+  l0_approvers:
+    - dsanchez@biodegradablesecuador.com
+    - malvarado@biodegradablesecuador.com
 
 # Claims que el contenido JAMÁS puede afirmar (regla dura del charter — el
 # gate rechaza sin pasar por el revisor). Frases en minúsculas, match textual.

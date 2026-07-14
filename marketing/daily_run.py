@@ -66,6 +66,7 @@ class DailyContext:
     n_briefs: int = 2
     notify_from: str = ""
     notify_to: list = None  # type: ignore[assignment]
+    l0_approvers: list = None  # type: ignore[assignment]  # tarjeta Teams (default: notify_to)
     sender: object = None  # inyectable en tests
 
 
@@ -193,6 +194,15 @@ class DailyRunner:
         send_daily_summary(self._dept, result, pending,
                            from_user=self._ctx.notify_from, to=to,
                            sender=self._ctx.sender)
+        if pending:
+            # Tarjeta de aprobación en Teams (M1) — nunca tumba la corrida
+            from marketing.l0_remote import push_pending_cards
+
+            push_pending_cards(
+                self._dept, self._ctx.queue,
+                [p["package_id"] for p in pending],
+                self._ctx.l0_approvers or to,
+            )
 
     def status(self, day: str | None = None) -> dict:
         """Supervisión sin abrir el código (requisito 6)."""
@@ -227,7 +237,8 @@ def log_manual_intervention(dept: Department, reason: str) -> None:
 
 def _cli(argv: list[str]) -> int:
     """CLI de operación (regla #26, requisitos 5 y 6):
-    run | status [YYYY-MM-DD] | intervencion "<motivo>" | hor"""
+    run | status [YYYY-MM-DD] | intervencion "<motivo>" | hor | preflight |
+    pendientes | aprobar <id> | rechazar <id> <motivo> | aplicar"""
     import sys as _sys
 
     if hasattr(_sys.stdout, "reconfigure"):
@@ -238,7 +249,28 @@ def _cli(argv: list[str]) -> int:
     dept, ctx = build_production("biodegradables")
     runner = DailyRunner(dept, ctx)
     cmd = argv[0] if argv else "status"
-    if cmd == "run":
+    if cmd in ("run", "preflight"):
+        # Decisión del board 2026-07-13: validar el entorno (con auto-npm-ci)
+        # ANTES de gastar — el gap de deploy no puede repetirse por memoria humana
+        from marketing.notify import send_alert
+        from marketing.preflight import preflight
+
+        problems = preflight("biodegradables")
+        if problems:
+            print(json.dumps({"preflight": "BLOQUEADO", "problemas": problems},
+                             ensure_ascii=False, indent=2))
+            send_alert(dept, "preflight bloqueado — la corrida NO arrancó",
+                       "; ".join(problems), from_user=ctx.notify_from,
+                       to=ctx.notify_to or [], sender=ctx.sender)
+            return 1
+        if cmd == "preflight":
+            print(json.dumps({"preflight": "OK"}, ensure_ascii=False))
+            return 0
+        # Decisiones tomadas en la tarjeta de Teams desde la última corrida
+        # (si el bot no está configurado/disponible, se degrada a skip)
+        from marketing.l0_remote import apply_remote_decisions
+
+        apply_remote_decisions(dept, ctx.queue)
         result = runner.run(argv[1] if len(argv) > 1 else None)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["completa"] else 1
@@ -276,6 +308,13 @@ def _cli(argv: list[str]) -> int:
         return 0
     if cmd == "hor":
         print(json.dumps(hor_stats(dept), ensure_ascii=False, indent=2))
+        return 0
+    if cmd == "aplicar":
+        # Aplicar YA las decisiones tomadas en Teams (sin esperar al run)
+        from marketing.l0_remote import apply_remote_decisions
+
+        print(json.dumps(apply_remote_decisions(dept, ctx.queue),
+                         ensure_ascii=False, indent=2))
         return 0
     print(__doc__)
     return 2

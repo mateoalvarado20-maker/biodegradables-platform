@@ -17,17 +17,20 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def test_los_39_endpoints_admin_siguen_montados():
+def test_los_42_endpoints_admin_siguen_montados():
+    # 39 de la extracción F4.4b + 3 de marketing L0 (M1, 2026-07-14)
     import teams_bot
     rutas_admin = {
         r.path for r in teams_bot.app.routes
         if getattr(r, "path", "").startswith("/admin")
     }
-    assert len(rutas_admin) == 39, sorted(rutas_admin)
+    assert len(rutas_admin) == 42, sorted(rutas_admin)
     # Muestras representativas de cada familia
     for path in ("/admin/trigger-checkin", "/admin/llm-usage",
                  "/admin/schedule-one-time-email", "/admin/wipe-user-from-activities",
-                 "/admin/trigger-reply-agent", "/admin/state-debug"):
+                 "/admin/trigger-reply-agent", "/admin/state-debug",
+                 "/admin/marketing/l0-cards", "/admin/marketing/l0-decisions",
+                 "/admin/marketing/l0-applied"):
         assert path in rutas_admin, path
 
 

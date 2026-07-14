@@ -88,5 +88,6 @@ def build_production(tenant_slug: str, base_dir: str | Path | None = None):
         n_briefs=int(daily.get("n_briefs", 2)),
         notify_from=str(daily.get("notify_from", "")),
         notify_to=list(daily.get("notify_to", [])),
+        l0_approvers=list(daily.get("l0_approvers", [])),
     )
     return dept, ctx

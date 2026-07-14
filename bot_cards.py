@@ -2066,3 +2066,62 @@ def _build_apertura_caja_card(user_email: str) -> Activity:
         content=card_json,
     )
     return Activity(type=ActivityTypes.message, attachments=[attachment])
+
+
+def build_marketing_l0_card(pieza: dict[str, Any]) -> Activity:
+    """Tarjeta de aprobación L0 de Marketing (M1, 2026-07-14): una pieza de
+    contenido pendiente, con Aprobar/Rechazar directo desde Teams. El submit
+    lleva intent `mkt_l0`; el motivo es obligatorio solo al rechazar (lo
+    valida el handler). `pieza` viene del POST /admin/marketing/l0-cards."""
+    pid = pieza.get("package_id", "")
+    facts = [
+        {"title": "Pieza", "value": pid},
+        {"title": "Formato", "value": pieza.get("formato", "")},
+    ]
+    if pieza.get("duracion_s"):
+        facts.append({"title": "Duración", "value": f"{pieza['duracion_s']} s"})
+    if pieza.get("score"):
+        facts.append({"title": "Score de calidad", "value": str(pieza["score"])})
+    body: list[dict[str, Any]] = [
+        {"type": "TextBlock", "text": "🎬 Marketing — aprobación de contenido",
+         "size": "Large", "weight": "Bolder", "color": "Accent"},
+        {"type": "TextBlock", "text": pieza.get("titulo", "(sin título)"),
+         "wrap": True, "weight": "Bolder", "spacing": "Small"},
+        {"type": "FactSet", "facts": facts, "spacing": "Small"},
+    ]
+    if pieza.get("hook"):
+        body.append({"type": "TextBlock", "text": f"**Hook:** {pieza['hook']}",
+                     "wrap": True, "spacing": "Small"})
+    if pieza.get("caption"):
+        body.append({"type": "TextBlock", "text": f"**Caption:** {pieza['caption']}",
+                     "wrap": True, "spacing": "Small", "isSubtle": True})
+    if pieza.get("resumen"):
+        body.append({"type": "TextBlock", "text": pieza["resumen"],
+                     "wrap": True, "spacing": "Small", "isSubtle": True})
+    body.extend([
+        {"type": "TextBlock",
+         "text": "El archivo está en la carpeta `out/` de la corrida "
+                 "(ver correo del día).",
+         "wrap": True, "size": "Small", "isSubtle": True},
+        {"type": "Input.Text", "id": "mkt_motivo",
+         "placeholder": "Motivo (obligatorio solo si rechazás)"},
+    ])
+    card_json = {
+        "type": "AdaptiveCard",
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.4",
+        "body": body,
+        "actions": [
+            {"type": "Action.Submit", "title": "✅ Aprobar",
+             "data": {"intent": "mkt_l0", "mkt_pid": pid,
+                      "mkt_decision": "aprobar"}},
+            {"type": "Action.Submit", "title": "❌ Rechazar",
+             "data": {"intent": "mkt_l0", "mkt_pid": pid,
+                      "mkt_decision": "rechazar"}},
+        ],
+    }
+    attachment = Attachment(
+        content_type="application/vnd.microsoft.card.adaptive",
+        content=card_json,
+    )
+    return Activity(type=ActivityTypes.message, attachments=[attachment])
