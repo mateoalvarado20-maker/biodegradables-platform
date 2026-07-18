@@ -39,6 +39,7 @@ BOT_FILES = [
     "llm_usage.py",
     # state y dominio
     "activity_state.py",
+    "cobranzas_sync.py",
     "conversation_history.py",
     "reminders.py",
     "dispatch_state.py",

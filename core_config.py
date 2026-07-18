@@ -98,6 +98,11 @@ JOB_SCHEDULES: dict[str, dict] = {
     "calendar_sync":            {"time": (8, 45),  "days": "mon-fri"},
     "daily_news_brief":         {"time": (6, 0),   "days": "daily"},
     "apertura_caja_matinal":    {"time": (8, 15),  "days": "mon-fri"},
+    # Recordatorio si el asistente no marcó el cierre de caja de HOY — sale
+    # ANTES del consolidado de 18:30 para que gerencia no lo vea "sin marcar"
+    # (incidente 2026-07-16: check-in enviado sin la sección de caja y nadie
+    # se enteró hasta el reporte).
+    "cierre_caja_recordatorio": {"time": (18, 5),  "days": "mon-fri"},
     "consolidated_daily":       {"time": (18, 30), "days": "mon-fri"},
     "saturday_recap":           {"time": (8, 0),   "days": "mon"},
     "monthly_sales_recap":      {"time": (8, 0),   "day_of_month": 1},

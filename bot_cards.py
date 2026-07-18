@@ -753,7 +753,15 @@ def _build_checkin_card(
             "size": "ExtraLarge",
             "color": "Accent",
         }]
-        if not choco or not choco.get("stock_inicial"):
+        # 2026-07-17: el contador se muestra si hay CUALQUIER dato de stock
+        # (inicial O recargas) — antes se gateaba solo por stock_inicial y si
+        # el colaborador cargaba su stock como "recarga" (inicial=0) el
+        # contador desaparecía. El carry-over semanal de activity_state hace
+        # que este prompt solo salga la PRIMERA vez en la vida del usuario.
+        _hay_stock_data = bool(
+            choco and (choco.get("stock_inicial") or choco.get("total_recargado"))
+        )
+        if not _hay_stock_data:
             chocolates_items.append({
                 "type": "TextBlock",
                 "text": (
