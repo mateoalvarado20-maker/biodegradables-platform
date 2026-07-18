@@ -32,6 +32,10 @@ def _mateo(a):
 
 def _add_tiktok(a, mateo, wk):
     a.init_week(mateo, wk=wk)
+    # 2026-07-17: el template default vuelve a sembrar tiktok-videos-diarios
+    # (meta 1) — estos tests necesitan su propia versión con meta=6, así que
+    # reemplazan la sembrada.
+    a.remove_activity(TT_AID, user_email=mateo, wk=wk)
     a.add_adhoc(TT_AID, TT_NOMBRE, user_email=mateo, tipo="diaria", meta=6, wk=wk)
 
 

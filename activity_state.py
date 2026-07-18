@@ -1488,7 +1488,9 @@ def add_chocolates_entrega(
         if "chocolates" not in user:
             user["chocolates"] = {}
         user["chocolates"][wk] = {
-            "stock_inicial": 0,
+            # Carry-over 2026-07-17: la semana nueva arranca con el stock
+            # final de la anterior (inventario físico), no en 0.
+            "stock_inicial": _chocolates_prev_stock(user, wk) or 0,
             "entregas": {},
             "recargas": {},
             "alerta_5_enviada": False,
@@ -1520,7 +1522,8 @@ def add_chocolates_recarga(
         if "chocolates" not in user:
             user["chocolates"] = {}
         user["chocolates"][wk] = {
-            "stock_inicial": 0,
+            # Carry-over 2026-07-17: ver add_chocolates_entrega.
+            "stock_inicial": _chocolates_prev_stock(user, wk) or 0,
             "entregas": {},
             "recargas": {},
             "alerta_5_enviada": False,
@@ -1551,12 +1554,47 @@ def marcar_alerta_chocolates_enviada(
         save(state)
 
 
+def _chocolates_stock_actual(rec: dict[str, Any]) -> int:
+    total_e = sum(int(v) for v in (rec.get("entregas") or {}).values())
+    total_r = sum(int(v) for v in (rec.get("recargas") or {}).values())
+    return max(0, int(rec.get("stock_inicial", 0)) + total_r - total_e)
+
+
+def _chocolates_prev_stock(user: dict[str, Any], wk: str) -> int | None:
+    """Stock final de la semana de chocolates más reciente anterior a `wk`.
+
+    Carry-over (2026-07-17): el stock de chocolates es inventario FÍSICO — no
+    se esfuma el lunes. Antes cada semana arrancaba en 0 y el card volvía a
+    pedir 'stock inicial' (el contador desaparecía); si el colaborador ponía
+    el número en 'recarga', el contador no volvía nunca (render gateado por
+    stock_inicial). None = nunca hubo datos de chocolates.
+    """
+    chocolates = user.get("chocolates") or {}
+    try:
+        target = _parse_week_key(wk)
+    except (ValueError, IndexError):
+        return None
+    best_rec = None
+    best_t: tuple[int, int] | None = None
+    for k, rec in chocolates.items():
+        try:
+            t = _parse_week_key(k)
+        except (ValueError, IndexError):
+            continue
+        if t < target and (best_t is None or t > best_t):
+            best_t, best_rec = t, rec
+    return _chocolates_stock_actual(best_rec) if best_rec is not None else None
+
+
 def get_chocolates_semana(
     user_email: str | None, wk: str | None = None
 ) -> dict[str, Any] | None:
     """Retorna el bloque de chocolates de una semana + el stock_actual calculado.
 
-    Si no hay registro, retorna None.
+    Si la semana no tiene registro pero una anterior sí, devuelve un bloque
+    virtual con el stock arrastrado (carry-over) — el contador no desaparece
+    al cambiar de semana. Si NUNCA hubo datos, retorna None (el card pide el
+    stock inicial la primera vez).
     """
     email = _normalize_email(user_email)
     state = load()
@@ -1565,18 +1603,26 @@ def get_chocolates_semana(
     wk = wk or week_key()
     rec = chocolates.get(wk)
     if not rec:
-        return None
+        prev = _chocolates_prev_stock(user, wk)
+        if prev is None:
+            return None
+        return {
+            "stock_inicial": prev,
+            "entregas": {},
+            "recargas": {},
+            "alerta_5_enviada": False,
+            "total_entregado": 0,
+            "total_recargado": 0,
+            "stock_actual": prev,
+            "carryover": True,
+        }
     total_entregado = sum(int(v) for v in (rec.get("entregas") or {}).values())
     total_recargado = sum(int(v) for v in (rec.get("recargas") or {}).values())
-    stock_actual = max(
-        0,
-        int(rec.get("stock_inicial", 0)) + total_recargado - total_entregado,
-    )
     return {
         **rec,
         "total_entregado": total_entregado,
         "total_recargado": total_recargado,
-        "stock_actual": stock_actual,
+        "stock_actual": _chocolates_stock_actual(rec),
     }
 
 
