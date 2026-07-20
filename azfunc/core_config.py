@@ -98,6 +98,11 @@ JOB_SCHEDULES: dict[str, dict] = {
     "calendar_sync":            {"time": (8, 45),  "days": "mon-fri"},
     "daily_news_brief":         {"time": (6, 0),   "days": "daily"},
     "apertura_caja_matinal":    {"time": (8, 15),  "days": "mon-fri"},
+    # Recordatorio si el asistente no marcó el cierre de caja de HOY — sale
+    # ANTES del consolidado de 18:30 para que gerencia no lo vea "sin marcar"
+    # (incidente 2026-07-16: check-in enviado sin la sección de caja y nadie
+    # se enteró hasta el reporte).
+    "cierre_caja_recordatorio": {"time": (18, 5),  "days": "mon-fri"},
     "consolidated_daily":       {"time": (18, 30), "days": "mon-fri"},
     "saturday_recap":           {"time": (8, 0),   "days": "mon"},
     "monthly_sales_recap":      {"time": (8, 0),   "day_of_month": 1},
@@ -381,6 +386,28 @@ _PEOPLE_RAW: dict[str, dict] = {
     },
 }
 PEOPLE: dict[str, dict] = _normalize_people(_PEOPLE_RAW)
+
+# ===== Agrupación del reporte diario del equipo (2026-07-20) =====
+# Colaboradores cuyo bloque va bajo un ENCABEZADO DE EQUIPO propio en el
+# consolidado (pedido de Daniel: Mateo trabaja para VER-IA y su bloque debe
+# ir separado del equipo de Biodegradables). Formato env:
+# "email:Grupo,email2:Grupo2". Sin entrada → grupo default (COMPANY_NAME).
+# Si el dict queda vacío, el reporte no muestra encabezados (tenants sin
+# agrupación se ven igual que siempre).
+REPORT_GROUP_OVERRIDES: dict[str, str] = {}
+for _pair in os.environ.get(
+    "REPORT_GROUP_OVERRIDES",
+    "malvarado@biodegradablesecuador.com:VER-IA",
+).split(","):
+    if ":" in _pair:
+        _ge, _gg = _pair.split(":", 1)
+        if _ge.strip() and _gg.strip():
+            REPORT_GROUP_OVERRIDES[_ge.strip().lower()] = _gg.strip()
+
+
+def report_group_for(email: str | None) -> str:
+    """Grupo del colaborador en el reporte del equipo (default: la empresa)."""
+    return REPORT_GROUP_OVERRIDES.get((email or "").strip().lower(), COMPANY_NAME)
 
 
 def _person(email: str | None) -> dict:
