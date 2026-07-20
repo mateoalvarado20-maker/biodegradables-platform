@@ -2134,16 +2134,33 @@ def _consolidated_daily_summary_html(
 
         # Phase V (2026-06-11): bloques individuales, con José GYE intercalado
         # después de info@ (Asistente 1 GYE) y antes de quito@ (UIO).
-        bloques_list: list[str] = []
+        # 2026-07-20: los bloques se agrupan por EQUIPO (pedido de Daniel:
+        # Mateo trabaja para VER-IA — su bloque va bajo su propio encabezado;
+        # el resto bajo el de la empresa). Sin overrides configurados hay un
+        # solo grupo y NO se muestran encabezados (igual que siempre).
+        grupos: dict[str, list[str]] = {}
+        orden_grupos: list[str] = []
+
+        def _bloque_a_grupo(email: str, bloque: str) -> None:
+            g = core_config.report_group_for(email)
+            if g not in grupos:
+                grupos[g] = []
+                orden_grupos.append(g)
+            grupos[g].append(bloque)
+
         jose_insertado = False
         for d in sorted_data:
             email_l = d["email"].lower()
-            bloques_list.append(_collaborator_block_html_v2(d["email"], target_date=target_date))
+            _bloque_a_grupo(
+                email_l,
+                _collaborator_block_html_v2(d["email"], target_date=target_date),
+            )
             # Después del Asistente 1 de la sucursal del chofer, insertar su bloque
             if email_l == GYE_ASISTENTE1_EMAIL and not jose_insertado:
                 try:
-                    jose_block = _jose_consolidated_block_html(today_iso)
-                    bloques_list.append(jose_block)
+                    _bloque_a_grupo(
+                        JOSE_EMAIL_CONS, _jose_consolidated_block_html(today_iso)
+                    )
                 except Exception:
                     pass
                 jose_insertado = True
@@ -2151,11 +2168,32 @@ def _consolidated_daily_summary_html(
         # al final como antes (fallback)
         if not jose_insertado:
             try:
-                bloques_list.append(_jose_consolidated_block_html(today_iso))
+                _bloque_a_grupo(
+                    JOSE_EMAIL_CONS, _jose_consolidated_block_html(today_iso)
+                )
             except Exception:
                 pass
 
-        blocks_html = "".join(bloques_list)
+        if len(orden_grupos) <= 1:
+            blocks_html = "".join(grupos.get(orden_grupos[0], []) if orden_grupos else [])
+        else:
+            # La empresa (grupo default) SIEMPRE primero; los demás en orden
+            # de aparición.
+            default_g = core_config.COMPANY_NAME
+            ordenados = (
+                ([default_g] if default_g in grupos else [])
+                + [g for g in orden_grupos if g != default_g]
+            )
+            partes: list[str] = []
+            for g in ordenados:
+                partes.append(
+                    f'<div style="margin:28px 0 10px 0;padding:11px 16px;'
+                    f'background:#1f3d2b;color:#fff;border-radius:6px;'
+                    f'font-size:19px;font-weight:700;letter-spacing:.5px;">'
+                    f'🏢 {g}</div>'
+                )
+                partes.extend(grupos[g])
+            blocks_html = "".join(partes)
         body_html = alerta_sin_marcar + problemas + blocks_html
 
     if es_sabado_recap:

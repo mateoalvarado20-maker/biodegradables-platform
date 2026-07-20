@@ -387,6 +387,28 @@ _PEOPLE_RAW: dict[str, dict] = {
 }
 PEOPLE: dict[str, dict] = _normalize_people(_PEOPLE_RAW)
 
+# ===== Agrupación del reporte diario del equipo (2026-07-20) =====
+# Colaboradores cuyo bloque va bajo un ENCABEZADO DE EQUIPO propio en el
+# consolidado (pedido de Daniel: Mateo trabaja para VER-IA y su bloque debe
+# ir separado del equipo de Biodegradables). Formato env:
+# "email:Grupo,email2:Grupo2". Sin entrada → grupo default (COMPANY_NAME).
+# Si el dict queda vacío, el reporte no muestra encabezados (tenants sin
+# agrupación se ven igual que siempre).
+REPORT_GROUP_OVERRIDES: dict[str, str] = {}
+for _pair in os.environ.get(
+    "REPORT_GROUP_OVERRIDES",
+    "malvarado@biodegradablesecuador.com:VER-IA",
+).split(","):
+    if ":" in _pair:
+        _ge, _gg = _pair.split(":", 1)
+        if _ge.strip() and _gg.strip():
+            REPORT_GROUP_OVERRIDES[_ge.strip().lower()] = _gg.strip()
+
+
+def report_group_for(email: str | None) -> str:
+    """Grupo del colaborador en el reporte del equipo (default: la empresa)."""
+    return REPORT_GROUP_OVERRIDES.get((email or "").strip().lower(), COMPANY_NAME)
+
 
 def _person(email: str | None) -> dict:
     return PEOPLE.get((email or "").strip().lower(), {})
